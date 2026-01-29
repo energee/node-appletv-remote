@@ -1,0 +1,26 @@
+{
+  "name": "node-atv",
+  "version": "0.1.0",
+  "description": "Pure Node.js Apple TV remote control library",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "bin": {
+    "atv": "dist/cli/index.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "bonjour-service": "^1.3.0",
+    "protobufjs": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
