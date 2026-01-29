@@ -8,7 +8,7 @@ export class SRPClient {
   init(salt: Buffer, pin: string): void {
     const secret = randomBytes(32);
     this.client = new SrpClient(
-      SRP.params['3072'],
+      SRP.params.hap,
       salt,
       Buffer.from('Pair-Setup'),
       Buffer.from(pin),

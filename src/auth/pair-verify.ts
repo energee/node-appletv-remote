@@ -9,14 +9,8 @@ import {
 } from 'node:crypto';
 import { TlvTag, tlvEncode, tlvDecode } from '../util/tlv.js';
 import { hkdfSha512, encryptChaCha20, decryptChaCha20 } from '../util/crypto.js';
+import { PersistentHttp } from '../util/http.js';
 import type { HAPCredentials } from './types.js';
-
-const HEADERS: Record<string, string> = {
-  'User-Agent': 'AirPlay/320.20',
-  Connection: 'keep-alive',
-  'X-Apple-HKP': '3',
-  'Content-Type': 'application/octet-stream',
-};
 
 // DER prefixes for raw key import/export
 const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
@@ -48,15 +42,13 @@ function ed25519PrivateKeyFromSeed(seed: Buffer): KeyObject {
 }
 
 export class PairVerify {
-  private host: string;
-  private port: number;
+  private http: PersistentHttp;
   private credentials: HAPCredentials;
   private ephemeralPrivateKey: KeyObject;
   private ephemeralPublicKeyRaw: Buffer;
 
   constructor(host: string, port: number, credentials: HAPCredentials) {
-    this.host = host;
-    this.port = port;
+    this.http = new PersistentHttp(host, port);
     this.credentials = credentials;
 
     const { publicKey, privateKey } = generateKeyPairSync('x25519');
@@ -73,28 +65,10 @@ export class PairVerify {
     });
   }
 
-  private baseUrl(): string {
-    return `http://${this.host}:${this.port}`;
-  }
-
-  private async post(path: string, body: Buffer): Promise<Buffer> {
-    const url = `${this.baseUrl()}${path}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: HEADERS,
-      body: new Uint8Array(body),
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} from ${path}`);
-    }
-    const arrayBuf = await response.arrayBuffer();
-    return Buffer.from(arrayBuf);
-  }
-
   async verify(): Promise<{ outputKey: Buffer; inputKey: Buffer }> {
     // Step 1: Send M1
     const m1 = this.buildM1();
-    const m2Body = await this.post('/pair-verify', m1);
+    const m2Body = await this.http.post('/pair-verify', m1);
     const m2 = tlvDecode(m2Body);
 
     const serverEphemeralPub = m2[TlvTag.PublicKey];
@@ -178,7 +152,7 @@ export class PairVerify {
       [TlvTag.EncryptedData]: encryptedData,
     });
 
-    const m4Body = await this.post('/pair-verify', m3);
+    const m4Body = await this.http.post('/pair-verify', m3);
     const m4 = tlvDecode(m4Body);
 
     const m4Error = m4[TlvTag.Error];
@@ -201,6 +175,7 @@ export class PairVerify {
       32,
     );
 
+    this.http.destroy();
     return { outputKey, inputKey };
   }
 }
