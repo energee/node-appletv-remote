@@ -1,4 +1,4 @@
-import Bonjour, { type Service } from 'bonjour-service';
+import { Bonjour, type Service } from 'bonjour-service';
 
 export interface AirPlayTxtRecord {
   deviceId: string;
@@ -57,9 +57,9 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
   const devices = new Map<string, DiscoveredDevice>();
 
   return new Promise((resolve) => {
-    const bonjour = new Bonjour();
+    const instance = new Bonjour();
 
-    const browser = bonjour.find({ type: 'airplay', protocol: 'tcp' }, (service: Service) => {
+    const browser = instance.find({ type: 'airplay', protocol: 'tcp' }, (service: Service) => {
       const address = service.addresses?.find(
         (a) => a.includes('.') && !a.startsWith('169.254'),
       );
@@ -83,7 +83,7 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
       }
     });
 
-    const companionBrowser = bonjour.find(
+    const companionBrowser = instance.find(
       { type: 'companion-link', protocol: 'tcp' },
       (service: Service) => {
         const address = service.addresses?.find(
@@ -102,7 +102,7 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
     setTimeout(() => {
       browser.stop();
       companionBrowser.stop();
-      bonjour.destroy();
+      instance.destroy();
 
       let result = Array.from(devices.values());
       if (options.filter) {

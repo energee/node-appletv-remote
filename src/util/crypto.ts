@@ -25,10 +25,8 @@ export function encryptChaCha20(
   plaintext: Buffer,
   aad: Buffer,
 ): { ciphertext: Buffer; tag: Buffer } {
-  const cipher = createCipheriv('chacha20-poly1305', key, nonce, {
-    authTagLength: 16,
-  } as any);
-  cipher.setAAD(aad);
+  const cipher = createCipheriv('chacha20-poly1305' as any, key, nonce, { authTagLength: 16 } as any);
+  cipher.setAAD(aad, { plaintextLength: plaintext.length });
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   const tag = cipher.getAuthTag();
   return { ciphertext, tag };
@@ -41,10 +39,8 @@ export function decryptChaCha20(
   tag: Buffer,
   aad: Buffer,
 ): Buffer {
-  const decipher = createDecipheriv('chacha20-poly1305', key, nonce, {
-    authTagLength: 16,
-  } as any);
-  decipher.setAAD(aad);
+  const decipher = createDecipheriv('chacha20-poly1305' as any, key, nonce, { authTagLength: 16 } as any);
+  decipher.setAAD(aad, { plaintextLength: ciphertext.length });
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }
