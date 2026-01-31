@@ -1,7 +1,9 @@
 import { EventEmitter } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { PairSetup } from './auth/pair-setup.js';
 import { AirPlayConnection } from './connection.js';
 import { Credentials } from './credentials.js';
+import { MRPMessage, HID_KEY_MAP, MessageType } from './mrp/messages.js';
 import type { DiscoveredDeviceInfo } from './discovery.js';
 
 export class AppleTV extends EventEmitter {
@@ -62,7 +64,39 @@ export class AppleTV extends EventEmitter {
 
   private async sendKey(key: string): Promise<void> {
     if (!this.connection) throw new Error('Not connected');
-    // TODO: Map key to MRP protobuf command and send
+
+    // Media commands use SendCommandMessage instead of button events
+    if (key === 'skip_forward') {
+      const msg = await MRPMessage.sendMediaCommand(18); // SkipForward
+      await this.connection.sendMRPMessage(msg);
+      return;
+    }
+    if (key === 'skip_backward') {
+      const msg = await MRPMessage.sendMediaCommand(19); // SkipBackward
+      await this.connection.sendMRPMessage(msg);
+      return;
+    }
+
+    // Button events via HID key map
+    const baseKey = key === 'home_hold' ? 'home' : key;
+    const hid = HID_KEY_MAP[baseKey];
+    if (!hid) throw new Error(`Unknown key: ${key}`);
+
+    const holdDuration = key === 'home_hold' ? 1000 : 50;
+
+    // Button down
+    const downMsg = await MRPMessage.sendHIDEvent(hid.usagePage, hid.usage, true);
+    await this.connection.sendMRPMessage(downMsg);
+
+    await delay(holdDuration);
+
+    // Button up
+    const upMsg = await MRPMessage.sendHIDEvent(hid.usagePage, hid.usage, false);
+    await this.connection.sendMRPMessage(upMsg);
+
+    // Flush — pyatv sends GENERIC_MESSAGE after HID events
+    const flushMsg = await MRPMessage.sendCommand(MessageType.GenericMessage);
+    await this.connection.sendMRPMessage(flushMsg);
   }
 
   toString(): string {

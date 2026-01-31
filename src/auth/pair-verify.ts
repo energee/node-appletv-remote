@@ -65,7 +65,7 @@ export class PairVerify {
     });
   }
 
-  async verify(): Promise<{ outputKey: Buffer; inputKey: Buffer }> {
+  async verify(): Promise<{ outputKey: Buffer; inputKey: Buffer; sharedSecret: Buffer }> {
     // Step 1: Send M1
     const m1 = this.buildM1();
     const m2Body = await this.http.post('/pair-verify', m1);
@@ -176,6 +176,6 @@ export class PairVerify {
     );
 
     this.http.destroy();
-    return { outputKey, inputKey };
+    return { outputKey, inputKey, sharedSecret: Buffer.from(sharedSecret) };
   }
 }
