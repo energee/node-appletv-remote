@@ -135,52 +135,61 @@ export interface DeviceInfoOptions {
   supportsExtendedMotion?: boolean;
 }
 
+/**
+ * Encode a ProtocolMessage with the given type and optional extension payload.
+ * Most MRP messages follow this pattern: create a typed ProtocolMessage with
+ * an identifier and an optional nested extension message.
+ */
+async function encodeMessage(
+  type: MessageType,
+  extension?: { key: string; typeName: string; fields: Record<string, unknown> },
+  options?: { omitIdentifier?: boolean },
+): Promise<Buffer> {
+  const root = await loadRoot();
+  const ProtocolMessage = root.lookupType('ProtocolMessage');
+
+  const fields: Record<string, unknown> = { type };
+  if (!options?.omitIdentifier) {
+    fields.identifier = randomUUID().toUpperCase();
+  }
+
+  if (extension) {
+    const ExtType = root.lookupType(extension.typeName);
+    fields[extension.key] = ExtType.create(extension.fields);
+  }
+
+  const message = ProtocolMessage.create(fields);
+  return Buffer.from(ProtocolMessage.encode(message).finish());
+}
+
 export class MRPMessage {
   static async deviceInfo(options: DeviceInfoOptions): Promise<Buffer> {
-    const root = await loadRoot();
-    const ProtocolMessage = root.lookupType('ProtocolMessage');
-    const DeviceInfoMessage = root.lookupType('DeviceInfoMessage');
-
-    const deviceInfoPayload = DeviceInfoMessage.create({
-      uniqueIdentifier: options.uniqueIdentifier,
-      name: options.name,
-      localizedModelName: options.localizedModelName ?? 'iPhone',
-      systemBuildVersion: options.systemBuildVersion ?? '17B111',
-      applicationBundleIdentifier:
-        options.applicationBundleIdentifier ?? 'com.apple.TVRemote',
-      applicationBundleVersion: '344.28',
-      protocolVersion: options.protocolVersion ?? 1,
-      lastSupportedMessageType: options.lastSupportedMessageType ?? 108,
-      supportsSystemPairing: options.supportsSystemPairing ?? true,
-      allowsPairing: options.allowsPairing ?? true,
-      systemMediaApplication: options.systemMediaApplication ?? 'com.apple.TVMusic',
-      supportsACL: options.supportsACL ?? true,
-      supportsSharedQueue: options.supportsSharedQueue ?? true,
-      sharedQueueVersion: options.sharedQueueVersion ?? 2,
-      supportsExtendedMotion: options.supportsExtendedMotion ?? true,
+    return encodeMessage(MessageType.DeviceInfo, {
+      key: '.deviceInfoMessage',
+      typeName: 'DeviceInfoMessage',
+      fields: {
+        uniqueIdentifier: options.uniqueIdentifier,
+        name: options.name,
+        localizedModelName: options.localizedModelName ?? 'iPhone',
+        systemBuildVersion: options.systemBuildVersion ?? '17B111',
+        applicationBundleIdentifier:
+          options.applicationBundleIdentifier ?? 'com.apple.TVRemote',
+        applicationBundleVersion: '344.28',
+        protocolVersion: options.protocolVersion ?? 1,
+        lastSupportedMessageType: options.lastSupportedMessageType ?? 108,
+        supportsSystemPairing: options.supportsSystemPairing ?? true,
+        allowsPairing: options.allowsPairing ?? true,
+        systemMediaApplication: options.systemMediaApplication ?? 'com.apple.TVMusic',
+        supportsACL: options.supportsACL ?? true,
+        supportsSharedQueue: options.supportsSharedQueue ?? true,
+        sharedQueueVersion: options.sharedQueueVersion ?? 2,
+        supportsExtendedMotion: options.supportsExtendedMotion ?? true,
+      },
     });
-
-    const message = ProtocolMessage.create({
-      type: MessageType.DeviceInfo,
-      identifier: randomUUID().toUpperCase(),
-      '.deviceInfoMessage': deviceInfoPayload,
-    });
-
-    const encoded = ProtocolMessage.encode(message).finish();
-    return Buffer.from(encoded);
   }
 
   static async sendCommand(type: MessageType): Promise<Buffer> {
-    const root = await loadRoot();
-    const ProtocolMessage = root.lookupType('ProtocolMessage');
-
-    const message = ProtocolMessage.create({
-      type,
-      identifier: randomUUID().toUpperCase(),
-    });
-
-    const encoded = ProtocolMessage.encode(message).finish();
-    return Buffer.from(encoded);
+    return encodeMessage(type);
   }
 
   static async decode(
@@ -197,10 +206,6 @@ export class MRPMessage {
     usage: number,
     down: boolean,
   ): Promise<Buffer> {
-    const root = await loadRoot();
-    const ProtocolMessage = root.lookupType('ProtocolMessage');
-    const SendHIDEventMessage = root.lookupType('SendHIDEventMessage');
-
     // Build raw HID event data matching IOHIDEvent format.
     // Format: [8B timestamp][fixed header][usagePage 2B BE][usage 2B BE][down 2B BE][fixed footer]
     const timestamp = Buffer.from('438922cf08020000', 'hex');
@@ -216,15 +221,11 @@ export class MRPMessage {
 
     const hidEventData = Buffer.concat([timestamp, header, data, footer]);
 
-    const hidPayload = SendHIDEventMessage.create({ hidEventData });
-
-    const message = ProtocolMessage.create({
-      type: MessageType.SendHIDEvent,
-      identifier: randomUUID().toUpperCase(),
-      '.sendHIDEventMessage': hidPayload,
+    return encodeMessage(MessageType.SendHIDEvent, {
+      key: '.sendHIDEventMessage',
+      typeName: 'SendHIDEventMessage',
+      fields: { hidEventData },
     });
-
-    return Buffer.from(ProtocolMessage.encode(message).finish());
   }
 
   static async sendButtonEvent(
@@ -232,39 +233,19 @@ export class MRPMessage {
     usage: number,
     buttonDown: boolean,
   ): Promise<Buffer> {
-    const root = await loadRoot();
-    const ProtocolMessage = root.lookupType('ProtocolMessage');
-    const SendButtonEventMessage = root.lookupType('SendButtonEventMessage');
-
-    const buttonPayload = SendButtonEventMessage.create({
-      usagePage,
-      usage,
-      buttonDown,
+    return encodeMessage(MessageType.SendButtonEvent, {
+      key: '.sendButtonEventMessage',
+      typeName: 'SendButtonEventMessage',
+      fields: { usagePage, usage, buttonDown },
     });
-
-    const message = ProtocolMessage.create({
-      type: MessageType.SendButtonEvent,
-      identifier: randomUUID().toUpperCase(),
-      '.sendButtonEventMessage': buttonPayload,
-    });
-
-    return Buffer.from(ProtocolMessage.encode(message).finish());
   }
 
   static async setConnectionState(state: number): Promise<Buffer> {
-    const root = await loadRoot();
-    const ProtocolMessage = root.lookupType('ProtocolMessage');
-    const SetConnectionStateMessage = root.lookupType('SetConnectionStateMessage');
-
-    const payload = SetConnectionStateMessage.create({ state });
-
-    const message = ProtocolMessage.create({
-      type: MessageType.SetConnectionState,
-      identifier: randomUUID().toUpperCase(),
-      '.setConnectionStateMessage': payload,
+    return encodeMessage(MessageType.SetConnectionState, {
+      key: '.setConnectionStateMessage',
+      typeName: 'SetConnectionStateMessage',
+      fields: { state },
     });
-
-    return Buffer.from(ProtocolMessage.encode(message).finish());
   }
 
   static async clientUpdatesConfig(options: {
@@ -274,58 +255,73 @@ export class MRPMessage {
     keyboardUpdates?: boolean;
     outputDeviceUpdates?: boolean;
   }): Promise<Buffer> {
-    const root = await loadRoot();
-    const ProtocolMessage = root.lookupType('ProtocolMessage');
-    const ClientUpdatesConfigMessage = root.lookupType('ClientUpdatesConfigMessage');
-
-    const payload = ClientUpdatesConfigMessage.create(options);
-
-    const message = ProtocolMessage.create({
-      type: MessageType.ClientUpdatesConfig,
-      identifier: randomUUID().toUpperCase(),
-      '.clientUpdatesConfigMessage': payload,
+    return encodeMessage(MessageType.ClientUpdatesConfig, {
+      key: '.clientUpdatesConfigMessage',
+      typeName: 'ClientUpdatesConfigMessage',
+      fields: options,
     });
-
-    return Buffer.from(ProtocolMessage.encode(message).finish());
   }
 
   static async cryptoPairing(pairingData: Buffer): Promise<Buffer> {
-    const root = await loadRoot();
-    const ProtocolMessage = root.lookupType('ProtocolMessage');
-    const CryptoPairingMessage = root.lookupType('CryptoPairingMessage');
-
-    const payload = CryptoPairingMessage.create({
-      pairingData,
-      status: 0,
-      isRetrying: false,
-      isUsingSystemPairing: false,
-      state: 0,
-    });
-
     // CryptoPairing messages must NOT include an identifier.
     // pyatv uses generate_identifier=False; the Apple TV never echoes
     // identifiers for crypto messages and may ignore requests that have one.
-    const message = ProtocolMessage.create({
-      type: MessageType.CryptoPairing,
-      '.cryptoPairingMessage': payload,
-    });
-
-    return Buffer.from(ProtocolMessage.encode(message).finish());
+    return encodeMessage(
+      MessageType.CryptoPairing,
+      {
+        key: '.cryptoPairingMessage',
+        typeName: 'CryptoPairingMessage',
+        fields: {
+          pairingData,
+          status: 0,
+          isRetrying: false,
+          isUsingSystemPairing: false,
+          state: 0,
+        },
+      },
+      { omitIdentifier: true },
+    );
   }
 
   static async sendMediaCommand(command: number): Promise<Buffer> {
-    const root = await loadRoot();
-    const ProtocolMessage = root.lookupType('ProtocolMessage');
-    const SendCommandMessage = root.lookupType('SendCommandMessage');
-
-    const payload = SendCommandMessage.create({ command });
-
-    const message = ProtocolMessage.create({
-      type: MessageType.SendCommand,
-      identifier: randomUUID().toUpperCase(),
-      '.sendCommandMessage': payload,
+    return encodeMessage(MessageType.SendCommand, {
+      key: '.sendCommandMessage',
+      typeName: 'SendCommandMessage',
+      fields: { command },
     });
+  }
 
-    return Buffer.from(ProtocolMessage.encode(message).finish());
+  static async wakeDevice(): Promise<Buffer> {
+    return encodeMessage(MessageType.WakeDevice, {
+      key: '.wakeDeviceMessage',
+      typeName: 'WakeDeviceMessage',
+      fields: {},
+    });
+  }
+
+  static async playbackQueueRequest(options: {
+    location?: number;
+    length?: number;
+    includeMetadata?: boolean;
+    artworkWidth?: number;
+    artworkHeight?: number;
+    includeLyrics?: boolean;
+    includeInfo?: boolean;
+    includeLanguageOptions?: boolean;
+  } = {}): Promise<Buffer> {
+    return encodeMessage(MessageType.PlaybackQueueRequest, {
+      key: '.playbackQueueRequestMessage',
+      typeName: 'PlaybackQueueRequestMessage',
+      fields: {
+        location: options.location ?? 0,
+        length: options.length ?? 1,
+        includeMetadata: options.includeMetadata ?? true,
+        artworkWidth: options.artworkWidth ?? 0,
+        artworkHeight: options.artworkHeight ?? 0,
+        includeLyrics: options.includeLyrics ?? false,
+        includeInfo: options.includeInfo ?? false,
+        includeLanguageOptions: options.includeLanguageOptions ?? false,
+      },
+    });
   }
 }

@@ -1,5 +1,5 @@
 {
-  "name": "node-atv",
+  "name": "node-appletv-remote",
   "version": "0.1.0",
   "description": "Pure Node.js Apple TV remote control library",
   "main": "dist/index.js",

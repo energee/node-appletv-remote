@@ -69,4 +69,46 @@ describe('MRP Messages', () => {
       expect(HID_KEY_MAP[key].usage).toBeGreaterThan(0);
     }
   });
+
+  it('creates a WakeDeviceMessage', async () => {
+    const msg = await MRPMessage.wakeDevice();
+    expect(msg).toBeInstanceOf(Buffer);
+    expect(msg.length).toBeGreaterThan(0);
+
+    const decoded = await MRPMessage.decode(msg);
+    expect(decoded.type).toBe(MessageType.WakeDevice);
+  });
+
+  it('creates a PlaybackQueueRequestMessage', async () => {
+    const msg = await MRPMessage.playbackQueueRequest({
+      location: 0,
+      length: 5,
+      includeMetadata: true,
+      artworkWidth: 400,
+      artworkHeight: 400,
+    });
+    expect(msg).toBeInstanceOf(Buffer);
+    expect(msg.length).toBeGreaterThan(0);
+
+    const decoded = await MRPMessage.decode(msg);
+    expect(decoded.type).toBe(MessageType.PlaybackQueueRequest);
+  });
+
+  it('creates a PlaybackQueueRequestMessage with defaults', async () => {
+    const msg = await MRPMessage.playbackQueueRequest();
+    expect(msg).toBeInstanceOf(Buffer);
+
+    const decoded = await MRPMessage.decode(msg);
+    expect(decoded.type).toBe(MessageType.PlaybackQueueRequest);
+  });
+
+  it('creates media commands for Play, Pause, NextTrack, PreviousTrack', async () => {
+    for (const command of [1, 2, 5, 6]) {
+      const msg = await MRPMessage.sendMediaCommand(command);
+      expect(msg).toBeInstanceOf(Buffer);
+
+      const decoded = await MRPMessage.decode(msg);
+      expect(decoded.type).toBe(MessageType.SendCommand);
+    }
+  });
 });

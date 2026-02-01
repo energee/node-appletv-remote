@@ -24,6 +24,47 @@ const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
+interface ParsedHTTP {
+  headers: Record<string, string>;
+  body: Buffer;
+  totalSize: number;
+}
+
+/** Parse an HTTP message (request or response) from a buffer. Returns null if incomplete. */
+function parseHTTPMessage(buf: Buffer): ParsedHTTP | null {
+  const text = buf.toString('utf-8');
+  const headerEnd = text.indexOf('\r\n\r\n');
+  if (headerEnd === -1) return null;
+
+  const headerSection = text.substring(0, headerEnd);
+  const headers: Record<string, string> = {};
+  const lines = headerSection.split('\r\n');
+  for (let i = 1; i < lines.length; i++) {
+    const colonIdx = lines[i].indexOf(':');
+    if (colonIdx > 0) {
+      headers[lines[i].substring(0, colonIdx).trim().toLowerCase()] =
+        lines[i].substring(colonIdx + 1).trim();
+    }
+  }
+
+  const bodyStart = headerEnd + 4;
+  const contentLength = parseInt(headers['content-length'] ?? '0', 10);
+  const totalSize = bodyStart + contentLength;
+  if (buf.length < totalSize) return null;
+
+  const body = buf.subarray(bodyStart, bodyStart + contentLength);
+  return { headers, body: Buffer.from(body), totalSize };
+}
+
+/** Connect a socket to host:port and return it once connected. */
+function connectSocket(host: string, port: number): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    const sock = new Socket();
+    sock.connect(port, host, () => resolve(sock));
+    sock.once('error', reject);
+  });
+}
+
 export class AirPlayConnection extends EventEmitter {
   private socket?: Socket;
   private eventSocket?: Socket;
@@ -60,11 +101,7 @@ export class AirPlayConnection extends EventEmitter {
   async connect(): Promise<void> {
     // Step 1: Open TCP connection
     this.log('opening TCP connection...');
-    this.socket = new Socket();
-    await new Promise<void>((resolve, reject) => {
-      this.socket!.connect(this.port, this.host, resolve);
-      this.socket!.once('error', reject);
-    });
+    this.socket = await connectSocket(this.host, this.port);
     this.localAddress = this.socket.localAddress;
     this.log(`TCP connected (local ${this.localAddress})`);
 
@@ -248,36 +285,15 @@ export class AirPlayConnection extends EventEmitter {
   private onRawData(data: Buffer): void {
     this.rawBuffer = Buffer.concat([this.rawBuffer, data]);
 
-    // Try to parse an HTTP response
-    const text = this.rawBuffer.toString('utf-8');
-    const headerEnd = text.indexOf('\r\n\r\n');
-    if (headerEnd === -1) return;
+    const parsed = parseHTTPMessage(this.rawBuffer);
+    if (!parsed) return;
 
-    const headerSection = text.substring(0, headerEnd);
-    const headers: Record<string, string> = {};
-    const lines = headerSection.split('\r\n');
-    for (let i = 1; i < lines.length; i++) {
-      const colonIdx = lines[i].indexOf(':');
-      if (colonIdx > 0) {
-        headers[lines[i].substring(0, colonIdx).trim().toLowerCase()] =
-          lines[i].substring(colonIdx + 1).trim();
-      }
-    }
-
-    const bodyStart = headerEnd + 4;
-    const contentLength = parseInt(headers['content-length'] ?? '0', 10);
-    const totalNeeded = bodyStart + contentLength;
-
-    // Wait for full body
-    if (this.rawBuffer.length < totalNeeded) return;
-
-    const responseBody = this.rawBuffer.subarray(bodyStart, bodyStart + contentLength);
-    this.rawBuffer = this.rawBuffer.subarray(totalNeeded);
+    this.rawBuffer = this.rawBuffer.subarray(parsed.totalSize);
 
     if (this.pendingRawResponse) {
       const { resolve } = this.pendingRawResponse;
       this.pendingRawResponse = undefined;
-      resolve(Buffer.from(responseBody));
+      resolve(parsed.body);
     }
   }
 
@@ -371,11 +387,7 @@ export class AirPlayConnection extends EventEmitter {
       this.eventSession = new HAPSession(eventOutputKey, eventInputKey);
 
       this.log(`connecting to event port ${eventPort}...`);
-      this.eventSocket = new Socket();
-      await new Promise<void>((resolve, reject) => {
-        this.eventSocket!.connect(eventPort!, this.host, resolve);
-        this.eventSocket!.once('error', reject);
-      });
+      this.eventSocket = await connectSocket(this.host, eventPort);
       this.log('event socket connected');
       this.eventSocket.on('data', (data) => this.onEventChannelData(Buffer.from(data)));
       this.eventSocket.on('error', (err) => this.log(`event channel error: ${err.message}`));
@@ -439,12 +451,7 @@ export class AirPlayConnection extends EventEmitter {
 
     this.log(`connecting data channel to ${this.host}:${dataPort}...`);
 
-    // Open dedicated data channel socket
-    this.dataSocket = new Socket();
-    await new Promise<void>((resolve, reject) => {
-      this.dataSocket!.connect(dataPort, this.host, resolve);
-      this.dataSocket!.once('error', reject);
-    });
+    this.dataSocket = await connectSocket(this.host, dataPort);
     this.log('data socket connected');
 
     this.dataSocket.on('data', (data) => this.onDataChannelData(Buffer.from(data)));
@@ -470,14 +477,10 @@ export class AirPlayConnection extends EventEmitter {
     await this.waitForMRPMessage(MessageType.DeviceInfo, 5000);
     this.log('DeviceInfo exchange complete');
 
-    // 2. CryptoPairing (pair-verify at MRP level)
-    this.log('MRP pair-verify...');
-    try {
-      await this.mrpPairVerify();
-      this.log('MRP pair-verify OK');
-    } catch (e) {
-      this.log(`MRP pair-verify failed: ${e} — continuing without MRP encryption`);
-    }
+    // 2. CryptoPairing is NOT performed over AirPlay transport.
+    // The data channel is already encrypted at the transport layer (HAP session).
+    // pyatv's AirPlayMrpConnection.enable_encryption() is a no-op.
+    // Sending CryptoPairing confuses some Apple TV models and delays setup.
 
     // 3. SetConnectionState (fire and forget, pyatv uses send() not send_and_receive())
     const connState = await MRPMessage.setConnectionState(2);
@@ -651,35 +654,18 @@ export class AirPlayConnection extends EventEmitter {
       return;
     }
 
-    const text = decrypted.toString('utf-8');
-    const headerEnd = text.indexOf('\r\n\r\n');
-    if (headerEnd === -1) {
+    const parsed = parseHTTPMessage(decrypted);
+    if (!parsed) {
       this.encryptedBuffer = Buffer.from(decrypted);
       return;
     }
 
-    const headerSection = text.substring(0, headerEnd);
-    const headers: Record<string, string> = {};
-    const lines = headerSection.split('\r\n');
-    for (let i = 1; i < lines.length; i++) {
-      const colonIdx = lines[i].indexOf(':');
-      if (colonIdx > 0) {
-        const key = lines[i].substring(0, colonIdx).trim().toLowerCase();
-        const value = lines[i].substring(colonIdx + 1).trim();
-        headers[key] = value;
-      }
-    }
-
-    const bodyStart = headerEnd + 4;
-    const contentLength = parseInt(headers['content-length'] ?? '0', 10);
-    const bodyBytes = decrypted.subarray(bodyStart, bodyStart + contentLength);
-
-    const remaining = decrypted.subarray(bodyStart + contentLength);
+    const remaining = decrypted.subarray(parsed.totalSize);
     if (remaining.length > 0) {
       this.encryptedBuffer = Buffer.from(remaining);
     }
 
-    this.emit('rtsp-response', { headers, body: bodyBytes });
+    this.emit('rtsp-response', { headers: parsed.headers, body: parsed.body });
   }
 
   private hasCompleteHAPFrame(buf: Buffer): boolean {
@@ -725,36 +711,18 @@ export class AirPlayConnection extends EventEmitter {
 
   private processEventRequests(): void {
     while (this.eventDecBuffer.length > 0) {
-      const text = this.eventDecBuffer.toString('utf-8');
-      const headerEnd = text.indexOf('\r\n\r\n');
-      if (headerEnd === -1) break;
+      const parsed = parseHTTPMessage(this.eventDecBuffer);
+      if (!parsed) break;
 
-      const headerSection = text.substring(0, headerEnd);
-      const headers: Record<string, string> = {};
-      const lines = headerSection.split('\r\n');
-      for (let i = 1; i < lines.length; i++) {
-        const colonIdx = lines[i].indexOf(':');
-        if (colonIdx > 0) {
-          headers[lines[i].substring(0, colonIdx).trim().toLowerCase()] =
-            lines[i].substring(colonIdx + 1).trim();
-        }
-      }
-
-      const bodyStart = headerEnd + 4;
-      const contentLength = parseInt(headers['content-length'] ?? '0', 10);
-      const totalNeeded = bodyStart + contentLength;
-      if (this.eventDecBuffer.length < totalNeeded) break;
-
-      // Consume this request
-      this.eventDecBuffer = this.eventDecBuffer.subarray(totalNeeded);
+      this.eventDecBuffer = this.eventDecBuffer.subarray(parsed.totalSize);
 
       // Build 200 OK response
       const respHeaders: string[] = [
         'Content-Length: 0',
         'Audio-Latency: 0',
       ];
-      if (headers['server']) respHeaders.push(`Server: ${headers['server']}`);
-      if (headers['cseq']) respHeaders.push(`CSeq: ${headers['cseq']}`);
+      if (parsed.headers['server']) respHeaders.push(`Server: ${parsed.headers['server']}`);
+      if (parsed.headers['cseq']) respHeaders.push(`CSeq: ${parsed.headers['cseq']}`);
 
       const response = `RTSP/1.0 200 OK\r\n${respHeaders.join('\r\n')}\r\n\r\n`;
       const encrypted = this.eventSession!.encrypt(Buffer.from(response));
@@ -812,15 +780,16 @@ export class AirPlayConnection extends EventEmitter {
       const msg = decoded as unknown as Record<string, unknown>;
       this.log(`MRP response: type=${msg.type}`);
 
-      // Check if any pending resolver matches this message type
+      // Always emit so that listeners (e.g. AppleTV) can observe all messages
+      this.emit('mrp-message', msg);
+
+      // Also resolve any pending resolver that matches this message type
       const idx = this.pendingMRPResolvers.findIndex(
         (r) => r.type === undefined || r.type === msg.type,
       );
       if (idx >= 0) {
         const resolver = this.pendingMRPResolvers.splice(idx, 1)[0];
         resolver.resolve(msg);
-      } else {
-        this.emit('mrp-message', msg);
       }
     } catch (e) {
       this.log(`MRP decode error: ${e}`);
@@ -835,6 +804,16 @@ export class AirPlayConnection extends EventEmitter {
         this.log(`FEEDBACK error: ${e}`);
       }
     }, 2000);
+  }
+
+  async sendMRPMessageAndWait(
+    protobufData: Buffer,
+    responseType: number,
+    timeoutMs = 5000,
+  ): Promise<Record<string, unknown>> {
+    const waitPromise = this.waitForMRPMessage(responseType, timeoutMs);
+    await this.sendMRPMessage(protobufData);
+    return waitPromise;
   }
 
   async sendMRPMessage(protobufData: Buffer): Promise<void> {

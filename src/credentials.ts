@@ -1,5 +1,9 @@
 import type { HAPCredentials } from './auth/types.js';
 
+export function parseCredentials(text: string): Credentials {
+  return Credentials.deserialize(text);
+}
+
 export class Credentials implements HAPCredentials {
   clientId: string;
   clientLTSK: Buffer;
