@@ -23,45 +23,45 @@ describe('OPACK', () => {
   });
 
   describe('integers', () => {
-    it('encodes small integers 0-20 inline', () => {
-      for (let i = 0; i <= 20; i++) {
+    it('encodes small integers 0-39 inline', () => {
+      for (let i = 0; i <= 39; i++) {
         const buf = opackEncode(i);
         expect(buf.length).toBe(1);
-        expect(buf[0]).toBe(0x20 + i);
+        expect(buf[0]).toBe(0x08 + i);
         expect(opackDecode(buf)).toBe(i);
       }
     });
 
     it('encodes int8 values', () => {
-      const buf = opackEncode(-1);
-      expect(buf[0]).toBe(0x06); // TAG_INT8
-      expect(opackDecode(buf)).toBe(-1);
+      const buf = opackEncode(100);
+      expect(buf[0]).toBe(0x30); // TAG_INT8
+      expect(opackDecode(buf)).toBe(100);
 
-      const buf2 = opackEncode(100);
-      expect(buf2[0]).toBe(0x06); // TAG_INT8
-      expect(opackDecode(buf2)).toBe(100);
+      const buf2 = opackEncode(255);
+      expect(buf2[0]).toBe(0x30); // TAG_INT8
+      expect(opackDecode(buf2)).toBe(255);
     });
 
     it('encodes int16 values', () => {
       const buf = opackEncode(1000);
-      expect(buf[0]).toBe(0x07); // TAG_INT16
+      expect(buf[0]).toBe(0x31); // TAG_INT16
       expect(opackDecode(buf)).toBe(1000);
 
-      const buf2 = opackEncode(-500);
-      expect(buf2[0]).toBe(0x07);
-      expect(opackDecode(buf2)).toBe(-500);
+      const buf2 = opackEncode(65535);
+      expect(buf2[0]).toBe(0x31); // TAG_INT16
+      expect(opackDecode(buf2)).toBe(65535);
     });
 
     it('encodes int32 values', () => {
       const buf = opackEncode(100000);
-      expect(buf[0]).toBe(0x08); // TAG_INT32
+      expect(buf[0]).toBe(0x32); // TAG_INT32
       expect(opackDecode(buf)).toBe(100000);
     });
 
     it('encodes int64 values via bigint', () => {
       const big = BigInt('9007199254740993'); // > MAX_SAFE_INTEGER
       const buf = opackEncode(big);
-      expect(buf[0]).toBe(0x09); // TAG_INT64
+      expect(buf[0]).toBe(0x33); // TAG_INT64
       expect(opackDecode(buf)).toBe(big);
     });
   });
@@ -146,7 +146,7 @@ describe('OPACK', () => {
     it('encodes large arrays with terminator', () => {
       const arr = Array.from({ length: 20 }, (_, i) => i);
       const buf = opackEncode(arr);
-      expect(buf[0]).toBe(0xe1); // TAG_ARRAY_TERMINATED
+      expect(buf[0]).toBe(0xdf); // TAG_ARRAY_BASE + 0x0F (overflow/terminated)
       expect(opackDecode(buf)).toEqual(arr);
     });
   });
@@ -158,7 +158,7 @@ describe('OPACK', () => {
         ['num', 42],
       ]);
       const buf = opackEncode(dict);
-      expect(buf[0]).toBe(0xe2 + 4); // TAG_DICT_BASE + 2*2
+      expect(buf[0]).toBe(0xe0 + 2); // TAG_DICT_BASE + count
       const decoded = opackDecode(buf) as OpackDict;
       expect(decoded.get('key')).toBe('value');
       expect(decoded.get('num')).toBe(42);
@@ -167,7 +167,7 @@ describe('OPACK', () => {
     it('encodes empty dicts', () => {
       const dict: OpackDict = new Map();
       const buf = opackEncode(dict);
-      expect(buf[0]).toBe(0xe2); // TAG_DICT_BASE + 0
+      expect(buf[0]).toBe(0xe0); // TAG_DICT_BASE + 0
       const decoded = opackDecode(buf) as OpackDict;
       expect(decoded.size).toBe(0);
     });

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { scan } from '../discovery.js';
+import { scan, type DiscoveredDeviceInfo } from '../discovery.js';
 import { AppleTV, Key } from '../appletv.js';
 import { Credentials } from '../credentials.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -72,7 +72,7 @@ async function cmdPair() {
 const COMMAND_NAMES = Object.values(Key);
 const COMMAND_SET = new Set<string>(COMMAND_NAMES);
 
-async function connectToDevice(deviceId?: string): Promise<AppleTV> {
+function loadCredentials(deviceId?: string): { id: string; credentials: Credentials } {
   if (!existsSync(CREDS_FILE)) {
     throw new Error('No credentials found. Run "atv pair" first.');
   }
@@ -86,8 +86,10 @@ async function connectToDevice(deviceId?: string): Promise<AppleTV> {
     ? entries.find(([k]) => k.toLowerCase().includes(deviceId.toLowerCase())) ?? entries[entries.length - 1]
     : entries[entries.length - 1];
 
-  const creds = Credentials.deserialize(credsJson as string);
+  return { id, credentials: Credentials.deserialize(credsJson as string) };
+}
 
+async function findDevice(id: string): Promise<DiscoveredDeviceInfo> {
   console.log('Finding device...');
   const devices = await scan({ timeout: 5000 });
   const idLower = id.toLowerCase();
@@ -99,10 +101,16 @@ async function connectToDevice(deviceId?: string): Promise<AppleTV> {
   if (!device) {
     throw new Error(`Device not found on network (looking for "${id}"). Found: ${devices.map((d) => `${d.name} [${d.deviceId}]`).join(', ')}`);
   }
+  return device;
+}
+
+async function connectToDevice(deviceId?: string): Promise<AppleTV> {
+  const { id, credentials } = loadCredentials(deviceId);
+  const device = await findDevice(id);
 
   console.log(`Connecting to ${device.name} (${device.address}:${device.port})...`);
   const atv = new AppleTV(device);
-  await atv.connect(creds);
+  await atv.connect(credentials);
   return atv;
 }
 
@@ -327,52 +335,27 @@ async function cmdCompanionPair() {
 }
 
 async function cmdCompanionTest(deviceId?: string) {
-  if (!existsSync(CREDS_FILE)) {
-    throw new Error('No credentials found. Run "atv pair" and "atv companion-pair" first.');
-  }
-  const stored = JSON.parse(readFileSync(CREDS_FILE, 'utf-8'));
-  const entries = Object.entries(stored);
-  if (entries.length === 0) {
-    throw new Error('No paired devices.');
-  }
-
-  const [id, credsJson] = deviceId
-    ? entries.find(([k]) => k.toLowerCase().includes(deviceId.toLowerCase())) ?? entries[entries.length - 1]
-    : entries[entries.length - 1];
-
-  const creds = Credentials.deserialize(credsJson as string);
-  if (!creds.companionCredentials) {
+  const { id, credentials } = loadCredentials(deviceId);
+  if (!credentials.companionCredentials) {
     throw new Error('No companion credentials. Run "atv companion-pair" first.');
   }
 
-  console.log('Finding device...');
-  const devices = await scan({ timeout: 5000 });
-  const idLower = id.toLowerCase();
-  const device = devices.find((d) =>
-    d.deviceId.toLowerCase() === idLower ||
-    d.name.toLowerCase().includes(idLower) ||
-    d.deviceId.toLowerCase().includes(idLower),
-  );
-  if (!device) {
-    throw new Error(`Device not found on network (looking for "${id}")`);
-  }
+  const device = await findDevice(id);
   if (!device.companionPort) {
     throw new Error('Device has no companion-link port');
   }
 
   const atv = new AppleTV(device);
   console.log(`Connecting companion to ${device.name} (${device.address}:${device.companionPort})...`);
-  await atv.connectCompanion(creds.companionCredentials);
+  await atv.connectCompanion(credentials.companionCredentials);
   console.log('Companion connected! Listening for events (Ctrl+C to stop)...\n');
 
   atv.on('companionEvent', (event: CompanionEvent) => {
     console.log(`Event: ${event.identifier}`);
-    // Convert Map to readable format
-    const entries: [string, unknown][] = [];
-    for (const [k, v] of event.data) {
-      entries.push([String(k), v]);
-    }
-    console.log(`  data: ${JSON.stringify(Object.fromEntries(entries))}`);
+    const readable = Object.fromEntries(
+      [...event.data].map(([k, v]) => [String(k), v]),
+    );
+    console.log(`  data: ${JSON.stringify(readable)}`);
   });
 
   atv.on('companionError', (err: Error) => {

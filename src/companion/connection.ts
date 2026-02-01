@@ -314,28 +314,25 @@ export class CompanionConnection extends EventEmitter {
   private pendingFrameResolvers: Array<{
     type: FrameType;
     resolve: (frame: Frame) => void;
-    reject: (err: Error) => void;
   }> = [];
 
   private waitForFrame(type: FrameType, timeoutMs = 5000): Promise<Frame> {
     return new Promise((resolve, reject) => {
+      const entry = {
+        type,
+        resolve: (frame: Frame): void => {
+          clearTimeout(timer);
+          resolve(frame);
+        },
+      };
+
       const timer = setTimeout(() => {
-        const idx = this.pendingFrameResolvers.findIndex((r) => r.type === type);
+        const idx = this.pendingFrameResolvers.indexOf(entry);
         if (idx >= 0) this.pendingFrameResolvers.splice(idx, 1);
         reject(new Error(`Timeout waiting for frame type ${type}`));
       }, timeoutMs);
 
-      this.pendingFrameResolvers.push({
-        type,
-        resolve: (frame) => {
-          clearTimeout(timer);
-          resolve(frame);
-        },
-        reject: (err) => {
-          clearTimeout(timer);
-          reject(err);
-        },
-      });
+      this.pendingFrameResolvers.push(entry);
 
       // Try to process any already-buffered data
       this.processRawFrames();

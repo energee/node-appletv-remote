@@ -31,12 +31,7 @@ export class CompanionPairSetup {
 
   /** Queued frames that arrived before anyone was waiting for them. */
   private frameQueue: Frame[] = [];
-
-  private pendingFrameResolvers: Array<{
-    type: FrameType | -1;  // -1 = accept any frame type
-    resolve: (frame: Frame) => void;
-    reject: (err: Error) => void;
-  }> = [];
+  private pendingFrameResolvers: Array<(frame: Frame) => void> = [];
 
   constructor(
     private host: string,
@@ -275,24 +270,18 @@ export class CompanionPairSetup {
     }
 
     return new Promise((resolve, reject) => {
+      const onFrame = (frame: Frame): void => {
+        clearTimeout(timer);
+        resolve(frame);
+      };
+
       const timer = setTimeout(() => {
-        const idx = this.pendingFrameResolvers.findIndex((r) => r.type === -1);
+        const idx = this.pendingFrameResolvers.indexOf(onFrame);
         if (idx >= 0) this.pendingFrameResolvers.splice(idx, 1);
         reject(new Error('Companion PS timeout waiting for response frame'));
       }, timeoutMs);
 
-      this.pendingFrameResolvers.push({
-        type: -1 as FrameType,
-        resolve: (frame) => {
-          clearTimeout(timer);
-          resolve(frame);
-        },
-        reject: (err) => {
-          clearTimeout(timer);
-          reject(err);
-        },
-      });
-
+      this.pendingFrameResolvers.push(onFrame);
       this.processFrames();
     });
   }
@@ -302,13 +291,9 @@ export class CompanionPairSetup {
     this.buffer = remainder;
 
     for (const frame of frames) {
-      let idx = this.pendingFrameResolvers.findIndex((r) => r.type === frame.type);
-      if (idx < 0) {
-        idx = this.pendingFrameResolvers.findIndex((r) => r.type === (-1 as FrameType));
-      }
-      if (idx >= 0) {
-        const resolver = this.pendingFrameResolvers.splice(idx, 1)[0];
-        resolver.resolve(frame);
+      const resolver = this.pendingFrameResolvers.shift();
+      if (resolver) {
+        resolver(frame);
       } else {
         this.frameQueue.push(frame);
       }
