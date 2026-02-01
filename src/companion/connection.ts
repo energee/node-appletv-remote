@@ -92,10 +92,19 @@ export class CompanionConnection extends EventEmitter {
   /**
    * Send TLV pairing data wrapped in OPACK { _pd: tlvBytes }.
    */
-  private sendPairingData(frameType: FrameType, tlvData: Buffer): void {
+  private sendPairingData(
+    frameType: FrameType,
+    tlvData: Buffer,
+    extraFields?: Map<OpackValue, OpackValue>,
+  ): void {
     const opackPayload = new Map<OpackValue, OpackValue>([
       ['_pd', tlvData],
     ]);
+    if (extraFields) {
+      for (const [k, v] of extraFields) {
+        opackPayload.set(k, v);
+      }
+    }
     this.writeRaw(encodeFrame(frameType, opackEncode(opackPayload)));
   }
 
@@ -127,7 +136,7 @@ export class CompanionConnection extends EventEmitter {
       [TlvTag.SeqNo]: Buffer.from([0x01]),
       [TlvTag.PublicKey]: ephemeralPubRaw,
     });
-    this.sendPairingData(FrameType.PV_Start, m1);
+    this.sendPairingData(FrameType.PV_Start, m1, new Map([['_auTy', 4]]));
 
     // M2: Receive server ephemeral key + encrypted proof
     const m2Data = await this.receivePairingData(FrameType.PV_Next);
@@ -217,14 +226,14 @@ export class CompanionConnection extends EventEmitter {
     // Derive encryption keys using Companion-specific HKDF strings
     const outputKey = await hkdfSha512(
       Buffer.from(sharedSecret),
-      'MediaRemote-Salt',
-      'MediaRemote-Write-Encryption-Key',
+      '',
+      'ClientEncrypt-main',
       32,
     );
     const inputKey = await hkdfSha512(
       Buffer.from(sharedSecret),
-      'MediaRemote-Salt',
-      'MediaRemote-Read-Encryption-Key',
+      '',
+      'ServerEncrypt-main',
       32,
     );
 
