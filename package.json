@@ -1,6 +1,6 @@
 {
   "name": "node-appletv-remote",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Pure Node.js Apple TV remote control library",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
