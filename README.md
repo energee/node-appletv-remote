@@ -6,24 +6,9 @@ No native dependencies — uses only Node.js built-in crypto and networking APIs
 
 Inspired by [pyatv](https://pyatv.dev/) and the original [node-appletv](https://github.com/evandcoleman/node-appletv).
 
-## Confirmed Working
+## Status
 
-Tested against an Apple TV 4K on the local network (YouTube playback):
-
-| Feature | Status |
-|---------|--------|
-| Discovery (mDNS scan) | Confirmed |
-| Pairing (SRP + PIN) | Confirmed |
-| Connection (AirPlay 2 + MRP tunnel) | Confirmed |
-| Navigation (up/down/left/right/select/menu/home) | Confirmed |
-| `play` / `pause` / `play_pause` | Confirmed |
-| `next` / `previous` / `skip_forward` / `skip_backward` | Confirmed |
-| `volume_up` / `volume_down` | Confirmed |
-| `atv state` — show now-playing info (title, artist, app, progress) | Confirmed |
-| `atv queue` — show playback queue track titles | Confirmed |
-| `atv artwork` — save current track artwork to file | Works (depends on app — YouTube returns no artwork) |
-| `atv messages` — stream raw MRP messages | Confirmed |
-| `wake` / `suspend` | Sends command (not verified on sleeping device) |
+Tested and working against Apple TV 4K — discovery, pairing, navigation, media controls, now-playing state, playback queue, artwork, and raw message streaming all confirmed over local network. Artwork availability depends on the app (e.g. YouTube doesn't expose it via MRP).
 
 ## CLI Usage
 
@@ -123,18 +108,22 @@ Connects and streams all raw MRP messages in real time until Ctrl+C.
 
 ## Library API
 
+```bash
+npm install node-appletv-remote
+```
+
 ```typescript
 import {
   scan, AppleTV, Credentials, Key,
-  NowPlayingInfo, SupportedCommand, Message,
-  AirPlayConnection, parseCredentials,
+  NowPlayingInfo, PlaybackState, SupportedCommand, Command,
+  Message, AirPlayConnection, parseCredentials,
 } from 'node-appletv-remote';
 ```
 
 ### Discover devices
 
 ```typescript
-const devices = await scan({ timeout: 5000 });
+const devices = await scan({ timeout: 5000, filter: d => d.name.includes('Living Room') });
 // [{ name, address, port, deviceId, model }]
 ```
 
@@ -144,7 +133,7 @@ const devices = await scan({ timeout: 5000 });
 const atv = new AppleTV(devices[0]);
 const pairingSession = await atv.startPairing();
 
-// Display the PIN shown on the Apple TV, then:
+// Enter the 4-digit PIN displayed on the Apple TV screen:
 const credentials = await pairingSession.finish(pin);
 ```
 
@@ -156,15 +145,23 @@ await atv.connect(credentials);
 
 // Navigation
 await atv.up();
+await atv.down();
+await atv.left();
+await atv.right();
 await atv.select();
+await atv.menu();
 await atv.home();
 
 // Media control
 await atv.play();
 await atv.pause();
+await atv.playPause();
 await atv.next();
 await atv.previous();
-await atv.playPause();
+await atv.skipForward();
+await atv.skipBackward();
+await atv.volumeUp();
+await atv.volumeDown();
 
 // Device power
 await atv.wake();
@@ -270,7 +267,7 @@ npm test
 npm run test:watch
 ```
 
-Requires Node.js with ES2022 support. The project uses ESM modules (`"type": "module"`).
+Requires Node.js 18+ (ES2022 target, ESM modules).
 
 ## License
 
