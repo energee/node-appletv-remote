@@ -1,5 +1,8 @@
 # node-appletv-remote
 
+[![npm](https://img.shields.io/npm/v/node-appletv-remote)](https://www.npmjs.com/package/node-appletv-remote)
+[![license](https://img.shields.io/npm/l/node-appletv-remote)](./LICENSE)
+
 Pure Node.js library and CLI for remote controlling Apple TV devices over the local network using AirPlay 2 and MRP (Media Remote Protocol).
 
 No native dependencies — uses only Node.js built-in crypto and networking APIs alongside a small set of JavaScript libraries.
