@@ -41,8 +41,8 @@ export function encryptChaCha20(
     return { ciphertext, tag };
   }
 
-  const aead = nobleChacha!(key, nonce);
-  const sealed = aead.encrypt(plaintext, aad);
+  const aead = nobleChacha!(key, nonce, aad);
+  const sealed = aead.encrypt(plaintext);
   // noble returns ciphertext || tag (16 bytes)
   const ciphertext = Buffer.from(sealed.subarray(0, sealed.length - 16));
   const tag = Buffer.from(sealed.subarray(sealed.length - 16));
@@ -65,8 +65,8 @@ export function decryptChaCha20(
 
   // noble expects ciphertext || tag
   const sealed = Buffer.concat([ciphertext, tag]);
-  const aead = nobleChacha!(key, nonce);
-  const plaintext = aead.decrypt(sealed, aad);
+  const aead = nobleChacha!(key, nonce, aad);
+  const plaintext = aead.decrypt(sealed);
   return Buffer.from(plaintext);
 }
 
