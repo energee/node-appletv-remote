@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/node-appletv-remote)](https://www.npmjs.com/package/node-appletv-remote)
 [![license](https://img.shields.io/npm/l/node-appletv-remote)](./LICENSE)
 
-Pure Node.js library and CLI for remote controlling Apple TV devices over the local network using AirPlay 2 and MRP (Media Remote Protocol).
+Pure Node.js library and CLI for remote controlling Apple TV devices over the local network using AirPlay 2, MRP (Media Remote Protocol), and the Companion Link protocol.
 
 No native dependencies — uses only Node.js built-in crypto and networking APIs alongside a small set of JavaScript libraries.
 
@@ -13,7 +13,7 @@ Inspired by [pyatv](https://pyatv.dev/) and the original [node-appletv](https://
 
 ## Status
 
-Tested and working against Apple TV 4K — discovery, pairing, navigation, media controls, now-playing state, playback queue, artwork, and raw message streaming all confirmed over local network. Artwork availability depends on the app (e.g. YouTube doesn't expose it via MRP).
+Tested and working against Apple TV 4K — discovery, AirPlay pairing, companion pairing, navigation, media controls, now-playing state, playback queue, artwork, and raw message streaming all confirmed over local network. Artwork availability depends on the app (e.g. YouTube doesn't expose it via MRP).
 
 ## CLI Usage
 
@@ -25,13 +25,21 @@ atv scan
 
 Lists all Apple TV devices found on the local network (5-second scan).
 
-### Pair with a device
+### Pair with a device (AirPlay)
 
 ```bash
 atv pair
 ```
 
-Walks through the pairing flow — a PIN will appear on your Apple TV screen. Enter it when prompted. Credentials are saved to `~/.atv-credentials.json`.
+Walks through the AirPlay pairing flow — a PIN will appear on your Apple TV screen. Enter it when prompted. Credentials are saved to `~/.atv-credentials.json`.
+
+### Pair with a device (Companion)
+
+```bash
+atv companion-pair
+```
+
+Pairs over the Companion Link protocol. A PIN will appear on your Apple TV screen — enter it when prompted. Companion credentials are merged into `~/.atv-credentials.json` alongside any existing AirPlay credentials.
 
 ### Send a command
 
@@ -132,7 +140,7 @@ const devices = await scan({ timeout: 5000, filter: d => d.name.includes('Living
 // [{ name, address, port, deviceId, model }]
 ```
 
-### Pair with a device
+### Pair with a device (AirPlay)
 
 ```typescript
 const atv = new AppleTV(devices[0]);
@@ -140,6 +148,16 @@ const pairingSession = await atv.startPairing();
 
 // Enter the 4-digit PIN displayed on the Apple TV screen:
 const credentials = await pairingSession.finish(pin);
+```
+
+### Pair with a device (Companion)
+
+```typescript
+const atv = new AppleTV(devices[0]);
+const companionSession = await atv.startCompanionPairing();
+
+// Enter the PIN displayed on the Apple TV screen:
+const companionCredentials = await companionSession.finish(pin);
 ```
 
 ### Connect and send commands
@@ -219,7 +237,7 @@ atv.on('message', (msg: Message) => {
 |-------|-------------|
 | **AppleTV API** | `scan()` · `connect()` · navigation · media · `getState()` · `requestPlaybackQueue()` · `requestArtwork()` |
 | **AirPlayConnection** | RTSP session · Event channel · Data channel · Heartbeat |
-| **HAP Auth** | SRP pair-setup · X25519 pair-verify · Ed25519 signatures |
+| **HAP Auth** | SRP pair-setup · X25519 pair-verify · Ed25519 signatures · Companion pair-setup |
 | **MRP Protocol** | Protobuf messages · HID events · Media commands |
 | **HAP Encryption** | ChaCha20-Poly1305 · HKDF-SHA512 derived keys |
 | **DataStream Framing** | 32-byte headers · bplist payloads |
@@ -227,7 +245,7 @@ atv.on('message', (msg: Message) => {
 
 ### Connection flow
 
-1. **Discovery** — mDNS scan for `_airplay._tcp` services
+1. **Discovery** — mDNS scan for `_airplay._tcp` and `_companion-link._tcp` services
 2. **Pair-Setup** (first time) — SRP exchange using a PIN displayed on the TV
 3. **Pair-Verify** — X25519 key exchange + Ed25519 signature proof using stored credentials
 4. **RTSP Session** — Encrypted AirPlay session setup
@@ -250,6 +268,7 @@ src/
 ├── supported-command.ts # SupportedCommand class + Command enum
 ├── message.ts           # Message wrapper for decoded MRP protobuf
 ├── auth/                # HAP pairing (SRP setup, X25519 verify)
+├── companion/           # Companion Link protocol (OPACK, framing, pair-setup)
 ├── mrp/                 # MRP protobuf message builders
 ├── util/                # Crypto, TLV, HTTP, framing helpers
 ├── cli/                 # CLI entry point (atv command)

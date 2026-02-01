@@ -299,6 +299,21 @@ export class MRPMessage {
     });
   }
 
+  static async textInput(
+    text: string,
+    actionType: number,
+  ): Promise<Buffer> {
+    return encodeMessage(MessageType.TextInput, {
+      key: '.textInputMessage',
+      typeName: 'TextInputMessage',
+      fields: {
+        timestamp: Date.now() / 1000,
+        text,
+        actionType,
+      },
+    });
+  }
+
   static async playbackQueueRequest(options: {
     location?: number;
     length?: number;

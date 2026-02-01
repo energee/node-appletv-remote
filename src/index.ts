@@ -1,5 +1,13 @@
 export { scan } from './discovery.js';
-export { AppleTV, Key } from './appletv.js';
+export { AppleTV, Key, TextInputActionType } from './appletv.js';
+export type { KeyboardInfo, TextInputEvent, CompanionEvent } from './appletv.js';
+export { CompanionConnection } from './companion/connection.js';
+export { CompanionPairSetup } from './companion/pair-setup.js';
+export { CompanionSession } from './companion/companion-session.js';
+export { opackEncode, opackDecode } from './companion/opack.js';
+export type { OpackValue, OpackDict } from './companion/opack.js';
+export { FrameType, encodeFrame, parseFrames } from './companion/framing.js';
+export type { Frame } from './companion/framing.js';
 export { Credentials, parseCredentials } from './credentials.js';
 export { NowPlayingInfo, PlaybackState } from './now-playing-info.js';
 export { SupportedCommand, Command } from './supported-command.js';

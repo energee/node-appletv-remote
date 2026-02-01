@@ -7,7 +7,32 @@ import { MRPMessage, HID_KEY_MAP, MessageType } from './mrp/messages.js';
 import { NowPlayingInfo } from './now-playing-info.js';
 import { SupportedCommand } from './supported-command.js';
 import { Message } from './message.js';
+import { CompanionConnection } from './companion/connection.js';
+import { CompanionPairSetup } from './companion/pair-setup.js';
+import type { OpackDict } from './companion/opack.js';
+import type { HAPCredentials } from './auth/types.js';
 import type { DiscoveredDeviceInfo } from './discovery.js';
+
+export interface KeyboardInfo {
+  focused: boolean;
+  title?: string;
+  prompt?: string;
+  inputTraits?: Record<string, unknown>;
+}
+
+export interface TextInputEvent {
+  text?: string;
+  actionType?: number;
+  timestamp?: number;
+}
+
+export enum TextInputActionType {
+  Unknown = 0,
+  Insert = 1,
+  Set = 2,
+  Delete = 3,
+  ClearText = 4,
+}
 
 export enum Key {
   Up = 'up',
@@ -32,13 +57,20 @@ export enum Key {
   Wake = 'wake',
 }
 
+export interface CompanionEvent {
+  identifier: string | undefined;
+  data: OpackDict;
+}
+
 export class AppleTV extends EventEmitter {
   readonly name: string;
   readonly address: string;
   readonly port: number;
   readonly deviceId: string;
   readonly model: string;
+  readonly companionPort?: number;
   private connection?: AirPlayConnection;
+  private companionConnection?: CompanionConnection;
 
   constructor(info: DiscoveredDeviceInfo) {
     super();
@@ -47,6 +79,7 @@ export class AppleTV extends EventEmitter {
     this.port = info.port;
     this.deviceId = info.deviceId;
     this.model = info.model;
+    this.companionPort = info.companionPort;
   }
 
   /** Start pairing — displays PIN on Apple TV */
@@ -70,8 +103,53 @@ export class AppleTV extends EventEmitter {
   }
 
   async close(): Promise<void> {
+    this.companionConnection?.close();
+    this.companionConnection = undefined;
     this.connection?.close();
     this.connection = undefined;
+  }
+
+  // --- Companion protocol ---
+
+  /** Start companion pairing — displays PIN on Apple TV */
+  async startCompanionPairing(options?: { companionPort?: number }): Promise<CompanionPairSetup> {
+    const port = options?.companionPort ?? this.companionPort;
+    if (!port) throw new Error('No companion port available');
+    const ps = new CompanionPairSetup(this.address, port);
+    await ps.start();
+    return ps;
+  }
+
+  /** Connect to the Companion protocol using companion credentials */
+  async connectCompanion(credentials: HAPCredentials, companionPort?: number): Promise<void> {
+    const port = companionPort ?? this.companionPort;
+    if (!port) throw new Error('No companion port available');
+
+    this.companionConnection = new CompanionConnection(this.address, port, credentials);
+    this.companionConnection.on('close', () => this.emit('companionClose'));
+    this.companionConnection.on('error', (err) => this.emit('companionError', err));
+    this.companionConnection.on('event', (event: CompanionEvent) => {
+      this.emit('companionEvent', event);
+    });
+
+    await this.companionConnection.connect();
+    this.emit('companionConnect');
+  }
+
+  /** Send a companion request and wait for response */
+  async sendCompanionRequest(
+    identifier: string,
+    content: OpackDict,
+    timeoutMs?: number,
+  ): Promise<OpackDict> {
+    if (!this.companionConnection) throw new Error('Companion not connected');
+    return this.companionConnection.sendRequest(identifier, content, timeoutMs);
+  }
+
+  /** Send a companion message without waiting for response */
+  sendCompanionMessage(identifier: string, content: OpackDict): void {
+    if (!this.companionConnection) throw new Error('Companion not connected');
+    this.companionConnection.sendMessage(identifier, content);
   }
 
   // --- Remote control commands ---
@@ -114,6 +192,32 @@ export class AppleTV extends EventEmitter {
   async wake(): Promise<void> {
     const conn = this.requireConnection();
     const msg = await MRPMessage.wakeDevice();
+    await conn.sendMRPMessage(msg);
+  }
+
+  // --- Text input ---
+
+  async setText(text: string): Promise<void> {
+    const conn = this.requireConnection();
+    const msg = await MRPMessage.textInput(text, TextInputActionType.Set);
+    await conn.sendMRPMessage(msg);
+  }
+
+  async insertText(text: string): Promise<void> {
+    const conn = this.requireConnection();
+    const msg = await MRPMessage.textInput(text, TextInputActionType.Insert);
+    await conn.sendMRPMessage(msg);
+  }
+
+  async clearText(): Promise<void> {
+    const conn = this.requireConnection();
+    const msg = await MRPMessage.textInput('', TextInputActionType.ClearText);
+    await conn.sendMRPMessage(msg);
+  }
+
+  async deleteText(): Promise<void> {
+    const conn = this.requireConnection();
+    const msg = await MRPMessage.textInput('', TextInputActionType.Delete);
     await conn.sendMRPMessage(msg);
   }
 
@@ -235,6 +339,34 @@ export class AppleTV extends EventEmitter {
         | undefined;
       if (playbackQueue) {
         this.emit('playbackQueue', playbackQueue);
+      }
+    }
+
+    // Handle KeyboardMessage (type 23)
+    if (msg.type === MessageType.Keyboard) {
+      const kb = msg['.keyboardMessage'] as Record<string, unknown> | undefined;
+      if (kb) {
+        const attrs = kb.attributes as Record<string, unknown> | undefined;
+        const info: KeyboardInfo = {
+          focused: (kb.state as number) === 1,
+          title: attrs?.title as string | undefined,
+          prompt: attrs?.prompt as string | undefined,
+          inputTraits: attrs?.inputTraits as Record<string, unknown> | undefined,
+        };
+        this.emit('keyboard', info);
+      }
+    }
+
+    // Handle TextInputMessage (type 25)
+    if (msg.type === MessageType.TextInput) {
+      const ti = msg['.textInputMessage'] as Record<string, unknown> | undefined;
+      if (ti) {
+        const event: TextInputEvent = {
+          text: ti.text as string | undefined,
+          actionType: ti.actionType as number | undefined,
+          timestamp: ti.timestamp as number | undefined,
+        };
+        this.emit('textInput', event);
       }
     }
   }

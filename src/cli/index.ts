@@ -6,6 +6,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Message } from '../message.js';
+import type { KeyboardInfo, TextInputEvent, CompanionEvent } from '../appletv.js';
 
 const CREDS_FILE = join(process.env.HOME ?? '.', '.atv-credentials.json');
 
@@ -277,6 +278,151 @@ async function cmdMessages(deviceId?: string) {
   });
 }
 
+async function cmdCompanionPair() {
+  console.log('Scanning for Apple TVs...');
+  const devices = await scan({ timeout: 5000 });
+  const withCompanion = devices.filter((d) => d.companionPort);
+  if (withCompanion.length === 0) {
+    console.log('No Apple TVs with companion-link found.');
+    return;
+  }
+
+  withCompanion.forEach((d, i) => {
+    console.log(`  ${i + 1}. ${d} [companion:${d.companionPort}]`);
+  });
+  const choice = await prompt('Select device number: ');
+  const device = withCompanion[parseInt(choice) - 1];
+  if (!device) {
+    console.log('Invalid selection.');
+    return;
+  }
+
+  const atv = new AppleTV(device);
+  console.log(`Companion pairing with ${atv.name} on port ${device.companionPort}...`);
+  const pairSetup = await atv.startCompanionPairing();
+
+  const pin = await prompt('Enter PIN shown on Apple TV: ');
+  const companionCreds = await pairSetup.finish(pin);
+
+  // Load existing credentials and add companion creds
+  let stored: Record<string, string> = {};
+  if (existsSync(CREDS_FILE)) {
+    stored = JSON.parse(readFileSync(CREDS_FILE, 'utf-8'));
+  }
+
+  // Update existing credentials with companion data
+  if (stored[device.deviceId]) {
+    const existing = Credentials.deserialize(stored[device.deviceId]);
+    existing.companionCredentials = companionCreds;
+    stored[device.deviceId] = existing.serialize();
+  } else {
+    console.log('Warning: No AirPlay credentials found. Pair with AirPlay first (atv pair).');
+    console.log('Saving companion credentials standalone.');
+    const creds = new Credentials(companionCreds, companionCreds);
+    stored[device.deviceId] = creds.serialize();
+  }
+
+  writeFileSync(CREDS_FILE, JSON.stringify(stored, null, 2));
+  console.log(`Companion paired! Credentials saved to ${CREDS_FILE}`);
+}
+
+async function cmdCompanionTest(deviceId?: string) {
+  if (!existsSync(CREDS_FILE)) {
+    throw new Error('No credentials found. Run "atv pair" and "atv companion-pair" first.');
+  }
+  const stored = JSON.parse(readFileSync(CREDS_FILE, 'utf-8'));
+  const entries = Object.entries(stored);
+  if (entries.length === 0) {
+    throw new Error('No paired devices.');
+  }
+
+  const [id, credsJson] = deviceId
+    ? entries.find(([k]) => k.toLowerCase().includes(deviceId.toLowerCase())) ?? entries[entries.length - 1]
+    : entries[entries.length - 1];
+
+  const creds = Credentials.deserialize(credsJson as string);
+  if (!creds.companionCredentials) {
+    throw new Error('No companion credentials. Run "atv companion-pair" first.');
+  }
+
+  console.log('Finding device...');
+  const devices = await scan({ timeout: 5000 });
+  const idLower = id.toLowerCase();
+  const device = devices.find((d) =>
+    d.deviceId.toLowerCase() === idLower ||
+    d.name.toLowerCase().includes(idLower) ||
+    d.deviceId.toLowerCase().includes(idLower),
+  );
+  if (!device) {
+    throw new Error(`Device not found on network (looking for "${id}")`);
+  }
+  if (!device.companionPort) {
+    throw new Error('Device has no companion-link port');
+  }
+
+  const atv = new AppleTV(device);
+  console.log(`Connecting companion to ${device.name} (${device.address}:${device.companionPort})...`);
+  await atv.connectCompanion(creds.companionCredentials);
+  console.log('Companion connected! Listening for events (Ctrl+C to stop)...\n');
+
+  atv.on('companionEvent', (event: CompanionEvent) => {
+    console.log(`Event: ${event.identifier}`);
+    // Convert Map to readable format
+    const entries: [string, unknown][] = [];
+    for (const [k, v] of event.data) {
+      entries.push([String(k), v]);
+    }
+    console.log(`  data: ${JSON.stringify(Object.fromEntries(entries))}`);
+  });
+
+  atv.on('companionError', (err: Error) => {
+    console.error(`Companion error: ${err.message}`);
+  });
+
+  atv.on('companionClose', () => {
+    console.log('Companion connection closed.');
+  });
+
+  process.on('SIGINT', async () => {
+    console.log('\nDisconnecting...');
+    await atv.close();
+    process.exit(0);
+  });
+}
+
+async function cmdKeyboard(deviceId?: string) {
+  const atv = await connectToDevice(deviceId);
+  console.log('Listening for keyboard/textInput events (Ctrl+C to stop)...\n');
+
+  atv.on('keyboard', (info: KeyboardInfo) => {
+    const parts = [`Keyboard: focused=${info.focused}`];
+    if (info.title) parts.push(`title="${info.title}"`);
+    if (info.prompt) parts.push(`prompt="${info.prompt}"`);
+    console.log(parts.join(' '));
+  });
+
+  atv.on('textInput', (event: TextInputEvent) => {
+    const parts = ['TextInput:'];
+    if (event.text !== undefined) parts.push(`text="${event.text}"`);
+    if (event.actionType !== undefined) parts.push(`action=${event.actionType}`);
+    console.log(parts.join(' '));
+  });
+
+  atv.on('message', (msg: Message) => {
+    // Also log raw keyboard/text messages for debugging
+    const type = msg.type;
+    if (type === 23 || type === 25) {
+      console.log(`  raw: ${JSON.stringify(msg.payload)}`);
+    }
+  });
+
+  process.on('SIGINT', async () => {
+    console.log('\nDisconnecting...');
+    await atv.close();
+    process.exit(0);
+  });
+}
+
 // Main
 const [, , cmd, ...args] = process.argv;
 
@@ -306,6 +452,15 @@ switch (cmd) {
   case 'messages':
     cmdMessages(args[0]).catch(console.error);
     break;
+  case 'keyboard':
+    cmdKeyboard(args[0]).catch(console.error);
+    break;
+  case 'companion-pair':
+    cmdCompanionPair().catch(console.error);
+    break;
+  case 'companion-test':
+    cmdCompanionTest(args[0]).catch(console.error);
+    break;
   default:
     console.log('Usage:');
     console.log('  atv scan                           Scan for Apple TVs');
@@ -316,6 +471,9 @@ switch (cmd) {
     console.log('  atv queue [device]                 Show playback queue');
     console.log('  atv artwork [device] [output.jpg]  Save artwork to file');
     console.log('  atv messages [device]              Stream raw MRP messages');
+    console.log('  atv keyboard [device]              Stream keyboard/text events');
+    console.log('  atv companion-pair                 Pair with companion protocol');
+    console.log('  atv companion-test [device]        Test companion connection');
     console.log('');
     console.log('Commands: up, down, left, right, select, menu, home, home_hold,');
     console.log('          top_menu, play, pause, play_pause, next, previous,');
