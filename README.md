@@ -4,6 +4,8 @@ Pure Node.js library and CLI for remote controlling Apple TV devices over the lo
 
 No native dependencies — uses only Node.js built-in crypto and networking APIs alongside a small set of JavaScript libraries.
 
+I wanted to learn the handshake process of the apple TV and implement in typescript so I created this project since the other node implementations are dperecated and no longer work with latest apple tvs.
+
 Inspired by [pyatv](https://pyatv.dev/) and the original [node-appletv](https://github.com/evandcoleman/node-appletv).
 
 ## Status
@@ -268,7 +270,3 @@ npm run test:watch
 ```
 
 Requires Node.js 18+ (ES2022 target, ESM modules).
-
-## License
-
-MIT
