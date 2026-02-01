@@ -213,28 +213,15 @@ atv.on('message', (msg: Message) => {
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────┐
-│                   AppleTV API                     │
-│  scan() · connect() · up/down/select/play/...    │
-│  play() · pause() · next() · wake() · suspend()  │
-│  getState() · requestPlaybackQueue()              │
-├──────────────────────────────────────────────────┤
-│              AirPlayConnection                    │
-│  RTSP session · Event channel · Data channel     │
-├──────────────────────────────────────────────────┤
-│       HAP Auth          │      MRP Protocol      │
-│  SRP pair-setup         │  Protobuf messages     │
-│  X25519 pair-verify     │  HID events            │
-│  Ed25519 signatures     │  Media commands        │
-├─────────────────────────┼────────────────────────┤
-│       HAP Encryption    │    DataStream Framing  │
-│  ChaCha20-Poly1305      │  32-byte headers       │
-│  HKDF-SHA512 keys       │  bplist payloads       │
-├──────────────────────────────────────────────────┤
-│                  TCP (port 7000)                  │
-└──────────────────────────────────────────────────┘
-```
+| Layer | Description |
+|-------|-------------|
+| **AppleTV API** | `scan()` · `connect()` · navigation · media · `getState()` · `requestPlaybackQueue()` · `requestArtwork()` |
+| **AirPlayConnection** | RTSP session · Event channel · Data channel · Heartbeat |
+| **HAP Auth** | SRP pair-setup · X25519 pair-verify · Ed25519 signatures |
+| **MRP Protocol** | Protobuf messages · HID events · Media commands |
+| **HAP Encryption** | ChaCha20-Poly1305 · HKDF-SHA512 derived keys |
+| **DataStream Framing** | 32-byte headers · bplist payloads |
+| **Transport** | TCP (port 7000) |
 
 ### Connection flow
 
