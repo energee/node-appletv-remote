@@ -164,8 +164,11 @@ Reference: pyatv [v0.18.0, commit d88abc960e188d3cd2498d19117e75d7711d8600](http
 
 ### Legacy Apple TV 2/3 (DMAP, experimental)
 
-`scan()` also browses `_touch-able._tcp` and `_appletv-v2._tcp`, joins services
-by identity, hostname, or overlapping usable addresses, and exposes `dmapPort` and `dmapAddress`. `port` remains the AirPlay port (0 if
+`scan()` also browses `_touch-able._tcp` and `_appletv-v2._tcp` and exposes
+`dmapPort` and `dmapAddress`. DMAP joins a modern device only on an address also
+advertised by its primary protocol, never by hostname or a copied instance name.
+The selected DMAP address must be shared, even if another address is listed first.
+`port` remains the AirPlay port (0 if
 none was advertised). `createClient(device)` prefers usable modern AirPlay, then enabled standalone MRP, then DMAP; explicit `'dmap'`, `'mrp'`, or `'airplay'` overrides are supported. An AirPlay
 advertisement on an old TV does not imply modern AirPlay 2/MRP support.
 `new AppleTV(device)` handles AirPlay/standalone MRP, not DMAP, and rejects pairing/connect
@@ -200,7 +203,10 @@ Existing legacy pairing GUIDs and Home Sharing UUIDs can be supplied directly to
 `DmapClient.connect(string)`. Modern `Credentials`, HAP JSON and Ed25519 keys
 **do not work with DMAP** and are rejected. Home Sharing IDs are not automatically
 exposed from TXT records. DMAP uses unencrypted local HTTP and the mandated legacy
-MD5 PIN challenge; use only on a trusted LAN. The pairing callback binds to the
+MD5 PIN challenge; use only on a trusted LAN. Discovery is unauthenticated and
+cannot establish server identity. Verify the selected address and port before
+supplying a pairing GUID or Home Sharing UUID; constructing `DmapClient` with an
+explicit endpoint is a caller trust decision, not authentication. The pairing callback binds to the
 specified local IPv4 interface and advertises only that address, so the firewall
 must permit inbound connections. Pairing accepts one successful callback, locks
 after five wrong PIN callbacks, and expires after five minutes; restart pairing
@@ -385,9 +391,11 @@ src/
 
 `AppleTV.connect()` and `startPairing()` preserve the AirPlay tunnel when advertised, otherwise select enabled standalone MRP. Companion-only devices use `connectCompanion()` and `startCompanionPairing()`; calling the MRP methods fails before opening a socket. Standalone credentials use the existing `Credentials` format but must be paired with the selected protocol; AirPlay pairing does not imply legacy MRP pairing. A returned PairSetup owns its open pairing carrier: always call `finish(pin)` or `destroy()`; abandoning it without either intentionally leaves pairing open.
 
-Discovery merges services by advertised identity, hostname, or overlapping addresses, never by display name. `identifiers` preserves AirPlay `deviceid`, MRP `UniqueIdentifier`/`macAddress`, and Companion `rpMRtID` aliases for cached credential lookup. The primary `deviceId` prefers AirPlay, then MRP, then DMAP, then Companion. If no stable ID is advertised, discovery falls back to hostname/service instance (not IP). A changed set of advertisements can therefore change the primary ID; match stored IDs against `identifiers` too, as the CLI does.
+Discovery associates modern services by compatible advertised identity, primary-protocol hostname, or overlapping primary-protocol addresses, never by display name. AirPlay `deviceid` and MRP `macAddress` share a MAC namespace; MRP `UniqueIdentifier` and Companion `rpMRtID` share an MRP namespace. Other cross-protocol ID equality does not establish an association. Conflicting IDs within a namespace keep devices separate. Same-protocol records with disjoint addresses and different SRV hosts remain separate even when their IDs match; duplicate device IDs are ambiguous, not verified identities. Primary endpoint overlap is scoped to the selected protocol host. Records matching multiple groups remain separate instead of bridging them, independent of arrival order; an ambiguous result must not be treated as a verified TV.
 
-IPv4 is preferred when advertised; global/ULA IPv6 and explicitly scoped link-local IPv6 (for example `fe80::1234%en0`) are accepted. Unscoped link-local, loopback, unspecified, and multicast addresses are excluded. Use unbracketed addresses for constructors; the RTSP layer brackets IPv6 authorities. `companionAddress`, `mrpAddress`, and `dmapAddress` retain service-specific endpoints when a merged device's services advertise different address families. No automatic connection retry across alternate addresses is added. Exceptions in `scan` filter/until callbacks reject the scan promise after stopping discovery.
+DMAP instance names are not universal device IDs: `deviceId`/`identifiers` use `dmap:<instance>` instead of a raw instance name. Migrate stored legacy instance lookups to that prefix. DMAP requires direct address overlap with the primary protocol and never joins by hostname or instance name alone. `identifiers` retains the modern aliases for cached credential lookup, but every alias is unauthenticated mDNS data, not proof of identity. The primary `deviceId` prefers AirPlay, then MRP, then DMAP, then Companion. If no ID is advertised, discovery falls back to hostname/service instance (not IP). Changed advertisements can change the primary ID; match stored IDs against `identifiers` too, as the CLI does. These association checks prevent unrelated endpoint selection, not mDNS spoofing or an attacker advertising the same endpoint.
+
+IPv4 is preferred when advertised; global/ULA IPv6 and explicitly scoped link-local IPv6 (for example `fe80::1234%en0`) are accepted. Unscoped link-local, loopback, unspecified, and multicast addresses are excluded. Use unbracketed addresses for constructors; the RTSP layer brackets IPv6 authorities. `companionAddress`, `mrpAddress`, and `dmapAddress` prefer an address shared with the primary protocol. Modern services joined by compatible identity or hostname can retain disjoint service-specific endpoints; joined DMAP endpoints must be shared. Dual-stack/multihomed advertisements for the same primary identity retain their usable addresses for overlap checks. No automatic connection retry across alternate addresses is added. Exceptions in `scan` filter/until callbacks reject the scan promise after stopping discovery.
 
 Wire behavior is pinned to [pyatv 0.18.0 MRP connection](https://github.com/postlund/pyatv/blob/v0.18.0/pyatv/protocols/mrp/connection.py), [authentication](https://github.com/postlund/pyatv/blob/v0.18.0/pyatv/protocols/mrp/auth.py), and [service identity rules](https://github.com/postlund/pyatv/blob/v0.18.0/pyatv/helpers.py). Tests use synthetic peers only; IPv6 network discovery and older-tvOS hardware interoperability still require operator validation. An AirPlay advertisement alone does not prove AirPlay 2 MRP or URL-playback compatibility. `createClient` treats known AppleTV1-3 model advertisements as legacy AirPlay; explicit protocol selection remains available.
 

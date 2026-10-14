@@ -48,6 +48,60 @@ describe('mDNS service ordering', () => {
   });
 });
 
+describe('conflicting primary identities', () => {
+  const orders = [
+    [0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0],
+  ];
+  for (const type of ['touch-able', 'appletv-v2', 'companion-link', 'mediaremotetv', 'airplay']) {
+    for (const order of orders) {
+      it(`keeps two TVs separate from a bridging ${type} record in order ${order}`, async () => {
+        const pending = scan({ timeout: 10 });
+        const records: [string, Record<string, unknown>][] = [
+          ['airplay', { name: 'TV A', host: 'a.local', addresses: ['192.0.2.10'], port: 7000, txt: { deviceid: 'tv-a' } }],
+          ['airplay', { name: 'TV B', host: 'b.local', addresses: ['192.0.2.20'], port: 7000, txt: { deviceid: 'tv-b' } }],
+          [type, { name: 'Ambiguous service', addresses: ['192.0.2.99', '192.0.2.10', '192.0.2.20'], port: 3689 }],
+        ];
+        for (const index of order) {
+          const [serviceType, record] = records[index];
+          mock.callbacks.get(serviceType)!(record);
+        }
+        await vi.advanceTimersByTimeAsync(10);
+        const devices = await pending;
+        expect(devices).toHaveLength(3);
+        const tvs = devices.filter(device => ['tv-a', 'tv-b'].includes(device.deviceId));
+        expect(tvs).toHaveLength(2);
+        for (const tv of tvs) {
+          expect(tv.dmapPort).toBeUndefined();
+          expect(tv.mrpPort).toBeUndefined();
+          expect(tv.companionPort).toBeUndefined();
+        }
+        expect(devices.find(device => device.address === '192.0.2.99')?.port).toBe(type === 'airplay' ? 3689 : 0);
+      });
+    }
+  }
+
+  for (const reverse of [false, true]) {
+    it(`keeps conflicting AirPlay IDs separate despite the same host/address (reversed: ${reverse})`, async () => {
+      const pending = scan({ timeout: 10 });
+      const records = [
+        { name: 'TV A', host: 'tv.local', addresses: ['192.0.2.10'], port: 7000, txt: { deviceid: 'tv-a' } },
+        { name: 'TV B', host: 'tv.local', addresses: ['192.0.2.10'], port: 7000, txt: { deviceid: 'tv-b' } },
+      ];
+      for (const record of reverse ? records.reverse() : records) mock.callbacks.get('airplay')!(record);
+      await vi.advanceTimersByTimeAsync(10);
+      expect((await pending).map(device => device.deviceId).sort()).toEqual(['tv-a', 'tv-b']);
+    });
+  }
+
+  it('can stop early on the shared DMAP endpoint, not the unrelated first address', async () => {
+    const pending = scan({ timeout: 5000, until: device => device.deviceId === 'tv-a' && !!device.dmapPort });
+    mock.callbacks.get('touch-able')!({ name: 'legacy', addresses: ['192.0.2.99', 'fd00::10'], port: 3689 });
+    mock.callbacks.get('airplay')!({ name: 'TV A', addresses: ['fd00::10'], port: 7000, txt: { deviceid: 'tv-a' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await pending)[0]).toMatchObject({ deviceId: 'tv-a', dmapAddress: 'fd00::10' });
+  });
+});
+
 describe('scan until', () => {
   const tv = { name: 'Synthetic TV', addresses: ['192.0.2.10'], port: 7000, txt: { deviceid: 'synthetic-tv', model: 'AppleTV6,2' } };
 
