@@ -24,6 +24,7 @@ export class PlayerState {
   private clients = new Map<string, Client>();
   private activeClient?: string;
   private selected = false;
+  private routingSelected = false;
 
   /** Current active-player commands; undefined means no advertisement has arrived. */
   get commands(): SupportedCommand[] | undefined {
@@ -31,6 +32,19 @@ export class PlayerState {
     const player = client?.active === null ? undefined : client?.players.get(client.active ?? DEFAULT_PLAYER);
     if (!player?.commands) return client?.commands;
     return [...player.commands, ...(client?.commands ?? []).filter(cmd => !player.commands!.some(p => p.command === cmd.command))];
+  }
+
+  /** Cache bypass requires a device routing selection, not the legacy first-state fallback. */
+  get hasSelectedSnapshot(): boolean {
+    return this.routingSelected && this.hasSnapshot;
+  }
+
+  /** Received state for the model's current player (also the legacy first-state fallback). Identity/commands alone are not state. */
+  get hasSnapshot(): boolean {
+    const client = this.activeClient === undefined ? undefined : this.clients.get(this.activeClient);
+    const player = client?.active === null ? undefined : client?.players.get(client.active ?? DEFAULT_PLAYER);
+    return !!player && (typeof player.state.playbackState === 'number' ||
+      player.state.playbackQueue !== undefined || Object.keys(player.direct).length > 0);
   }
 
   /** Fresh normalized snapshot without position extrapolation. */
@@ -69,6 +83,7 @@ export class PlayerState {
     client.info = { ...client.info, ...clientInfo };
     const identifier = path.player?.identifier ?? DEFAULT_PLAYER;
     if (type === MessageType.SetNowPlayingClient) {
+      this.routingSelected = true;
       this.selected = true;
       this.activeClient = clientInfo.bundleIdentifier ? bundle : undefined;
       return true;
@@ -82,6 +97,7 @@ export class PlayerState {
     if (type === MessageType.SetNowPlayingPlayer) {
       client.active = path.player?.identifier || null;
       if (!this.selected) { this.activeClient = bundle; this.selected = true; }
+      if (this.activeClient === bundle) this.routingSelected = true;
       return this.activeClient === bundle;
     }
     if (type === MessageType.RemovePlayer) {

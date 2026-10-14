@@ -248,9 +248,10 @@ async function cmdRemote(deviceId?: string) {
 async function cmdState(deviceId?: string) {
   const atv = await connectToDevice(deviceId);
   try {
-    console.log('Requesting state...');
+    console.log('Reading state...');
     const info = await atv.getNowPlaying();
-    console.log(info.hasPlayback ? info.toString() : `Nothing playing. [${info.playbackState === PlaybackState.Stopped ? 'Stopped' : 'Absent'}]`);
+    console.log(info.hasPlayback || (info.playbackState !== PlaybackState.Unknown && info.playbackState !== PlaybackState.Stopped)
+      ? info.toString() : `Nothing playing. [${info.playbackState === PlaybackState.Stopped ? 'Stopped' : 'Absent'}]`);
   } finally {
     await atv.close();
   }

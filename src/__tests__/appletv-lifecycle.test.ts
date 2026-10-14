@@ -61,6 +61,35 @@ it.each(['AirPlay', 'Companion'])('ignores stale %s events after replacement', a
   await tv.close();
 });
 
+it('forwards sanitized diagnostics from setup and rejects stale session diagnostics', async () => {
+  const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test' });
+  const instances: AirPlayConnection[] = [];
+  vi.spyOn(AirPlayConnection.prototype, 'connect').mockImplementation(async function (this: AirPlayConnection) {
+    instances.push(this);
+    this.emit('mrp-diagnostic', { direction: 'send', type: 15, identifier: 'request-1' });
+  });
+  const observed: unknown[] = [];
+  tv.on('mrpDiagnostic', value => observed.push(value));
+  await tv.connect(credentials);
+  expect(observed).toEqual([{ direction: 'send', type: 15, identifier: 'request-1' }]);
+  await tv.close();
+  await tv.connect(credentials);
+  instances[0].emit('mrp-diagnostic', { direction: 'receive', type: 4 });
+  expect(observed).toHaveLength(2);
+  await tv.close();
+});
+
+it('does not enable diagnostic collection without an opt-in observer before connect', async () => {
+  const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test' });
+  let count = -1;
+  vi.spyOn(AirPlayConnection.prototype, 'connect').mockImplementation(async function (this: AirPlayConnection) {
+    count = this.listenerCount('mrp-diagnostic');
+  });
+  await tv.connect(credentials);
+  expect(count).toBe(0);
+  await tv.close();
+});
+
 it('explicit close resets availability once and notifies after both transports are cleared', async () => {
   const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test', companionPort: 1234 });
   vi.spyOn(AirPlayConnection.prototype, 'connect').mockResolvedValue();

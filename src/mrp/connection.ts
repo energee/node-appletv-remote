@@ -1,13 +1,26 @@
 /** Shared MRP handshake, UUID response correlation, and lifecycle-safe message delivery. */
 import { EventEmitter } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
-import { MRPMessage, MessageType } from './messages.js';
+import { MRPMessage, MessageType, PLAYER_STATE_FIELDS } from './messages.js';
 import type { HAPCredentials } from '../auth/types.js';
+
+/** Sanitized issue #10 trace. Identifiers are opaque, connection-local tokens, never raw device/media IDs. */
+export interface MRPDiagnostic {
+  direction: 'send' | 'receive';
+  type: number;
+  identifier?: string;
+  client?: string;
+  player?: string;
+  /** Receive only: whether type and identifier match a pending request before message delivery. */
+  matchedRequest?: boolean;
+}
 
 /** Common protocol state for AirPlay-tunneled and standalone MRP transports. */
 export abstract class MRPConnection extends EventEmitter {
   protected closed = false;
   protected mrpGeneration = 0;
+  /** In-memory equality tokens for a bounded capture; discarded with this connection, never persisted. */
+  private diagnosticIds = new Map<string, string>();
   protected pendingMRPResolvers: Array<{
     type: number;
     identifier?: string;
@@ -35,6 +48,7 @@ export abstract class MRPConnection extends EventEmitter {
     });
     // DeviceInfo can be unsolicited/identifierless; install its type waiter before writing.
     const response = this.waitForMRPMessage(MessageType.DeviceInfo, 5000);
+    if (this.listenerCount('mrp-diagnostic')) this.emitDiagnostic('send', await MRPMessage.decode(deviceInfo));
     void this.sendMRPMessage(deviceInfo).catch(err => this.rejectMRPRequests(err));
     await response;
     await this.authenticateMRP();
@@ -44,6 +58,7 @@ export abstract class MRPConnection extends EventEmitter {
 
     // 3. SetConnectionState (fire and forget, pyatv uses send() not send_and_receive())
     const connState = await MRPMessage.setConnectionState(2);
+    if (this.listenerCount('mrp-diagnostic')) this.emitDiagnostic('send', await MRPMessage.decode(connState));
     await this.sendMRPMessage(connState);
 
     // 4. ClientUpdatesConfig (pyatv waits for a reply; we only send)
@@ -53,10 +68,12 @@ export abstract class MRPConnection extends EventEmitter {
       volumeUpdates: true,
       keyboardUpdates: true,
     });
+    if (this.listenerCount('mrp-diagnostic')) this.emitDiagnostic('send', await MRPMessage.decode(updatesConfig));
     await this.sendMRPMessage(updatesConfig);
 
     // 5. GetKeyboardSession (pyatv waits for a reply; we only send)
     const getKeyboard = await MRPMessage.sendCommand(MessageType.GetKeyboardSession);
+    if (this.listenerCount('mrp-diagnostic')) this.emitDiagnostic('send', await MRPMessage.decode(getKeyboard));
     await this.sendMRPMessage(getKeyboard);
 
     // ponytail: fixed settle, 0 by default (was 500 ms). Replace with waiting for the first
@@ -103,6 +120,7 @@ export abstract class MRPConnection extends EventEmitter {
     this.log(`MRP response: type=${msg.type}`);
     // Normalize pushed state before the corresponding request resumes. Listener errors are not decode errors.
     try {
+      this.emitDiagnostic('receive', msg);
       this.emit('mrp-message', msg);
     } finally {
       if (!this.closed && generation === this.mrpGeneration) {
@@ -123,15 +141,47 @@ export abstract class MRPConnection extends EventEmitter {
     responseType: number,
     timeoutMs = 5000,
   ): Promise<Record<string, unknown>> {
-    const identifier = (await MRPMessage.decode(protobufData)).identifier;
+    const request = await MRPMessage.decode(protobufData);
+    const identifier = request.identifier;
     if (typeof identifier !== 'string' || !identifier) throw new Error('MRP request requires an identifier');
     if (this.pendingMRPResolvers.some(entry => entry.identifier === identifier)) throw new Error('MRP identifier already pending');
     const waitPromise = this.waitForMRPMessage(responseType, timeoutMs, identifier);
     // Handle send failure through the same waiter so no orphan rejection/timer survives.
-    void this.sendMRPMessage(protobufData).catch(err => {
+    void (async () => {
+      this.emitDiagnostic('send', request);
+      await this.sendMRPMessage(protobufData);
+    })().catch(err => {
       this.pendingMRPResolvers.find(entry => entry.identifier === identifier)?.reject(err);
     });
     return waitPromise;
+  }
+
+  /** Emit only the init/state routing fields needed for #10, and only when observed. Never copy payloads. */
+  private emitDiagnostic(direction: MRPDiagnostic['direction'], msg: Record<string, unknown>): void {
+    if (!this.listenerCount('mrp-diagnostic') || !Object.prototype.hasOwnProperty.call(msg, 'type')) return;
+    const type = msg.type as MessageType;
+    const field = PLAYER_STATE_FIELDS[type] ?? (type === MessageType.PlaybackQueueRequest ? '.playbackQueueRequestMessage' :
+      [MessageType.DeviceInfo, MessageType.ClientUpdatesConfig, MessageType.GetKeyboardSession, MessageType.SetConnectionState].includes(type) ? '' : undefined);
+    if (field === undefined) return;
+    const diagnostic: MRPDiagnostic = { direction, type };
+    const token = (kind: string, value: unknown): string | undefined => {
+      if (typeof value !== 'string' || !value) return undefined;
+      const key = JSON.stringify([kind, value]);
+      if (!this.diagnosticIds.has(key)) this.diagnosticIds.set(key, `${kind}-${this.diagnosticIds.size + 1}`);
+      return this.diagnosticIds.get(key);
+    };
+    const identifier = token('request', msg.identifier);
+    if (identifier) diagnostic.identifier = identifier;
+    const payload = msg[field] as { client?: { bundleIdentifier?: string }; playerPath?: { client?: { bundleIdentifier?: string }; player?: { identifier?: string } } } | undefined;
+    const client = token('client', payload?.client?.bundleIdentifier ?? payload?.playerPath?.client?.bundleIdentifier);
+    const player = token('player', payload?.playerPath?.player?.identifier);
+    if (client) diagnostic.client = client;
+    if (player) diagnostic.player = player;
+    if (direction === 'receive') diagnostic.matchedRequest = this.pendingMRPResolvers.some(
+      entry => entry.type === type && (entry.identifier === undefined || entry.identifier === msg.identifier),
+    );
+    try { this.emit('mrp-diagnostic', diagnostic); }
+    catch { this.log('MRP diagnostic observer failed'); }
   }
 
   /** Reject all waiters and release their timers on transport loss. */

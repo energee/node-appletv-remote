@@ -124,6 +124,21 @@ device acknowledgments. Correct concurrent result matching depends on the MRP
 transport's request correlation.
 
 `getNowPlaying()`, `nowPlaying` and the `nowPlaying` event share `NowPlayingInfo`.
+While connected, `getNowPlaying()` returns the received selected-player snapshot
+without sending a queue request when it has explicit playback state (including
+unknown/stopped), a queue (including an empty queue), or direct now-playing fields.
+A SetNowPlayingClient/SetNowPlayingPlayer routing selection must also have arrived
+in this connection; the legacy first-state fallback does not qualify for cache bypass.
+Client/player identity and supported commands alone do not qualify. If no selected-player
+state has arrived, it still requests a queue reply and propagates the 10 s timeout
+or transport error; a reply without selected-player state rejects with
+`No active-player state received`, not "nothing playing." It does not force a refresh
+or wait for a future push, and a push during a pending request does not hide that
+request's timeout. A successful queue reply may still establish legacy unrouted state
+for compatibility, but it must contain state for the model's current player; an
+empty/unrelated reply cannot validate an earlier unrouted push.
+`getState()` remains the raw correlated SetState queue-request API,
+even with a cached snapshot; queue and artwork calls retain their response dependency.
 Queue metadata uses its current `location`; item updates merge by identifier.
 Direct state updates retain omitted fields; a changed `uniqueIdentifier` clears
 old-track metadata. Runtime evidence is discarded on disconnect/reconnect. Inactive players stay separate until
@@ -132,7 +147,8 @@ metadata from paused/stopped playback; `playbackState` retains the device's expl
 state (unknown if not reported). `playerIdentifier` and `appBundleIdentifier`
 identify the selected player. Position is a snapshot, not extrapolated. CLI state uses the same summary as
 `NowPlayingInfo.toString()` (percentage progress rather than its former time-pair
-formatter). The raw `playbackQueue` and `supportedCommands` events still expose
+formatter). Metadata-free explicit Playing/Paused/Interrupted/Seeking states are
+printed as their reported state, not "Absent." The raw `playbackQueue` and `supportedCommands` events still expose
 messages from any player; normalized `nowPlaying` is active-player-only.
 
 ```typescript
@@ -151,16 +167,85 @@ than being guessed from model or service presence. Availability is advisory and
 may change at any time; device errors still reject. The event has no payload:
 re-query the capabilities relevant to your application.
 
-**Apple TV HD limitation (#10):** pairing and remote keys can work while `state`,
-queue and artwork requests time out waiting for MRP type 4. A 500 ms settle delay
-has not resolved the reported AppleTV5,3 case. No HD-specific fix is established.
-Offline source comparison only establishes that pyatv reads cached pushed player
-state instead of requiring a queue response for every state read. Diagnosing the
-remaining transport/device difference needs sanitized exchanges from HD and 4K
-while playing, paused and stopped; this implementation does not fabricate that evidence.
+**Apple TV HD limitation (#10) is not solved:** pairing and remote keys can work
+while queue and artwork requests time out waiting for MRP type 4; `state` still
+has this dependency when no valid pushed snapshot exists. A 500 ms settle delay
+has not resolved the reported AppleTV5,3 case. The cache-first normalized read is
+an offline-tested improvement, not an established HD-specific fix. No firmware
+or model-based workaround is inferred.
 
-Reference: pyatv [v0.18.0, commit d88abc960e188d3cd2498d19117e75d7711d8600](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600),
-`protocols/mrp/player_state.py`, MRP result/player protobufs and runtime feature handling.
+Reference: pyatv [v0.18.0, commit d88abc960e188d3cd2498d19117e75d7711d8600](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600).
+`protocols/mrp/__init__.py:MrpMetadata.playing` reads cached player state;
+`player_state.py` merges field-present SetState updates and selects clients/players.
+`protocol.py:MrpProtocol.start` awaits ClientUpdatesConfig and GetKeyboardSession
+replies, while this library only sends them. pyatv correlates application replies
+by UUID; this library additionally requires the expected type. These are source
+differences, not proof of which causes #10. The handshake and strict correlation
+are unchanged pending device evidence.
+
+#### Sanitized #10 capture (operator-run only)
+
+Register `mrpDiagnostic` **before** `connect()` on an existing `AppleTV` instance.
+Import `MRPDiagnostic` as a type from `node-appletv-remote` when annotating listeners.
+Use a bounded capture connection; its in-memory token map grows with unique observed identifiers.
+The event emits only relevant init/state message types, direction, opaque
+connection-local request/client/player tokens, and `matchedRequest` on receives
+(type plus identifier match before dispatch). Missing identifiers remain omitted;
+no default route is invented. Tokens allow equality comparisons within a connection,
+not identification across devices/sessions. It excludes CryptoPairing, keys, auth
+frames, device names/addresses, keyboard text, metadata, artwork and item identifiers.
+Send entries indicate an attempt, not successful receipt by the TV. Diagnostic
+observer exceptions are reported with a fixed message, never their error content,
+and do not interrupt protocol delivery. No trace is persisted by the library. This is not a
+raw packet dump; do not share the separate `message`/`playbackQueue` payloads or logs
+from verbose auth tooling.
+
+```typescript
+// Use your own authorized device/credentials setup; never print credentials.
+const started = Date.now();
+atv.on('mrpDiagnostic', diagnostic => {
+  console.log(JSON.stringify({ ms: Date.now() - started, ...diagnostic }));
+});
+await atv.connect(credentials);
+try {
+  await new Promise(resolve => setTimeout(resolve, 2000)); // capture window, not a fix
+  try {
+    const info = await atv.getNowPlaying();
+    console.log(JSON.stringify({ operation: 'getNowPlaying', playbackState: info.playbackState,
+      hasPlayback: info.hasPlayback })); // no titles/app names
+  } catch {
+    console.log(JSON.stringify({ operation: 'getNowPlaying', result: 'rejected' }));
+    // Record locally whether this was the exact type-4 timeout; do not dump the error/payload.
+  }
+  try {
+    await atv.getState(); // explicitly compare raw queue behavior; never print the reply
+    console.log(JSON.stringify({ operation: 'getState', result: 'resolved' }));
+  } catch {
+    console.log(JSON.stringify({ operation: 'getState', result: 'rejected' }));
+  }
+} finally {
+  await atv.close();
+}
+```
+
+1. After separate hardware/credential authorization, build this checkout (`npm run build`).
+   Run the capture on HD and 4K using the same transport and app. Record model and
+   actual tvOS version manually, replacing device names/addresses with `HD`/`4K`.
+2. Use the physical remote to start, pause, then stop/exit the same test content.
+   Make a fresh connection/capture for each state on each device (six captures).
+   Also keep one connection open through those three transitions to compare pushes
+   and client/player selection. Do not use library playback commands for the capture.
+3. Compare init types 15/38/16/24, pushed state/routing types 4/46/47/53/54/55/56/72,
+   and queue type 32 followed by type 4. Check whether type 4 is absent, identifierless,
+   carries a different token, matches the request, or routes to an unselected player.
+   Record exact timeout vs other failure locally and share only sanitized outcomes.
+4. If available, repeat with pinned pyatv 0.18.0 and an equally sanitized trace;
+   never export its raw debug/auth logs. Use the comparison to test a specific
+   handshake/correlation hypothesis, not to assume a firmware difference.
+
+**Remaining blocker:** no authorized HD/4K trace establishes whether initial state
+pushes arrive, which client/player is selected, or how the failing queue response
+is identified/typed. Offline fixtures cannot establish that hardware behavior.
 
 ### Legacy Apple TV 2/3 (DMAP, experimental)
 
@@ -355,7 +440,8 @@ atv.on('powerState', (state) => {});       // after subscribePowerState()
 atv.on('supportedCommands', (cmds) => {}); // SupportedCommand[]
 atv.on('playbackQueue', (queue) => {});
 atv.on('keyboard', (kb) => {});            // text field focused/unfocused
-atv.on('message', (msg) => {});            // every raw MRP message
+atv.on('message', (msg) => {});            // every raw MRP message; not sanitized
+atv.on('mrpDiagnostic', (d: MRPDiagnostic) => {}); // opt in before connect; safe routing tokens
 atv.on('close', () => {});
 atv.on('error', (err) => {});
 ```

@@ -24,6 +24,7 @@ export type { ScanOptions, DiscoveredDevice, DiscoveredDeviceInfo } from './disc
 
 export { LegacyMRPConnection } from './mrp/legacy-connection.js';
 export { MRPConnection } from './mrp/connection.js';
+export type { MRPDiagnostic } from './mrp/connection.js';
 
 export { DmapClient } from './dmap/client.js';
 export type { DmapCapability } from './dmap/client.js';

@@ -63,6 +63,14 @@ export enum MessageType {
   SetDefaultSupportedCommands = 72,
 }
 
+/** Player-state extension fields shared by normalization and sanitized routing diagnostics. */
+export const PLAYER_STATE_FIELDS: Partial<Record<MessageType, string>> = {
+  [MessageType.SetState]: '.setStateMessage', [MessageType.UpdateContentItem]: '.updateContentItemMessage',
+  [MessageType.SetNowPlayingClient]: '.setNowPlayingClientMessage', [MessageType.SetNowPlayingPlayer]: '.setNowPlayingPlayerMessage',
+  [MessageType.UpdateClient]: '.updateClientMessage', [MessageType.RemoveClient]: '.removeClientMessage',
+  [MessageType.RemovePlayer]: '.removePlayerMessage', [MessageType.SetDefaultSupportedCommands]: '.setDefaultSupportedCommandsMessage',
+};
+
 // The MRP schema is compiled from src/proto into ./schema.ts by `npm run gen:proto`, so no
 // .proto files are read at run time and bundlers (e.g. `bun build`) see a plain module.
 // To support another message, add its file to PROTO_FILES in scripts/gen-proto.mjs.
