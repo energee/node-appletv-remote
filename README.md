@@ -256,6 +256,130 @@ HTTP errors, connection loss, malformed status, and `/playback-info` media error
 
 The implementation follows [pyatv 0.18.0](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600): same-socket HAP verification, NTP/event SETUP, feedback, RECORD, binary-plist `/play`, rate/property requests, and `/playback-info`. Stop closes the dedicated connection, matching `AirPlayStream.stop`; it does not send an invented teardown command. Tests use a synthetic loopback receiver and generated keys. **Media/codec compatibility and URL playback on physical hardware remain unverified.** This session currently requires an IPv4 connection. Legacy AirPlay 1, mirroring, DRM, local-file hosting, and transcoding are not supported.
 
+### Legacy RAOP audio (experimental, partial #22)
+
+`RaopStream` sends actual paced UDP audio, not a playback stub. It is a separate
+one-shot API, not `AppleTV`/MRP playback. Legacy receivers accepting unencrypted
+PCM/L16 over IPv4 UDP are supported, with optional legacy PIN pair-verification.
+No hardware verification has been performed for this API; the existing Apple TV
+4K status does not apply. Modern HAP-authenticated Apple TVs, HomePods, AirPlay 2
+buffered/encrypted audio, RSA/FairPlay/MFi authentication, password digest auth,
+legacy PIN pair-setup, ALAC, transcoding, multiroom, live sources, artwork,
+progress, automatic RAOP discovery, and CLI streaming are excluded.
+
+Supply an explicit IPv4 endpoint and its actual `_raop._tcp` TXT record. Required
+capabilities are `cn` containing `0` (PCM), `et` containing `0` (unencrypted), `tp`
+containing `UDP`, `sr=44100`, `ss=16`, and `ch=2`; `pw` must be absent or `false`.
+`sf`/`flags` are parsed as hexadecimal: PIN/legacy-pairing bits `0x8`/`0x200`
+require caller-supplied `legacySeed`; password bit `0x80` is unsupported. Modern
+`ft`/`features` bits 38, 40, 43 or 48, malformed flags, and unsupported access
+control fail closed. Text metadata additionally requires `md` containing `0`.
+Other negotiation and non-200 responses fail closed (except optional feedback),
+without reading stored credentials.
+
+```typescript
+import { createReadStream } from 'node:fs';
+import { RaopStream } from 'node-appletv-remote';
+
+// address, raopPort and raopTxt come from your receiver's _raop._tcp service.
+const sender = new RaopStream(address, raopPort, raopTxt);
+const cancellation = new AbortController();
+await sender.stream(createReadStream('track.pcm', { highWaterMark: 65536 }), {
+  signal: cancellation.signal,
+  volume: 50,
+  metadata: { title: 'Track', artist: 'Artist', album: 'Album' },
+});
+```
+
+`RaopPcmSource` is a Buffer, Node Readable, or `AsyncIterable<Buffer>` containing
+**finite, non-empty raw signed PCM16 little-endian, stereo, 44.1 kHz, interleaved
+left/right**, with no WAV header. Total length must be divisible by four. Keep
+Buffer input unchanged until completion. Async-iterable chunks must be nonempty
+Buffers of at most 65,536 bytes; Node Readables are paused and read in bounded
+pieces even if Node has coalesced larger internal buffers. Arbitrary sample/packet
+boundaries are reassembled. Source staging retains one copied chunk plus one
+1,408-byte PCM packet and does not pull another chunk until needed by the paced
+consumer. Wire packets and the separately bounded 1,000-packet resend cache add
+about 1.42 MB; RTSP headers and bodies each have a 64 KiB cap. Producer/Readable
+internal buffering is additional and remains the producer's responsibility. Slow sources
+that fall more than 100 ms behind after playback starts fail the same stall guard
+as delayed event loops; this is not a live-source jitter buffer. Samples become
+big-endian L16 on the wire, in 352-frame packets; the last packet is zero-padded. The sender
+negotiates ANNOUNCE/SETUP/RECORD/FLUSH, requires UDP unicast receiver ports, and
+uses the pinned upstream 66,150-frame latency (1.5 seconds). Other returned
+`Audio-Latency` values are rejected rather than silently assumed compatible.
+
+The TCP route selects the local interface; all three UDP sockets bind only to
+that address. Timing requests are accepted only after SETUP validates the receiver
+address and timing port; requests before negotiation or from other ports are ignored.
+Playback uses monotonic deadlines, one-second RTP/NTP synchronization, NTP timing
+replies anchored to the same monotonic clock as sync (wall-clock changes do not
+step the session clock), and a bounded 1,000-packet retransmission cache. Requests are checked for
+length/type and retransmissions are restricted to the negotiated control peer,
+with at most 100 packets per request and per second. Optional timing/resend send
+errors do not terminate audio. Abandoned RTSP replies are discarded so cancellation
+can finish teardown.
+Long event-loop stalls fail rather than flooding a receiver. A paced silence tail
+keeps sync alive until buffered audio drains. `stream()` resolves after the tail
+and bounded best-effort TEARDOWN; failures/cancellation reject and close all sockets,
+timers and history. An instance cannot be reused. A supplied signal must be an
+AbortSignal. Ownership begins after input, options, cancellation and one-shot validation: the caller must not consume a
+streamed source concurrently. Rejection before ownership leaves the source with
+the caller, who must close it. After ownership, every exit destroys the Readable or
+requests the iterator's `return()`, including EOF; custom iterators should make
+cleanup idempotent. Cancellation interrupts pending `next()` without
+waiting for arbitrary producer code; unresolved `next()`/`return()` operations are
+observed but cannot block socket teardown. A custom producer must make those
+operations settle itself. Pass the caller's signal to producer I/O too if user cancellation
+should interrupt it; the sender does not inject a signal into an arbitrary producer, but internal sender failures cannot abort that caller-owned signal;
+use a caller-owned producer controller and abort it in the `stream()` rejection
+handler/finally block to cancel producer I/O. Internal cancellation is private.
+Pre-aborted calls reject with `Error('RAOP aborted')`; cancellation after ownership
+preserves the supplied signal's reason (which can be any value), rather than
+promising a uniform `AbortError` across all APIs.
+
+Legacy keepalive probes `POST /feedback` once before audio. Only a 200 response
+starts 25-second periodic feedback, with no overlapping feedback requests. Unsupported
+feedback responses disable the initial probe or are best-effort during playback;
+transport loss, malformed replies and request timeouts terminate the stream.
+Feedback and sync stop on EOF/drain, cancellation or failure. Receivers rejecting
+feedback have no invented fallback keepalive; their long-stream idle-timeout
+behavior remains unverified.
+
+While playback is active, `setVolume(percent)` and `setMetadata({ title, album,
+artist })` update the receiver. Volume is 0..100, maps linearly to -30..0 dB, and
+zero sends -144 dB mute; decimal wire values are rounded to two places. Metadata uses UTF-8 DMAP `mlit`/`minm`/`asal`/`asar` tags
+(maximum 4,096 bytes per field). Both methods reject outside an active session.
+
+Protocol evidence is pinned to [pyatv 0.18.0,
+commit d88abc960e188d3cd2498d19117e75d7711d8600](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600):
+`pyatv/support/rtsp.py` (L16 SDP and DMAP), `protocols/raop/packets.py`,
+`stream_client.py` (RTP, sync and resend), `protocols/__init__.py` (latency/timing),
+and `audio_source.py` (executable PCM byte swap). Its audio-source docstring says
+little-endian despite swapping on little-endian hosts; this implementation follows
+L16 network byte order and the executable conversion, with independent byte fixtures.
+`protocols/raop/protocols/airplayv1.py` and `support/rtsp.py` establish the
+25-second feedback probe/loop. `protocols/airplay/auth/legacy.py` and
+`protocols/airplay/srp.py` establish legacy pair-verify: two raw `/pair-verify`
+HTTP/1.1 POSTs before ANNOUNCE on the same socket, using AirPlay/320.20 and no CSeq.
+Authentication accepts serialized HTTP replies without CSeq; audio setup and feedback
+remain RTSP/1.0 with CSeq correlation. A canceled authentication request closes the
+connection, so a late anonymous HTTP reply cannot satisfy a later request. Seed-derived X25519 and Ed25519 keys,
+SHA-512-derived AES-CTR key/IV, and receiver ciphertext advancement before the
+client signature. Supply `stream(source, { legacySeed })` only with a 32-byte seed
+from prior **legacy AirPlay PIN pairing**; HAP `Credentials`, HAP `clientLTSK` and
+DMAP GUIDs are not interchangeable. No key/credential files are read automatically.
+As in pinned upstream, this legacy exchange proves the client's paired key to the
+receiver, does not verify a receiver identity, and enables no transport encryption;
+use only on a trusted LAN. Tests use synthetic keys, a verifying loopback peer,
+and the independent public legacy verification byte vectors in pinned
+`tests/fake_device/airplay.py`.
+
+Modern RAOP is a distinct unfinished profile, not an extra HAP flag here. Pinned
+`airplayv2.py` requires HAP-encrypted control, plist base/audio SETUP, an event
+channel and per-packet ChaCha20-Poly1305 with audio AAD and nonce; none is claimed
+by this legacy L16 implementation. Physical interoperability remains unverified.
+
 ### Apps, accounts and power (Companion)
 
 ```typescript
@@ -378,6 +502,7 @@ src/
 ├── auth/           # HAP pair-setup / pair-verify
 ├── companion/      # Companion Link: OPACK, framing, pairing
 ├── dmap/           # legacy codec, HTTP session, reverse pairing
+├── raop/           # partial legacy PCM RTP streaming
 ├── airplay-playback.ts # dedicated URL playback session
 ├── mrp/            # MRP message builders + generated schema.ts
 ├── proto/          # .proto sources (build input only)

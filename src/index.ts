@@ -1,6 +1,6 @@
 /**
  * Public entry point for node-atv: re-exports device discovery, the AppleTV
- * client selection, pairing, Companion, AirPlay/MRP and DMAP APIs.
+ * client selection, pairing, Companion, AirPlay/MRP, DMAP and legacy RAOP APIs.
  */
 
 export { scan } from './discovery.js';
@@ -53,3 +53,6 @@ export function createClient(info: DiscoveredDeviceInfo, protocol?: 'airplay' | 
 
 export { AirPlayPlaybackSession } from './airplay-playback.js';
 export type { AirPlayPlaybackStatus } from './airplay-playback.js';
+
+export { RaopStream } from './raop/stream.js';
+export type { RaopMetadata, RaopStreamOptions, RaopPcmSource } from './raop/stream.js';
