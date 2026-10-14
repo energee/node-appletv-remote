@@ -1,3 +1,9 @@
+/**
+ * Now-playing snapshot built from an MRP SetState message, emitted by AppleTV
+ * as its `nowPlaying` event.
+ */
+
+/** Playback state as carried in SetStateMessage.playbackState. */
 export enum PlaybackState {
   Unknown = 0,
   Playing = 1,
@@ -7,12 +13,14 @@ export enum PlaybackState {
   Seeking = 5,
 }
 
-
+/** Track metadata and playback position for the currently playing item. */
 export class NowPlayingInfo {
   readonly title: string;
   readonly artist: string;
   readonly album: string;
+  /** Track length in seconds; 0 when unknown. */
   readonly duration: number;
+  /** Position in seconds as of `timestamp`, not live. */
   readonly elapsedTime: number;
   readonly playbackRate: number;
   readonly playbackState: PlaybackState;
@@ -20,6 +28,11 @@ export class NowPlayingInfo {
   readonly appDisplayName: string;
   readonly appBundleIdentifier: string;
 
+  /**
+   * Missing fields default to empty strings, 0, or PlaybackState.Unknown.
+   * @param setStatePayload The SetStateMessage; supplies playback state, app name and bundle ID.
+   * @param nowPlayingPayload Its `nowPlayingInfo` field; supplies track metadata and timing.
+   */
   constructor(
     setStatePayload: Record<string, unknown>,
     nowPlayingPayload: Record<string, unknown>,
@@ -38,12 +51,14 @@ export class NowPlayingInfo {
     this.appBundleIdentifier = playerPath?.client?.bundleIdentifier ?? '';
   }
 
+  /** Elapsed time as a percentage of duration with two decimals, e.g. `42.50%`; `0.00%` when duration is unknown. */
   percentCompleted(): string {
     if (this.duration <= 0) return '0.00%';
     const pct = (this.elapsedTime / this.duration) * 100;
     return `${pct.toFixed(2)}%`;
   }
 
+  /** Human-readable summary: title, artist, album, state, progress and app, omitting empty parts. */
   toString(): string {
     const state = PlaybackState[this.playbackState] ?? 'Unknown';
     const parts: string[] = [];

@@ -1,3 +1,8 @@
+/**
+ * Public entry point for node-atv: re-exports device discovery, the AppleTV
+ * client, pairing, the Companion and AirPlay/MRP transports, and their types.
+ */
+
 export { scan } from './discovery.js';
 export { AppleTV, Key, TextInputActionType, ShuffleState, RepeatState, PowerState } from './appletv.js';
 export type { KeyboardInfo, TextInputEvent, CompanionEvent, App, UserAccount } from './appletv.js';

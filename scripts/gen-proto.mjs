@@ -7,12 +7,16 @@ import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+/** Repository root, resolved from this script's location. */
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PROTO_DIR = join(ROOT, 'src', 'proto');
 const OUT = join(ROOT, 'src', 'mrp', 'schema.ts');
 
-// Many of the proto files have conflicting extension IDs or duplicate type names, so only
-// the files we use are loaded. Check a new file for conflicts before adding it.
+/**
+ * The .proto files to compile, relative to PROTO_DIR. Many of the proto files have
+ * conflicting extension IDs or duplicate type names, so only the files we use are
+ * loaded. Check a new file for conflicts before adding it.
+ */
 const PROTO_FILES = [
   'ProtocolMessage.proto',
   'DeviceInfoMessage.proto',
@@ -41,11 +45,12 @@ const PROTO_FILES = [
 ];
 
 const root = new protobuf.Root();
+// Resolve imports inside the .proto files against PROTO_DIR.
 root.resolvePath = (_origin, target) => (target.startsWith('/') ? target : join(PROTO_DIR, target));
 await root.load(PROTO_FILES, { keepCase: true });
 root.resolveAll();
 
-// Sort namespace members by name so output does not depend on load order; fields keep theirs.
+/** JSON.stringify replacer: sort namespace members by name so output does not depend on load order; fields keep theirs. */
 const sortNested = (key, value) =>
   key === 'nested' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value;
 const body = JSON.stringify(root.toJSON(), sortNested, 2);

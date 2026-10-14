@@ -1,8 +1,12 @@
+/**
+ * AirPlay DataStream framing for the MRP-over-AirPlay data channel: a 32-byte header
+ * followed by a binary plist whose `params.data` holds a varint-length-prefixed protobuf.
+ */
+
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
 
-// --- Varint encoding/decoding (protobuf-style unsigned varint) ---
-
+/** Encode a non-negative integer (up to 2^32 - 1) as a protobuf-style unsigned varint. */
 export function encodeVarint(value: number): Buffer {
   const bytes: number[] = [];
   while (value > 0x7f) {
@@ -13,6 +17,10 @@ export function encodeVarint(value: number): Buffer {
   return Buffer.from(bytes);
 }
 
+/**
+ * Decode a protobuf-style unsigned varint at `offset`. Uses 32-bit bitwise math, so values
+ * of 2^31 or more are not decoded correctly. Stops at end of buffer if no terminator is found.
+ */
 export function decodeVarint(buf: Buffer, offset = 0): { value: number; bytesRead: number } {
   let value = 0;
   let shift = 0;
@@ -29,16 +37,21 @@ export function decodeVarint(buf: Buffer, offset = 0): { value: number; bytesRea
   return { value, bytesRead };
 }
 
-// --- DataStream 32-byte header framing ---
-
+/**
+ * Header layout: size (4B BE, includes header) | message type (12B, "sync"/"rply" + NULs) |
+ * command (4B) | seqno (8B BE) | padding (4B).
+ */
 const HEADER_SIZE = 32;
 const MESSAGE_TYPE = Buffer.from('sync\0\0\0\0\0\0\0\0', 'binary');  // "sync" + 8 null bytes = 12 bytes
 const COMMAND = Buffer.from('comm', 'ascii');  // 4 bytes
 
-// pyatv uses randrange(0x100000000, 0x1FFFFFFFF) for initial seqno
-// and reuses the same seqno for ALL outgoing messages (never increments)
+/**
+ * Sequence number for every outgoing sync frame. Mirrors pyatv: one random value in
+ * [0x100000000, 0x1FFFFFFFF) chosen at module load and reused for all messages (never incremented).
+ */
 const globalSeqno = BigInt(0x100000000) + BigInt(Math.floor(Math.random() * 0xFFFFFFFF));
 
+/** Wrap an encoded MRP protobuf message in a DataStream "sync"/"comm" frame. */
 export function buildDataStreamFrame(protobufData: Buffer): Buffer {
   const varintPrefix = encodeVarint(protobufData.length);
   const prefixedData = Buffer.concat([varintPrefix, protobufData]);
@@ -74,13 +87,21 @@ export function buildDataStreamFrame(protobufData: Buffer): Buffer {
   return Buffer.concat([header, plistPayload]);
 }
 
+/** A DataStream frame decoded by `parseDataStreamFrame`. */
 export interface ParsedDataStreamFrame {
+  /** Any type other than "rply" is reported as "sync". */
   messageType: 'sync' | 'rply';
-  protobufData: Buffer | null;  // null for rply frames with no data
+  /** The MRP protobuf payload, or null when the frame has no `params.data` or its plist is unparseable. */
+  protobufData: Buffer | null;
   seqno: bigint;
+  /** Bytes the frame occupies in the input, header included; advance the buffer by this much. */
   totalSize: number;
 }
 
+/**
+ * Parse one frame starting at `offset`. Returns null if the buffer does not yet hold the
+ * whole frame. Plist parse errors are swallowed and reported as a frame with null payload.
+ */
 export function parseDataStreamFrame(buf: Buffer, offset = 0): ParsedDataStreamFrame | null {
   if (buf.length - offset < HEADER_SIZE) return null;
 
@@ -116,7 +137,7 @@ export function parseDataStreamFrame(buf: Buffer, offset = 0): ParsedDataStreamF
   }
 }
 
-/** Build a "rply" frame to acknowledge a received sync frame */
+/** Build a header-only "rply" frame acknowledging the received sync frame with `seqno`. */
 export function buildDataStreamReply(seqno: bigint): Buffer {
   const REPLY_TYPE = Buffer.from('rply\0\0\0\0\0\0\0\0', 'binary');
   const header = Buffer.alloc(HEADER_SIZE);

@@ -1,7 +1,7 @@
 /**
  * Companion protocol connection for Apple TV.
- * Connects via TCP to the companion-link port, performs pair-verify,
- * then exchanges OPACK-encoded messages over encrypted frames.
+ * Connects via TCP to the companion-link port, performs pair-verify with stored
+ * pair-setup credentials, then exchanges OPACK-encoded messages over encrypted frames.
  */
 
 import { EventEmitter } from 'node:events';
@@ -24,11 +24,12 @@ import {
 } from './opack.js';
 import type { HAPCredentials } from '../auth/types.js';
 
-// DER prefixes for raw key import/export
+// DER prefixes that turn raw 32-byte keys into SPKI/PKCS#8 for node:crypto import.
 const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
+/** Import a raw 32-byte X25519 public key. */
 function x25519PublicKeyFromRaw(raw: Buffer): KeyObject {
   return createPublicKey({
     key: Buffer.concat([X25519_SPKI_PREFIX, raw]),
@@ -37,6 +38,7 @@ function x25519PublicKeyFromRaw(raw: Buffer): KeyObject {
   });
 }
 
+/** Import a raw 32-byte Ed25519 public key. */
 function ed25519PublicKeyFromRaw(raw: Buffer): KeyObject {
   return createPublicKey({
     key: Buffer.concat([ED25519_SPKI_PREFIX, raw]),
@@ -45,6 +47,7 @@ function ed25519PublicKeyFromRaw(raw: Buffer): KeyObject {
   });
 }
 
+/** Import an Ed25519 private key from its 32-byte seed. */
 function ed25519PrivateKeyFromSeed(seed: Buffer): KeyObject {
   return createPrivateKey({
     key: Buffer.concat([ED25519_PKCS8_PREFIX, seed]),
@@ -68,6 +71,10 @@ function envelope(content: OpackDict, type: number): OpackDict {
   return new Map<OpackValue, OpackValue>([['_t', type], ['_c', content]]);
 }
 
+/**
+ * An authenticated, encrypted Companion link to one Apple TV.
+ * Emits `event` ({ identifier, data }) for unsolicited messages, plus `error` and `close`.
+ */
 export class CompanionConnection extends EventEmitter {
   private socket: Socket | undefined;
   private session: CompanionSession | undefined;
@@ -76,6 +83,7 @@ export class CompanionConnection extends EventEmitter {
   private transferId = 1;
   // Request IDs that timed out; reserved until the late reply arrives or the window passes.
   private timedOutIds = new Map<number, NodeJS.Timeout>();
+  /** Requests awaiting a `_t: 3` reply, keyed by their `_x` ID. */
   private pendingRequests = new Map<number, {
     resolve: (value: OpackDict) => void;
     reject: (error: Error) => void;
@@ -89,11 +97,19 @@ export class CompanionConnection extends EventEmitter {
     super();
   }
 
+  /**
+   * Open the TCP socket and run pair-verify; resolves once traffic is encrypted.
+   * @throws on socket errors, a bad server signature, a pair-verify error, or a frame timeout
+   */
   async connect(): Promise<void> {
     await this.openSocket();
     await this.pairVerify();
   }
 
+  /**
+   * Connect the socket and wire its events. Socket errors both reject the pending
+   * connect and are re-emitted as `error`.
+   */
   private openSocket(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.socket = new Socket();
@@ -109,9 +125,7 @@ export class CompanionConnection extends EventEmitter {
     });
   }
 
-  /**
-   * Send TLV pairing data wrapped in OPACK { _pd: tlvBytes }.
-   */
+  /** Send TLV pairing data wrapped in OPACK `{ _pd: tlvBytes, ...extraFields }`, unencrypted. */
   private sendPairingData(
     frameType: FrameType,
     tlvData: Buffer,
@@ -129,7 +143,8 @@ export class CompanionConnection extends EventEmitter {
   }
 
   /**
-   * Receive TLV pairing data from an OPACK-wrapped response frame.
+   * Wait for a frame of `frameType` and return its `_pd` TLV bytes.
+   * @throws if the payload is not an OPACK dict or lacks `_pd`, or on frame timeout
    */
   private async receivePairingData(frameType: FrameType): Promise<Buffer> {
     const frame = await this.waitForFrame(frameType);
@@ -144,6 +159,10 @@ export class CompanionConnection extends EventEmitter {
     return pd;
   }
 
+  /**
+   * Run the four-message pair-verify exchange (M1-M4): ECDH on ephemeral X25519 keys,
+   * mutual Ed25519 signatures with the long-term keys, then derive the session keys.
+   */
   private async pairVerify(): Promise<void> {
     // Generate ephemeral X25519 keypair
     const { publicKey, privateKey } = generateKeyPairSync('x25519');
@@ -263,7 +282,9 @@ export class CompanionConnection extends EventEmitter {
   /**
    * Send an OPACK request and wait for a correlated response.
    * Bare content is wrapped as `{ _i, _t: 2, _c: content, _x }`; content that already has
-   * `_t`, `_c` or `_x` is treated as a prebuilt envelope and only gets `_i` and `_x`.
+   * `_t`, `_c` or `_x` is treated as a prebuilt envelope; `_i` is set and `_x` is overwritten.
+   * @returns the whole reply dict (envelope included), not just its `_c`
+   * @throws if not connected or no request ID is free; rejects on timeout or close()
    */
   async sendRequest(
     identifier: string,
@@ -321,6 +342,7 @@ export class CompanionConnection extends EventEmitter {
     return undefined;
   }
 
+  /** Whether `id` is awaiting a reply or reserved after a timeout. */
   private isIdInUse(id: OpackValue): boolean {
     return typeof id === 'number' && (this.pendingRequests.has(id) || this.timedOutIds.has(id));
   }
@@ -330,6 +352,7 @@ export class CompanionConnection extends EventEmitter {
    * event, `{ _i, _t: 1, _c: content, _x }`, unless it already has `_t`, `_c` or `_x`.
    * It shares the request ID counter; when every ID is in use it reuses one rather than
    * throwing, since no reply is awaited.
+   * @throws if not connected, or if a prebuilt `_x` belongs to an outstanding request
    */
   sendMessage(identifier: string, content: OpackDict): void {
     if (!this.session || !this.socket) {
@@ -348,6 +371,7 @@ export class CompanionConnection extends EventEmitter {
     this.writeRaw(encrypted);
   }
 
+  /** Reject every pending request, release reserved IDs, and destroy the socket. */
   close(): void {
     for (const [, pending] of this.pendingRequests) {
       pending.reject(new Error('Connection closed'));
@@ -360,10 +384,12 @@ export class CompanionConnection extends EventEmitter {
     this.session = undefined;
   }
 
+  /** Write bytes as-is; a no-op once the socket is gone. */
   private writeRaw(data: Buffer): void {
     this.socket?.write(data);
   }
 
+  /** Buffer socket data and route it to the plaintext or encrypted frame handler. */
   private onData(data: Buffer): void {
     this.buffer = Buffer.concat([this.buffer, data]);
 
@@ -377,11 +403,16 @@ export class CompanionConnection extends EventEmitter {
 
   // --- Pre-encryption frame handling (pair-verify) ---
 
+  /** Pair-verify waiters, each matched to the first arriving frame of its type. */
   private pendingFrameResolvers: Array<{
     type: FrameType;
     resolve: (frame: Frame) => void;
   }> = [];
 
+  /**
+   * Resolve with the next frame of `type`. Frames that arrive with no matching waiter
+   * are dropped, so the waiter must be registered before the reply can arrive.
+   */
   private waitForFrame(type: FrameType, timeoutMs = 5000): Promise<Frame> {
     return new Promise((resolve, reject) => {
       const entry = {
@@ -405,6 +436,7 @@ export class CompanionConnection extends EventEmitter {
     });
   }
 
+  /** Parse buffered plaintext frames and hand each to a waiter of the same type, if any. */
   private processRawFrames(): void {
     const { frames, remainder } = parseFrames(this.buffer);
     this.buffer = remainder;
@@ -420,8 +452,12 @@ export class CompanionConnection extends EventEmitter {
 
   // --- Post-encryption frame handling ---
 
+  /**
+   * Decrypt and dispatch every complete frame in the buffer. A decrypt or decode failure
+   * emits `error` and skips that frame. The frame type byte is not checked.
+   */
   private processEncryptedFrames(): void {
-    // Encrypted frames: 4-byte header + ciphertext + 16-byte tag
+    // Encrypted frames: 4-byte header + ciphertext + 16-byte tag.
     // The header length already includes the authentication tag.
     while (this.buffer.length >= 4) {
       const payloadLen = this.buffer.readUIntBE(1, 3);
@@ -447,6 +483,10 @@ export class CompanionConnection extends EventEmitter {
     }
   }
 
+  /**
+   * Route a decrypted message: a `_t: 3` reply resolves its pending request or frees a
+   * timed-out ID; anything else (non-dicts are ignored) is emitted as `event`.
+   */
   private handleMessage(value: OpackValue): void {
     if (!(value instanceof Map)) return;
 

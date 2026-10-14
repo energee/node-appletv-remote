@@ -1,5 +1,11 @@
+/**
+ * Minimal keep-alive HTTP POST client for the HAP pairing endpoints
+ * (`/pair-setup`, `/pair-verify`) on the AirPlay port.
+ */
+
 import http from 'node:http';
 
+/** Headers an AirPlay sender sends on pairing requests; X-Apple-HKP: 3 selects HomeKit-style pairing. */
 const DEFAULT_HEADERS: Record<string, string> = {
   'User-Agent': 'AirPlay/320.20',
   Connection: 'keep-alive',
@@ -22,6 +28,10 @@ export class PersistentHttp {
     this.agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
   }
 
+  /**
+   * POST a raw body and resolve with the full response body.
+   * @throws (rejects) on a socket error or any HTTP status >= 400.
+   */
   async post(path: string, body: Buffer): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const req = http.request(
@@ -55,6 +65,7 @@ export class PersistentHttp {
     });
   }
 
+  /** Close the pooled socket. */
   destroy(): void {
     this.agent.destroy();
   }

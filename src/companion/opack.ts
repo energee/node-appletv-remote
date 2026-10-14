@@ -1,9 +1,13 @@
 /**
  * OPACK encoder/decoder for the Apple Companion protocol.
- * OPACK is a compact binary serialization format used for Companion protocol messages.
+ * OPACK is the compact binary serialization used for every Companion message body.
  * Tag values matched to pyatv's opack.py implementation.
  */
 
+/**
+ * Any value OPACK can carry. Integers decode as `number` when safe, else `bigint`;
+ * UUIDs decode as 16-byte Buffers; dicts are Maps so keys keep their OPACK types.
+ */
 export type OpackValue =
   | null
   | boolean
@@ -15,18 +19,23 @@ export type OpackValue =
   | OpackValue[]
   | OpackDict;
 
+/** An OPACK dictionary; insertion order is preserved on encode. */
 export type OpackDict = Map<OpackValue, OpackValue>;
 
-/** Preserve a floating-point wire type for integral seconds and volume limits. */
+/**
+ * Wrapper that forces float64 encoding. A plain integral `number` encodes as an OPACK
+ * integer, but some fields (e.g. seconds, volume limits) must be floats on the wire.
+ */
 export class OpackFloat {
   constructor(readonly value: number) {}
 }
 
 // --- Type tags (matched to pyatv) ---
-const TAG_NULL = 0x04;
 const TAG_TRUE = 0x01;
 const TAG_FALSE = 0x02;
+/** Ends a 0xDF array or 0xEF dict whose count did not fit in the tag. */
 const TAG_TERMINATOR = 0x03;
+const TAG_NULL = 0x04;
 
 // UUID: 0x05 + 16 raw bytes
 const TAG_UUID = 0x05;
@@ -55,7 +64,7 @@ const TAG_STRING_LEN16 = 0x62;
 const TAG_STRING_LEN24 = 0x63;
 const TAG_STRING_LEN32 = 0x64;
 
-// Data/bytes: 0x70+len inline (len 0-32), 0x91=len8, 0x92=len16, 0x93=len32, 0x94=len64
+// Data/bytes: 0x70+len inline (len 0-32), 0x91=len8, 0x92=len16, 0x93=len32 (0x94=len64 is not supported)
 const TAG_DATA_BASE = 0x70;
 const TAG_DATA_LEN8 = 0x91;
 const TAG_DATA_LEN16 = 0x92;
@@ -69,14 +78,23 @@ const TAG_ARRAY_OVERFLOW = 0x0f;
 const TAG_DICT_BASE = 0xe0;
 const TAG_DICT_OVERFLOW = 0x0f;
 
+// Object references (decode only): 0xA0+index inline (index 0-32), 0xC1..0xC4 = 1..4-byte LE index.
+// The encoder never emits references.
+
 // --- Encoder ---
 
+/** Serialize a value to OPACK bytes. Never emits object references. */
 export function opackEncode(value: OpackValue): Buffer {
   const parts: Buffer[] = [];
   encodeValue(value, parts);
   return Buffer.concat(parts);
 }
 
+/**
+ * Append the encoding of one value to `parts`.
+ * @throws {RangeError} for an unsafe integer `number` (pass a bigint instead)
+ * @throws {Error} for a value of no OPACK type
+ */
 function encodeValue(value: OpackValue, parts: Buffer[]): void {
   if (value === null) {
     parts.push(Buffer.from([TAG_NULL]));
@@ -134,6 +152,7 @@ function encodeValue(value: OpackValue, parts: Buffer[]): void {
   throw new Error(`Unsupported OPACK type: ${typeof value}`);
 }
 
+/** Encode a non-negative integer in the smallest unsigned form (inline, then 1/2/4/8 bytes LE). */
 function encodeInteger(value: number, parts: Buffer[]): void {
   // Small integers 0..39 encoded inline as (value + 0x08)
   if (value >= 0 && value <= TAG_SMALL_INT_MAX_VALUE) {
@@ -168,6 +187,7 @@ function encodeInteger(value: number, parts: Buffer[]): void {
   encodeBigInt(BigInt(value), parts);
 }
 
+/** Encode as an 8-byte unsigned LE integer regardless of magnitude; throws if negative or over 64 bits. */
 function encodeBigInt(value: bigint, parts: Buffer[]): void {
   const buf = Buffer.alloc(9);
   buf[0] = TAG_INT64;
@@ -175,6 +195,7 @@ function encodeBigInt(value: bigint, parts: Buffer[]): void {
   parts.push(buf);
 }
 
+/** Encode as float64; float32 is decoded but never produced. */
 function encodeFloat(value: number, parts: Buffer[]): void {
   const buf = Buffer.alloc(9);
   buf[0] = TAG_FLOAT64;
@@ -182,6 +203,7 @@ function encodeFloat(value: number, parts: Buffer[]): void {
   parts.push(buf);
 }
 
+/** Encode a UTF-8 string with an inline or 1/2/3/4-byte LE length prefix. */
 function encodeString(value: string, parts: Buffer[]): void {
   const data = Buffer.from(value, 'utf-8');
   const len = data.length;
@@ -209,6 +231,7 @@ function encodeString(value: string, parts: Buffer[]): void {
   parts.push(data);
 }
 
+/** Encode raw bytes with an inline or 1/2/4-byte LE length prefix. */
 function encodeData(value: Buffer, parts: Buffer[]): void {
   const len = value.length;
 
@@ -230,6 +253,7 @@ function encodeData(value: Buffer, parts: Buffer[]): void {
   parts.push(value);
 }
 
+/** Encode an array; 15 or more items use the open-count tag plus a terminator. */
 function encodeArray(value: OpackValue[], parts: Buffer[]): void {
   const count = value.length;
   parts.push(Buffer.from([TAG_ARRAY_BASE + Math.min(count, TAG_ARRAY_OVERFLOW)]));
@@ -241,6 +265,7 @@ function encodeArray(value: OpackValue[], parts: Buffer[]): void {
   }
 }
 
+/** Encode a dict as alternating key/value; 15 or more pairs use the open-count tag plus a terminator. */
 function encodeDict(value: OpackDict, parts: Buffer[]): void {
   const count = value.size;
   parts.push(Buffer.from([TAG_DICT_BASE + Math.min(count, TAG_DICT_OVERFLOW)]));
@@ -255,21 +280,34 @@ function encodeDict(value: OpackDict, parts: Buffer[]): void {
 
 // --- Decoder ---
 
+/**
+ * Decode the first OPACK value in `buffer`, resolving object references.
+ * Trailing bytes after that value are ignored.
+ * @throws {Error} on an unknown tag, a bad object reference, or a truncated buffer
+ */
 export function opackDecode(buffer: Buffer): OpackValue {
   const result = decodeValue(buffer, 0, { objects: [], seen: new Set() });
   return result.value;
 }
 
+/** A decoded value and the offset just past its encoding. */
 interface DecodeResult {
   value: OpackValue;
   offset: number;
 }
 
+/** Per-decode state for object references. */
 interface DecodeContext {
+  /** Previously decoded literals, indexed by reference tags. */
   objects: OpackValue[];
+  /** Encoded bytes (as latin1) of literals already in `objects`, to avoid duplicate slots. */
   seen: Set<string>;
 }
 
+/**
+ * Decode one value at `offset`, resolving object-reference tags and recording each
+ * multi-byte literal (not arrays or dicts) in the reference table.
+ */
 function decodeValue(buf: Buffer, offset: number, context: DecodeContext): DecodeResult {
   const { objects, seen } = context;
   const tag = buf[offset];
@@ -288,7 +326,7 @@ function decodeValue(buf: Buffer, offset: number, context: DecodeContext): Decod
     throw new Error('OPACK: unexpected end of buffer');
   }
   const value = result.value;
-  // Deduplicate by encoded bytes, as the encoder does, so equal values with different
+  // Deduplicate by encoded bytes rather than by value, so equal values with different
   // encodings (int 100 vs float 100.0, UUID vs data) keep separate reference slots.
   // ponytail: latin1 key copies each literal once; switch to length-bucketed Buffer.equals if large replies get hot.
   if (result.offset - offset > 1 && !Array.isArray(value) && !(value instanceof Map)) {
@@ -301,6 +339,7 @@ function decodeValue(buf: Buffer, offset: number, context: DecodeContext): Decod
   return result;
 }
 
+/** Decode one non-reference value at `offset`. Containers recurse through decodeValue. */
 function decodeLiteral(buf: Buffer, offset: number, context: DecodeContext): DecodeResult {
   if (offset >= buf.length) {
     throw new Error('OPACK: unexpected end of buffer');
@@ -335,7 +374,7 @@ function decodeLiteral(buf: Buffer, offset: number, context: DecodeContext): Dec
     return { value: tag - TAG_SMALL_INT_BASE, offset: offset + 1 };
   }
 
-  // Sized integers (unsigned LE)
+  // Sized integers (unsigned LE). 8-byte values become bigint only above MAX_SAFE_INTEGER.
   if (tag === TAG_INT8) {
     return { value: buf.readUInt8(offset + 1), offset: offset + 2 };
   }
@@ -431,6 +470,7 @@ function decodeLiteral(buf: Buffer, offset: number, context: DecodeContext): Dec
   throw new Error(`OPACK: unknown tag 0x${tag.toString(16)} at offset ${offset}`);
 }
 
+/** Decode an array whose item count was carried in the tag. */
 function decodeArrayN(buf: Buffer, offset: number, count: number, context: DecodeContext): DecodeResult {
   const arr: OpackValue[] = [];
   for (let i = 0; i < count; i++) {
@@ -441,6 +481,7 @@ function decodeArrayN(buf: Buffer, offset: number, count: number, context: Decod
   return { value: arr, offset };
 }
 
+/** Decode items until a terminator; a missing terminator at end of buffer is tolerated. */
 function decodeArrayTerminated(buf: Buffer, offset: number, context: DecodeContext): DecodeResult {
   const arr: OpackValue[] = [];
   while (offset < buf.length && buf[offset] !== TAG_TERMINATOR) {
@@ -454,6 +495,7 @@ function decodeArrayTerminated(buf: Buffer, offset: number, context: DecodeConte
   return { value: arr, offset };
 }
 
+/** Decode a dict whose pair count was carried in the tag. */
 function decodeDictN(buf: Buffer, offset: number, count: number, context: DecodeContext): DecodeResult {
   const dict: OpackDict = new Map();
   for (let i = 0; i < count; i++) {
@@ -466,6 +508,7 @@ function decodeDictN(buf: Buffer, offset: number, count: number, context: Decode
   return { value: dict, offset };
 }
 
+/** Decode pairs until a terminator; a missing terminator at end of buffer is tolerated. */
 function decodeDictTerminated(buf: Buffer, offset: number, context: DecodeContext): DecodeResult {
   const dict: OpackDict = new Map();
   while (offset < buf.length && buf[offset] !== TAG_TERMINATOR) {

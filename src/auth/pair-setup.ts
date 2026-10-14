@@ -1,3 +1,9 @@
+/**
+ * HAP pair-setup (SRP-6a with the PIN shown on screen) for the AirPlay/MRP channel.
+ * Runs the M1–M6 exchange over HTTP POST /pair-setup and returns long-term
+ * credentials that PairVerify / AirPlayConnection use on later connections.
+ */
+
 import { generateKeyPairSync, sign, createPrivateKey, randomUUID } from 'node:crypto';
 import { TlvTag, tlvEncode, tlvDecode } from '../util/tlv.js';
 import { hkdfSha512, encryptChaCha20, decryptChaCha20 } from '../util/crypto.js';
@@ -5,6 +11,11 @@ import { SRPClient } from './srp.js';
 import { PersistentHttp } from '../util/http.js';
 import type { HAPCredentials } from './types.js';
 
+/**
+ * Client side of one HAP pair-setup session. Call `start()` to make the Apple TV
+ * show a PIN, then `finish(pin)`. Each instance has its own random client ID and
+ * Ed25519 long-term key pair, which end up in the returned credentials.
+ */
 export class PairSetup {
   private http: PersistentHttp;
   private clientId: string;
@@ -13,6 +24,7 @@ export class PairSetup {
   private srp = new SRPClient();
   private sessionKey: Buffer | undefined;
 
+  /** Opens a persistent HTTP connection and generates this controller's identity and Ed25519 key pair. */
   constructor(host: string, port: number) {
     this.http = new PersistentHttp(host, port);
     this.clientId = randomUUID();
@@ -26,6 +38,7 @@ export class PairSetup {
     );
   }
 
+  /** M1: SRP start request (Method 0 = pair-setup, SeqNo 1). */
   buildM1(): Buffer {
     return tlvEncode({
       [TlvTag.Method]: Buffer.from([0x00]),
@@ -33,6 +46,7 @@ export class PairSetup {
     });
   }
 
+  /** M3: the SRP client public key A and proof M1. */
   buildM3(publicKey: Buffer, proof: Buffer): Buffer {
     return tlvEncode({
       [TlvTag.SeqNo]: Buffer.from([0x03]),
@@ -41,10 +55,16 @@ export class PairSetup {
     });
   }
 
+  /** POST /pair-pin-start, which makes the Apple TV display the pairing PIN. */
   async start(): Promise<void> {
     await this.http.post('/pair-pin-start', Buffer.alloc(0));
   }
 
+  /**
+   * Send M1 and read M2.
+   * @returns the SRP salt and server public key B from M2.
+   * @throws if M2 lacks either field (the device's TLV error code is included).
+   */
   async sendM1(): Promise<{ salt: Buffer; serverPublicKey: Buffer }> {
     const m1 = this.buildM1();
     const responseBody = await this.http.post('/pair-setup', m1);
@@ -61,6 +81,11 @@ export class PairSetup {
     return { salt, serverPublicKey };
   }
 
+  /**
+   * Run SRP with the PIN, send M3, and verify the server proof in M4.
+   * On success stores the SRP shared secret K for `sendM5`.
+   * @throws if M4 has no proof (e.g. wrong PIN) or the proof fails verification.
+   */
   async sendM3(
     pin: string,
     salt: Buffer,
@@ -86,6 +111,11 @@ export class PairSetup {
     this.sessionKey = this.srp.getSharedSecret();
   }
 
+  /**
+   * Send our encrypted long-term identity (M5) and decrypt the Apple TV's (M6).
+   * @returns credentials pairing our Ed25519 keys with the device's ID and public key.
+   * @throws if called before `sendM3`, or if M6 is missing or malformed.
+   */
   async sendM5(): Promise<HAPCredentials> {
     if (!this.sessionKey) {
       throw new Error('Session key not available; call sendM3 first');
@@ -110,7 +140,7 @@ export class PairSetup {
     const clientIdBuf = Buffer.from(this.clientId);
     const deviceInfo = Buffer.concat([signingKey, clientIdBuf, this.edPublicKeyRaw]);
 
-    // Sign with Ed25519
+    // Sign with Ed25519 (raw 32-byte seed wrapped in a PKCS#8 DER prefix)
     const edKey = createPrivateKey({
       key: Buffer.concat([
         Buffer.from('302e020100300506032b657004220420', 'hex'),
@@ -128,7 +158,7 @@ export class PairSetup {
       [TlvTag.Signature]: signature,
     });
 
-    // Encrypt with ChaCha20-Poly1305
+    // Encrypt with ChaCha20-Poly1305; the 12-byte nonce is 4 zero bytes + "PS-Msg05"
     const nonce = Buffer.alloc(12, 0);
     nonce.write('PS-Msg05', 4);
 
@@ -156,7 +186,7 @@ export class PairSetup {
       throw new Error(`M6 missing EncryptedData (error=${error ? error[0] : 'none'})`);
     }
 
-    // Decrypt M6
+    // Decrypt M6; the last 16 bytes are the Poly1305 auth tag
     const m6Nonce = Buffer.alloc(12, 0);
     m6Nonce.write('PS-Msg06', 4);
 
@@ -188,6 +218,7 @@ export class PairSetup {
     };
   }
 
+  /** Run M1 through M6 with the given PIN, then close the HTTP connection whether or not it succeeded. */
   async finish(pin: string): Promise<HAPCredentials> {
     try {
       const { salt, serverPublicKey } = await this.sendM1();
@@ -198,6 +229,7 @@ export class PairSetup {
     }
   }
 
+  /** Close the HTTP connection without completing pairing. */
   destroy(): void {
     this.http.destroy();
   }

@@ -1,12 +1,21 @@
+/**
+ * Bonjour/mDNS discovery of Apple TVs: browses `_airplay._tcp` for devices and
+ * `_companion-link._tcp` for their Companion ports, then joins the two by address.
+ */
+
 import { Bonjour, type Service } from 'bonjour-service';
 
+/** Fields this library reads from an `_airplay._tcp` TXT record. */
 export interface AirPlayTxtRecord {
   deviceId: string;
+  /** Feature bitmask string as advertised; `0x0` when absent. */
   features: string;
   model: string;
+  /** Pairing identifier (`pi` TXT key), if advertised. */
   pi?: string;
 }
 
+/** Extract AirPlayTxtRecord fields from raw TXT key/values, defaulting missing ones. */
 export function parseAirPlayTxt(txt: Record<string, string>): AirPlayTxtRecord {
   return {
     deviceId: txt.deviceid ?? '',
@@ -16,15 +25,19 @@ export function parseAirPlayTxt(txt: Record<string, string>): AirPlayTxtRecord {
   };
 }
 
+/** Plain connection details for a device; accepted by DiscoveredDevice and AppleTV constructors. */
 export interface DiscoveredDeviceInfo {
   name: string;
   address: string;
+  /** AirPlay port. */
   port: number;
   deviceId: string;
   model: string;
+  /** Companion-link port, when a matching `_companion-link._tcp` service was found. */
   companionPort?: number;
 }
 
+/** An Apple TV found by scan(). */
 export class DiscoveredDevice {
   readonly name: string;
   readonly address: string;
@@ -42,13 +55,17 @@ export class DiscoveredDevice {
     this.companionPort = info.companionPort;
   }
 
+  /** `name (address:port) [model]`. */
   toString(): string {
     return `${this.name} (${this.address}:${this.port}) [${this.model}]`;
   }
 }
 
+/** Options for scan(). */
 export interface ScanOptions {
+  /** How long to browse, in ms; default 5000. */
   timeout?: number;
+  /** Keep only devices for which this returns true. */
   filter?: (device: DiscoveredDevice) => boolean;
 }
 
@@ -57,6 +74,11 @@ function usableAddresses(service: Service): string[] {
   return (service.addresses ?? []).filter((a) => a.includes('.') && !a.startsWith('169.254'));
 }
 
+/**
+ * Browse the local network for `timeout` ms and return discovered Apple TVs
+ * sorted by name. Devices are deduplicated by AirPlay device ID (or address);
+ * services with no routable IPv4 address are skipped. Never rejects.
+ */
 export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[]> {
   const timeout = options.timeout ?? 5000;
   const devices = new Map<string, DiscoveredDevice>();

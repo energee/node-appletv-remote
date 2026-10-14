@@ -1,23 +1,36 @@
 /**
  * Companion protocol frame parser and encoder.
- * Frame format: 1-byte type + 3-byte BE payload length + payload
+ * Frame format: 1-byte type + 3-byte big-endian payload length + payload.
+ * Used unencrypted during pair-setup/pair-verify; CompanionSession reuses the header layout afterwards.
  */
 
+/** Companion frame type byte (first byte of every frame header). */
 export enum FrameType {
+  /** Pair-setup, first message (M1). */
   PS_Start = 0x03,
+  /** Pair-setup, every message after M1. */
   PS_Next = 0x04,
+  /** Pair-verify, first message (M1). */
   PV_Start = 0x05,
+  /** Pair-verify, every message after M1. */
   PV_Next = 0x06,
+  /** Encrypted OPACK message, used once pair-verify has established session keys. */
   E_OPACK = 0x08,
 }
 
+/** One decoded frame: its type byte and the raw (still OPACK-encoded) payload. */
 export interface Frame {
   type: FrameType;
   payload: Buffer;
 }
 
-const HEADER_SIZE = 4; // 1 byte type + 3 bytes length
+/** Frame header length: 1 byte type + 3 bytes length. */
+const HEADER_SIZE = 4;
 
+/**
+ * Build a frame from a type and payload. Does not check the payload fits the 3-byte
+ * length field; payloads over 16 MiB would have their length silently truncated.
+ */
 export function encodeFrame(type: FrameType, payload: Buffer): Buffer {
   const header = Buffer.alloc(HEADER_SIZE);
   header[0] = type;
@@ -28,6 +41,11 @@ export function encodeFrame(type: FrameType, payload: Buffer): Buffer {
   return Buffer.concat([header, payload]);
 }
 
+/**
+ * Split a byte stream into every complete frame it contains.
+ * Payloads and the remainder are copies, so the caller may discard `buffer`.
+ * @returns the complete frames, plus any trailing bytes of a partial frame to prepend to the next read
+ */
 export function parseFrames(buffer: Buffer): { frames: Frame[]; remainder: Buffer } {
   const frames: Frame[] = [];
   let offset = 0;

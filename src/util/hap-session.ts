@@ -1,8 +1,19 @@
+/**
+ * HAP-style encrypted framing used on the AirPlay RTSP, event, and data channels.
+ * Each frame is a 2-byte LE length, ChaCha20-Poly1305 ciphertext (length as AAD), and tag.
+ */
+
 import { encryptChaCha20, decryptChaCha20, generateNonce } from './crypto.js';
 
+/** Maximum plaintext bytes per encrypted frame. */
 const FRAME_LENGTH = 1024;
 const AUTH_TAG_LENGTH = 16;
 
+/**
+ * One direction-pair of HAP encryption state: separate keys and nonce counters for
+ * outgoing and incoming frames. Counters advance per frame, so frames must be
+ * decrypted exactly once and in order.
+ */
 export class HAPSession {
   private outCounter = 0n;
   private inCounter = 0n;
@@ -12,6 +23,7 @@ export class HAPSession {
     private inKey: Buffer,
   ) {}
 
+  /** Split `data` into frames of at most 1024 bytes and encrypt each, advancing the out counter. */
   encrypt(data: Buffer): Buffer {
     const frames: Buffer[] = [];
     let offset = 0;
@@ -53,6 +65,11 @@ export class HAPSession {
     return { plaintext: this.decrypt(data.subarray(0, end)), rest: data.subarray(end) };
   }
 
+  /**
+   * Decrypt a buffer that must contain only complete frames, advancing the in counter per frame.
+   * @throws if a frame fails authentication. A trailing partial frame is not detected and makes
+   * this throw too — use `decryptAvailable` for streaming input.
+   */
   decrypt(data: Buffer): Buffer {
     const parts: Buffer[] = [];
     let offset = 0;

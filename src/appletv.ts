@@ -1,3 +1,9 @@
+/**
+ * High-level Apple TV client. Wraps an AirPlay/MRP connection (remote keys,
+ * media commands, text input, now-playing state) and an optional Companion
+ * connection (apps, accounts, extra buttons, power state) behind one EventEmitter.
+ */
+
 import { EventEmitter } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { PairSetup } from './auth/pair-setup.js';
@@ -13,19 +19,24 @@ import type { OpackDict } from './companion/opack.js';
 import type { HAPCredentials } from './auth/types.js';
 import type { DiscoveredDeviceInfo } from './discovery.js';
 
+/** Keyboard focus state from an MRP KeyboardMessage, emitted as `keyboard`. */
 export interface KeyboardInfo {
+  /** True when a text field is focused (KeyboardMessage state 1). */
   focused: boolean;
   title?: string;
   prompt?: string;
   inputTraits?: Record<string, unknown>;
 }
 
+/** Text change from an MRP TextInputMessage, emitted as `textInput`. */
 export interface TextInputEvent {
   text?: string;
+  /** A TextInputActionType value. */
   actionType?: number;
   timestamp?: number;
 }
 
+/** MRP TextInputMessage action types used by setText/insertText/clearText/deleteText. */
 export enum TextInputActionType {
   Unknown = 0,
   Insert = 1,
@@ -34,6 +45,11 @@ export enum TextInputActionType {
   ClearText = 4,
 }
 
+/**
+ * Buttons accepted by sendKeyCommand(). Values are HID_KEY_MAP names; keys without
+ * a HID mapping (play, pause, next, previous, skip, wake, suspend, home_hold) are
+ * routed to their dedicated methods instead.
+ */
 export enum Key {
   Up = 'up',
   Down = 'down',
@@ -114,11 +130,22 @@ export function contentItems(response: Record<string, unknown>): Record<string, 
   return Array.isArray(items) ? items : [];
 }
 
+/** An unsolicited Companion event, re-emitted as `companionEvent`. */
 export interface CompanionEvent {
+  /** Event name (the `_i` field), e.g. `SystemStatus`. */
   identifier: string | undefined;
+  /** The full decoded event dict; payload content is under `_c`. */
   data: OpackDict;
 }
 
+/**
+ * Client for one Apple TV. Call connect() for MRP features and connectCompanion()
+ * for Companion features; methods throw if their connection is not open.
+ *
+ * Events: `connect`, `close`, `error`, `message`, `nowPlaying`, `supportedCommands`,
+ * `playbackQueue`, `keyboard`, `textInput`, `volume`, `powerState`, `companionConnect`,
+ * `companionClose`, `companionError`, `companionEvent`.
+ */
 export class AppleTV extends EventEmitter {
   readonly name: string;
   readonly address: string;
@@ -145,14 +172,14 @@ export class AppleTV extends EventEmitter {
     this.companionPort = info.companionPort;
   }
 
-  /** Start pairing — displays PIN on Apple TV */
+  /** Begin AirPlay pair-setup; the Apple TV shows a PIN to pass to the returned PairSetup. */
   async startPairing(): Promise<PairSetup> {
     const ps = new PairSetup(this.address, this.port);
     await ps.start();
     return ps;
   }
 
-  /** Connect using stored credentials */
+  /** Open the AirPlay/MRP connection with stored credentials; emits `connect` once ready. */
   async connect(credentials: Credentials): Promise<void> {
     this.connection = new AirPlayConnection(this.address, this.port, credentials);
     this.connection.on('close', () => this.emit('close'));
@@ -165,6 +192,7 @@ export class AppleTV extends EventEmitter {
     this.emit('connect');
   }
 
+  /** Close both the Companion and AirPlay connections, if open. */
   async close(): Promise<void> {
     this.companionConnection?.close();
     this.companionConnection = undefined;
@@ -174,7 +202,10 @@ export class AppleTV extends EventEmitter {
 
   // --- Companion protocol ---
 
-  /** Start companion pairing — displays PIN on Apple TV */
+  /**
+   * Begin Companion pair-setup; the Apple TV shows a PIN to pass to the returned CompanionPairSetup.
+   * @throws If no Companion port was given or discovered.
+   */
   async startCompanionPairing(options?: { companionPort?: number }): Promise<CompanionPairSetup> {
     const port = options?.companionPort ?? this.companionPort;
     if (!port) throw new Error('No companion port available');
@@ -183,7 +214,10 @@ export class AppleTV extends EventEmitter {
     return ps;
   }
 
-  /** Connect to the Companion protocol using companion credentials */
+  /**
+   * Open the Companion connection; emits `companionConnect` once ready.
+   * @throws If no Companion port was given or discovered.
+   */
   async connectCompanion(credentials: HAPCredentials, companionPort?: number): Promise<void> {
     const port = companionPort ?? this.companionPort;
     if (!port) throw new Error('No companion port available');
@@ -199,7 +233,7 @@ export class AppleTV extends EventEmitter {
     this.emit('companionConnect');
   }
 
-  /** Send a companion request and wait for response */
+  /** Send a raw Companion request and resolve with the device's reply. */
   async sendCompanionRequest(
     identifier: string,
     content: OpackDict,
@@ -208,7 +242,7 @@ export class AppleTV extends EventEmitter {
     return this.requireCompanion().sendRequest(identifier, content, timeoutMs);
   }
 
-  /** Send a companion message without waiting for response */
+  /** Send a raw Companion message without waiting for a reply. */
   sendCompanionMessage(identifier: string, content: OpackDict): void {
     this.requireCompanion().sendMessage(identifier, content);
   }
@@ -234,6 +268,7 @@ export class AppleTV extends EventEmitter {
     return [...content].map(([id, name]) => ({ name: String(name), id: String(id) }));
   }
 
+  /** Switch to a user account by ID from accountList(). */
   async switchAccount(accountId: string): Promise<void> {
     await this.requireCompanion().sendRequest(
       'SwitchUserAccountEvent',
@@ -241,6 +276,7 @@ export class AppleTV extends EventEmitter {
     );
   }
 
+  /** Companion-only buttons (no MRP HID usage); each is a press and release. */
   async channelUp(): Promise<void> { await this.companionButton(COMPANION_HID.channelUp); }
   async channelDown(): Promise<void> { await this.companionButton(COMPANION_HID.channelDown); }
   async screensaver(): Promise<void> { await this.companionButton(COMPANION_HID.screensaver); }
@@ -267,6 +303,7 @@ export class AppleTV extends EventEmitter {
 
   // --- Remote control commands ---
 
+  /** MRP HID remote buttons; each is a press, release and flush. */
   async up(): Promise<void> { await this.sendKey('up'); }
   async down(): Promise<void> { await this.sendKey('down'); }
   async left(): Promise<void> { await this.sendKey('left'); }
@@ -274,6 +311,7 @@ export class AppleTV extends EventEmitter {
   async select(): Promise<void> { await this.sendKey('select'); }
   async menu(): Promise<void> { await this.sendKey('menu'); }
   async home(): Promise<void> { await this.sendKey('home'); }
+  /** Press Home and hold it for one second before releasing. */
   async homeHold(): Promise<void> { await this.sendKey('home', 1000); }
   async topMenu(): Promise<void> { await this.sendKey('top_menu'); }
   async playPause(): Promise<void> { await this.sendKey('play_pause'); }
@@ -290,6 +328,7 @@ export class AppleTV extends EventEmitter {
 
   // --- Media commands ---
 
+  /** MRP SendCommand media commands; IDs are Command enum values. */
   async play(): Promise<void> { await this.sendMediaCommand(1); }
   async pause(): Promise<void> { await this.sendMediaCommand(2); }
   async stop(): Promise<void> { await this.sendMediaCommand(4); }
@@ -301,10 +340,12 @@ export class AppleTV extends EventEmitter {
     await this.sendMediaCommand(45, { playbackPosition: seconds });
   }
 
+  /** Set shuffle mode (MRP ChangeShuffleMode). */
   async setShuffle(state: ShuffleState): Promise<void> {
     await this.sendMediaCommand(47, { shuffleMode: state, sendOptions: 0 });
   }
 
+  /** Set repeat mode (MRP ChangeRepeatMode). */
   async setRepeat(state: RepeatState): Promise<void> {
     await this.sendMediaCommand(46, { repeatMode: state, sendOptions: 0 });
   }
@@ -319,6 +360,7 @@ export class AppleTV extends EventEmitter {
 
   // --- Device power ---
 
+  /** Put the device to sleep by pressing the HID System Sleep key. */
   async suspend(): Promise<void> {
     const conn = this.requireConnection();
     // Send HID suspend key (usagePage 1, usage 0x82 = SystemSleep)
@@ -329,6 +371,7 @@ export class AppleTV extends EventEmitter {
     await conn.sendMRPMessage(upMsg);
   }
 
+  /** Wake the device (MRP WakeDeviceMessage). */
   async wake(): Promise<void> {
     const conn = this.requireConnection();
     const msg = await MRPMessage.wakeDevice();
@@ -337,24 +380,28 @@ export class AppleTV extends EventEmitter {
 
   // --- Text input ---
 
+  /** Replace the focused text field's contents. */
   async setText(text: string): Promise<void> {
     const conn = this.requireConnection();
     const msg = await MRPMessage.textInput(text, TextInputActionType.Set);
     await conn.sendMRPMessage(msg);
   }
 
+  /** Insert text into the focused text field. */
   async insertText(text: string): Promise<void> {
     const conn = this.requireConnection();
     const msg = await MRPMessage.textInput(text, TextInputActionType.Insert);
     await conn.sendMRPMessage(msg);
   }
 
+  /** Clear the focused text field. */
   async clearText(): Promise<void> {
     const conn = this.requireConnection();
     const msg = await MRPMessage.textInput('', TextInputActionType.ClearText);
     await conn.sendMRPMessage(msg);
   }
 
+  /** Send a Delete text-input action to the focused text field. */
   async deleteText(): Promise<void> {
     const conn = this.requireConnection();
     const msg = await MRPMessage.textInput('', TextInputActionType.Delete);
@@ -363,6 +410,7 @@ export class AppleTV extends EventEmitter {
 
   // --- State request ---
 
+  /** Fetch current state as a SetState message (metadata for the first queue item). */
   async getState(): Promise<Record<string, unknown>> {
     // GetState (type=3) is unreliable over AirPlay transport.
     // Use PlaybackQueueRequest instead, which always returns a SetState response.
@@ -375,6 +423,10 @@ export class AppleTV extends EventEmitter {
 
   // --- Playback queue / artwork ---
 
+  /**
+   * Send a PlaybackQueueRequest and resolve with the SetState reply.
+   * Rejects if no reply arrives within 10 s.
+   */
   async requestPlaybackQueue(options?: {
     location?: number;
     length?: number;
@@ -387,6 +439,7 @@ export class AppleTV extends EventEmitter {
     return conn.sendMRPMessageAndWait(msg, MessageType.SetState, 10000);
   }
 
+  /** Fetch artwork for the current item at the requested size; null if the reply has none. */
   async requestArtwork(
     width = 400,
     height = 400,
@@ -413,6 +466,7 @@ export class AppleTV extends EventEmitter {
 
   // --- Type-safe key command ---
 
+  /** Send any Key, routing it to the matching HID key or media command. */
   async sendKeyCommand(key: Key): Promise<void> {
     switch (key) {
       case Key.Play: return this.play();
@@ -430,17 +484,20 @@ export class AppleTV extends EventEmitter {
 
   // --- Internal ---
 
+  /** @throws If connect() has not completed. */
   private requireConnection(): AirPlayConnection {
     if (!this.connection) throw new Error('Not connected');
     return this.connection;
   }
 
+  /** Send an MRP SendCommand with optional CommandOptions fields. */
   private async sendMediaCommand(command: number, options?: Record<string, unknown>): Promise<void> {
     const conn = this.requireConnection();
     const msg = await MRPMessage.sendMediaCommand(command, options);
     await conn.sendMRPMessage(msg);
   }
 
+  /** @throws If connectCompanion() has not completed. */
   private requireCompanion(): CompanionConnection {
     if (!this.companionConnection) throw new Error('Companion not connected');
     return this.companionConnection;
@@ -461,12 +518,14 @@ export class AppleTV extends EventEmitter {
     await conn.sendRequest('_hidC', new Map([['_hBtS', 2], ['_hidC', code]]));
   }
 
+  /** Cache a power state and emit `powerState` only when it changes. */
   private updatePowerState(state: PowerState): void {
     if (state === this.powerState) return;
     this.powerState = state;
     this.emit('powerState', state);
   }
 
+  /** Re-emit every Companion event and update power state from SystemStatus/TVSystemStatus. */
   private handleCompanionEvent(event: CompanionEvent): void {
     this.emit('companionEvent', event);
     if (event.identifier === 'SystemStatus' || event.identifier === 'TVSystemStatus') {
@@ -475,6 +534,7 @@ export class AppleTV extends EventEmitter {
     }
   }
 
+  /** Emit `message` for every MRP message, plus typed events for the ones this class understands. */
   private handleMRPMessage(msg: Record<string, unknown>): void {
     // Wrap every message and emit
     const wrapped = new Message(msg);
@@ -575,6 +635,7 @@ export class AppleTV extends EventEmitter {
     await conn.sendMRPMessage(flushMsg);
   }
 
+  /** `name (address:port) [model]`. */
   toString(): string {
     return `${this.name} (${this.address}:${this.port}) [${this.model}]`;
   }

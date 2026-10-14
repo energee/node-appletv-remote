@@ -1,3 +1,10 @@
+/**
+ * Standalone HAP pair-verify over HTTP POST /pair-verify. Proves both sides hold
+ * the long-term keys from pair-setup and derives the session's ChaCha20 keys.
+ * AirPlayConnection runs its own copy of this exchange on its socket; within the
+ * library this class is currently exercised only by tests.
+ */
+
 import {
   generateKeyPairSync,
   diffieHellman,
@@ -12,11 +19,12 @@ import { hkdfSha512, encryptChaCha20, decryptChaCha20 } from '../util/crypto.js'
 import { PersistentHttp } from '../util/http.js';
 import type { HAPCredentials } from './types.js';
 
-// DER prefixes for raw key import/export
+/** DER prefixes that wrap a raw 32-byte key so node:crypto can import it. */
 const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
 const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
+/** Import a raw 32-byte X25519 public key. */
 function x25519PublicKeyFromRaw(raw: Buffer): KeyObject {
   return createPublicKey({
     key: Buffer.concat([X25519_SPKI_PREFIX, raw]),
@@ -25,6 +33,7 @@ function x25519PublicKeyFromRaw(raw: Buffer): KeyObject {
   });
 }
 
+/** Import a raw 32-byte Ed25519 public key. */
 function ed25519PublicKeyFromRaw(raw: Buffer): KeyObject {
   return createPublicKey({
     key: Buffer.concat([ED25519_SPKI_PREFIX, raw]),
@@ -33,6 +42,7 @@ function ed25519PublicKeyFromRaw(raw: Buffer): KeyObject {
   });
 }
 
+/** Import an Ed25519 private key from its raw 32-byte seed (the stored clientLTSK). */
 function ed25519PrivateKeyFromSeed(seed: Buffer): KeyObject {
   return createPrivateKey({
     key: Buffer.concat([ED25519_PKCS8_PREFIX, seed]),
@@ -41,12 +51,14 @@ function ed25519PrivateKeyFromSeed(seed: Buffer): KeyObject {
   });
 }
 
+/** One pair-verify attempt using previously stored HAP credentials. */
 export class PairVerify {
   private http: PersistentHttp;
   private credentials: HAPCredentials;
   private ephemeralPrivateKey: KeyObject;
   private ephemeralPublicKeyRaw: Buffer;
 
+  /** Opens a persistent HTTP connection and generates a fresh ephemeral X25519 key pair. */
   constructor(host: string, port: number, credentials: HAPCredentials) {
     this.http = new PersistentHttp(host, port);
     this.credentials = credentials;
@@ -58,6 +70,7 @@ export class PairVerify {
     );
   }
 
+  /** M1: SeqNo 1 plus our ephemeral X25519 public key. */
   buildM1(): Buffer {
     return tlvEncode({
       [TlvTag.SeqNo]: Buffer.from([0x01]),
@@ -65,6 +78,13 @@ export class PairVerify {
     });
   }
 
+  /**
+   * Run M1–M4, then close the HTTP connection.
+   * @returns `outputKey` (Control-Write, for data we send), `inputKey` (Control-Read,
+   *   for data we receive), and the raw X25519 shared secret.
+   * @throws if M2 is malformed, the server signature does not match the stored
+   *   serverLTPK, or M4 carries a non-zero error. The connection is left open on throw.
+   */
   async verify(): Promise<{ outputKey: Buffer; inputKey: Buffer; sharedSecret: Buffer }> {
     // Step 1: Send M1
     const m1 = this.buildM1();

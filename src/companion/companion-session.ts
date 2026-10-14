@@ -1,16 +1,18 @@
 /**
- * ChaCha20-Poly1305 encryption session for the Companion protocol.
- * Differs from HAPSession:
+ * ChaCha20-Poly1305 encryption session for the Companion protocol, created by
+ * CompanionConnection after pair-verify. Differs from HAPSession (src/util/hap-session.ts):
  * - AAD = the 4-byte frame header (type + 3-byte ciphertext-and-tag length)
  * - Encrypts whole messages (no 1024-byte chunking)
  * - Counter-based nonce, separate TX/RX counters
  */
 
 import { encryptChaCha20, decryptChaCha20 } from '../util/crypto.js';
-import { FrameType } from './framing.js';
+import type { FrameType } from './framing.js';
 
+/** Poly1305 authentication tag length, counted in the frame header length. */
 const AUTH_TAG_LENGTH = 16;
 
+/** Build the 12-byte nonce for a message counter. */
 function companionNonce(counter: bigint): Buffer {
   // Companion counts from byte zero of a 12-byte little-endian nonce.
   // HAP/AirPlay instead put four zero bytes before their 8-byte counter.
@@ -19,10 +21,18 @@ function companionNonce(counter: bigint): Buffer {
   return nonce;
 }
 
+/**
+ * Encrypts outgoing and decrypts incoming Companion frames with independent keys and
+ * counters. Each call consumes one nonce, so frames must be processed in wire order.
+ */
 export class CompanionSession {
   private outCounter = 0n;
   private inCounter = 0n;
 
+  /**
+   * @param outKey client-to-server key (HKDF "ClientEncrypt-main")
+   * @param inKey server-to-client key (HKDF "ServerEncrypt-main")
+   */
   constructor(
     private outKey: Buffer,
     private inKey: Buffer,
@@ -31,6 +41,7 @@ export class CompanionSession {
   /**
    * Encrypt a companion payload for sending.
    * Returns a complete frame: 4-byte header + ciphertext + 16-byte auth tag.
+   * @throws {RangeError} if the payload plus tag exceeds the 3-byte length field
    */
   encrypt(frameType: FrameType, plaintext: Buffer): Buffer {
     // Build the frame header (used as AAD) before advancing the counter, so an
@@ -57,8 +68,9 @@ export class CompanionSession {
 
   /**
    * Decrypt a companion frame payload.
-   * Input: raw data after the 4-byte frame header has been parsed.
-   * The header bytes are needed as AAD.
+   * @param header the frame's 4-byte header, used as AAD
+   * @param encryptedPayload the bytes after the header: ciphertext + 16-byte auth tag
+   * @throws if authentication fails (the inbound counter has still advanced)
    */
   decrypt(header: Buffer, encryptedPayload: Buffer): Buffer {
     const nonce = companionNonce(this.inCounter);

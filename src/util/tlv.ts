@@ -1,3 +1,9 @@
+/**
+ * TLV8 encoding used by HAP pair-setup and pair-verify messages:
+ * 1-byte tag, 1-byte length, value, with values over 255 bytes split into consecutive fragments.
+ */
+
+/** HAP TLV8 tag numbers. */
 export enum TlvTag {
   Method = 0x00,
   Identifier = 0x01,
@@ -17,8 +23,14 @@ export enum TlvTag {
   Flags = 0x13,
 }
 
+/** Decoded/encodable TLV map keyed by numeric tag (use `TlvTag` values). */
 export type TlvData = Partial<Record<number, Buffer>>;
 
+/**
+ * Encode a tag map as TLV8. Values longer than 255 bytes are split into 255-byte fragments
+ * with the same tag; an empty Buffer encodes as a zero-length item; undefined values are skipped.
+ * Tags are emitted in ascending numeric order (JS integer-key ordering), not insertion order.
+ */
 export function tlvEncode(data: TlvData): Buffer {
   const parts: Buffer[] = [];
   for (const [tagStr, value] of Object.entries(data)) {
@@ -38,6 +50,10 @@ export function tlvEncode(data: TlvData): Buffer {
   return Buffer.concat(parts);
 }
 
+/**
+ * Decode TLV8 into a tag map, concatenating repeated items with the same tag (reassembling
+ * fragmented values). Does not validate lengths: a truncated item yields a short value.
+ */
 export function tlvDecode(buf: Buffer): TlvData {
   const result: TlvData = {};
   let offset = 0;

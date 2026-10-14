@@ -1,7 +1,14 @@
+/**
+ * MRP (Media Remote Protocol) message encoding and decoding.
+ * Builds protobuf ProtocolMessage buffers for each command the library sends and
+ * decodes incoming ones, using the schema precompiled into ./schema.ts.
+ */
+
 import protobuf from 'protobufjs';
 import { randomUUID } from 'node:crypto';
 import { MRP_SCHEMA } from './schema.js';
 
+/** ProtocolMessage.type values: which extension field a message carries. Gaps are types this library does not use. */
 export enum MessageType {
   SendCommand = 1,
   SendCommandResult = 2,
@@ -56,10 +63,12 @@ export enum MessageType {
 // The MRP schema is compiled from src/proto into ./schema.ts by `npm run gen:proto`, so no
 // .proto files are read at run time and bundlers (e.g. `bun build`) see a plain module.
 // To support another message, add its file to PROTO_FILES in scripts/gen-proto.mjs.
+/** Root built lazily from MRP_SCHEMA on first lookup. */
 let root: protobuf.Root | null = null;
+/** Cache of resolved message types by name. */
 const types = new Map<string, protobuf.Type>();
 
-/** Look up a message type once; every MRP send and receive goes through here. */
+/** Resolve a message type by name, caching it; every MRP send and receive goes through here. */
 function lookupType(name: string): protobuf.Type {
   let type = types.get(name);
   if (!type) {
@@ -70,6 +79,7 @@ function lookupType(name: string): protobuf.Type {
   return type;
 }
 
+/** HID usage page/usage for each remote button sent via SendHIDEvent (page 1 = Generic Desktop, page 12 = Consumer). */
 export const HID_KEY_MAP: Record<string, { usagePage: number; usage: number }> = {
   up:          { usagePage: 1, usage: 0x8C },
   down:        { usagePage: 1, usage: 0x8D },
@@ -84,6 +94,7 @@ export const HID_KEY_MAP: Record<string, { usagePage: number; usage: number }> =
   volume_down: { usagePage: 12, usage: 0xEA },
 };
 
+/** Fields for the DeviceInfo handshake message; omitted fields default to values identifying us as the iOS TV Remote app. */
 export interface DeviceInfoOptions {
   uniqueIdentifier: string;
   name: string;
@@ -104,7 +115,8 @@ export interface DeviceInfoOptions {
 /**
  * Encode a ProtocolMessage with the given type and optional extension payload.
  * Most MRP messages follow this pattern: create a typed ProtocolMessage with
- * an identifier and an optional nested extension message.
+ * a random uppercase UUID identifier and an optional nested extension message.
+ * `extension.key` is the protobufjs extension field name (leading dot, e.g. '.sendCommandMessage').
  */
 async function encodeMessage(
   type: MessageType,
@@ -127,7 +139,9 @@ async function encodeMessage(
   return Buffer.from(ProtocolMessage.encode(message).finish());
 }
 
+/** Static builders that return encoded ProtocolMessage buffers ready to frame and send, plus `decode` for incoming ones. */
 export class MRPMessage {
+  /** DeviceInfo: the first message after connecting, describing this client to the Apple TV. */
   static async deviceInfo(options: DeviceInfoOptions): Promise<Buffer> {
     return encodeMessage(MessageType.DeviceInfo, {
       key: '.deviceInfoMessage',
@@ -153,10 +167,12 @@ export class MRPMessage {
     });
   }
 
+  /** A bare ProtocolMessage of the given type with no extension payload. */
   static async sendCommand(type: MessageType): Promise<Buffer> {
     return encodeMessage(type);
   }
 
+  /** Decode a ProtocolMessage; extensions appear as '.fooMessage' keys on the result. */
   static async decode(
     buffer: Buffer,
   ): Promise<protobuf.Message & Record<string, unknown>> {
@@ -165,6 +181,10 @@ export class MRPMessage {
     return decoded as protobuf.Message & Record<string, unknown>;
   }
 
+  /**
+   * SendHIDEvent: a single key down or up as a raw IOHIDEvent blob. A button press
+   * is a down event followed by an up event.
+   */
   static async sendHIDEvent(
     usagePage: number,
     usage: number,
@@ -172,6 +192,7 @@ export class MRPMessage {
   ): Promise<Buffer> {
     // Build raw HID event data matching IOHIDEvent format.
     // Format: [8B timestamp][fixed header][usagePage 2B BE][usage 2B BE][down 2B BE][fixed footer]
+    // The timestamp is a fixed constant, not the current time.
     const timestamp = Buffer.from('438922cf08020000', 'hex');
     const header = Buffer.from(
       '0000000000000000010000000000000002000000200000000300000001000000000000',
@@ -192,6 +213,7 @@ export class MRPMessage {
     });
   }
 
+  /** SendButtonEvent: a button down or up identified by HID usage page and usage. */
   static async sendButtonEvent(
     usagePage: number,
     usage: number,
@@ -204,6 +226,7 @@ export class MRPMessage {
     });
   }
 
+  /** SetConnectionState with a ConnectionState value (0 None, 1 Connecting, 2 Connected, 3 Disconnected). */
   static async setConnectionState(state: number): Promise<Buffer> {
     return encodeMessage(MessageType.SetConnectionState, {
       key: '.setConnectionStateMessage',
@@ -212,6 +235,7 @@ export class MRPMessage {
     });
   }
 
+  /** ClientUpdatesConfig: subscribe to the categories of state updates the Apple TV should push. */
   static async clientUpdatesConfig(options: {
     artworkUpdates?: boolean;
     nowPlayingUpdates?: boolean;
@@ -226,6 +250,7 @@ export class MRPMessage {
     });
   }
 
+  /** CryptoPairing: wraps a HAP pairing TLV for pairing carried inside MRP. */
   static async cryptoPairing(pairingData: Buffer): Promise<Buffer> {
     // CryptoPairing messages must NOT include an identifier.
     // pyatv uses generate_identifier=False; the Apple TV never echoes
@@ -270,6 +295,7 @@ export class MRPMessage {
     });
   }
 
+  /** WakeDevice: wake the Apple TV from sleep. */
   static async wakeDevice(): Promise<Buffer> {
     return encodeMessage(MessageType.WakeDevice, {
       key: '.wakeDeviceMessage',
@@ -278,6 +304,7 @@ export class MRPMessage {
     });
   }
 
+  /** TextInput: edit the focused text field; `actionType` is the TextInputMessage action enum (1 = Insert, 2 = Set, 3 = Delete, 4 = ClearText). */
   static async textInput(
     text: string,
     actionType: number,
@@ -293,6 +320,7 @@ export class MRPMessage {
     });
   }
 
+  /** PlaybackQueueRequest: ask for queue items (defaults: the current item with metadata, no artwork); the reply is a SetState. */
   static async playbackQueueRequest(options: {
     location?: number;
     length?: number;

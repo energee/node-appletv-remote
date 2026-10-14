@@ -1,3 +1,9 @@
+/**
+ * MRP media commands and the per-command capability entries the Apple TV
+ * reports in SetState, emitted by AppleTV as its `supportedCommands` event.
+ */
+
+/** MRP command IDs; values match the protobuf `Command` enum, and the numbering has gaps. */
 export enum Command {
   Unknown = 0,
   Play = 1,
@@ -50,17 +56,21 @@ export enum Command {
   PlayItemInPlaybackQueue = 57,
 }
 
+/** One entry of SetStateMessage.supportedCommands: a command and whether the current player accepts it. */
 export class SupportedCommand {
   readonly command: Command;
   readonly enabled: boolean;
+  /** True when the command supports scrubbing (e.g. seek); defaults to false. */
   readonly canScrub: boolean;
 
+  /** Missing `command` maps to Command.Unknown and missing `enabled` to false. */
   constructor(payload: Record<string, unknown>) {
     this.command = (payload.command as Command) ?? Command.Unknown;
     this.enabled = (payload.enabled as boolean) ?? false;
     this.canScrub = Boolean(payload.canScrub);
   }
 
+  /** Command name plus flags, e.g. `Play [enabled]`; unknown IDs render as `Command(n)`. */
   toString(): string {
     const name = Command[this.command] ?? `Command(${this.command})`;
     const flags: string[] = [];
@@ -69,6 +79,7 @@ export class SupportedCommand {
     return `${name} [${flags.join(', ')}]`;
   }
 
+  /** Build entries from a SupportedCommands message (its `supportedCommands` array); empty if the array is absent. */
   static fromList(
     supportedCommands: Record<string, unknown>,
   ): SupportedCommand[] {

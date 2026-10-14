@@ -1,5 +1,6 @@
 /**
- * Companion protocol pair-setup.
+ * Companion protocol pair-setup: PIN-based SRP pairing that produces the long-term
+ * credentials CompanionConnection later uses for pair-verify.
  * Same SRP flow as AirPlay pair-setup but over Companion frames (PS_Start/PS_Next).
  * Key difference from AirPlay: TLV pairing data is wrapped in OPACK dicts under
  * the `_pd` key, and frames use PS_Start for M1, PS_Next for all subsequent messages.
@@ -14,8 +15,14 @@ import { FrameType, encodeFrame, parseFrames, type Frame } from './framing.js';
 import { opackEncode, opackDecode, type OpackDict, type OpackValue } from './opack.js';
 import type { HAPCredentials } from '../auth/types.js';
 
+/** DER prefix that turns a raw 32-byte Ed25519 seed into PKCS#8 for node:crypto import. */
 const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
+/**
+ * One pair-setup attempt over its own TCP connection. Call start(), show the user the
+ * PIN the Apple TV displays, then finish(pin). Generates a fresh client ID and Ed25519
+ * long-term key pair per instance.
+ */
 export class CompanionPairSetup {
   private socket: Socket | undefined;
   private buffer: Buffer = Buffer.alloc(0);
@@ -25,12 +32,14 @@ export class CompanionPairSetup {
   private srp = new SRPClient();
   private sessionKey: Buffer | undefined;
   private isFirstMessage = true;
+  /** `_x` value for the next outgoing pairing message; starts at 0. */
   private xid = 0;
   private salt: Buffer | undefined;
   private serverPublicKey: Buffer | undefined;
 
   /** Queued frames that arrived before anyone was waiting for them. */
   private frameQueue: Frame[] = [];
+  /** Waiters for the next frame, served in FIFO order regardless of frame type. */
   private pendingFrameResolvers: Array<(frame: Frame) => void> = [];
 
   constructor(
@@ -59,6 +68,7 @@ export class CompanionPairSetup {
     this.serverPublicKey = serverPublicKey;
   }
 
+  /** Connect the socket and feed incoming data to the frame parser. Errors only reject the connect. */
   private openSocket(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.socket = new Socket();
@@ -77,9 +87,9 @@ export class CompanionPairSetup {
   }
 
   /**
-   * Send TLV pairing data wrapped in OPACK.
-   * First message uses PS_Start with _pwTy=1 (PIN-based pairing),
-   * all subsequent use PS_Next.
+   * Send TLV pairing data wrapped in OPACK `{ _pd, _pwTy: 1, _x }`.
+   * The first message goes in a PS_Start frame, all later ones in PS_Next. Every message
+   * carries `_pwTy: 1` (PIN-based pairing) and an incrementing `_x`.
    */
   private sendPairingData(tlvData: Buffer): void {
     const frameType = this.isFirstMessage ? FrameType.PS_Start : FrameType.PS_Next;
@@ -95,7 +105,8 @@ export class CompanionPairSetup {
   }
 
   /**
-   * Receive TLV pairing data from an OPACK-wrapped response.
+   * Wait for the next frame of any type and return its `_pd` TLV bytes.
+   * @throws if the payload is not an OPACK dict or lacks `_pd`, or on timeout
    */
   private async receivePairingData(): Promise<Buffer> {
     const frame = await this.waitForAnyFrame();
@@ -114,6 +125,11 @@ export class CompanionPairSetup {
     return pd;
   }
 
+  /**
+   * Send M1 (pair-setup request) and read M2.
+   * @returns the SRP salt and server public key from M2
+   * @throws if M2 lacks either (the TLV error code is included)
+   */
   async sendM1(): Promise<{ salt: Buffer; serverPublicKey: Buffer }> {
     const m1 = tlvEncode({
       [TlvTag.Method]: Buffer.from([0x00]),
@@ -134,6 +150,11 @@ export class CompanionPairSetup {
     return { salt, serverPublicKey };
   }
 
+  /**
+   * Send M3 (SRP client public key and proof derived from the PIN) and verify the
+   * server proof in M4, storing the SRP shared secret for M5.
+   * @throws if M4 lacks a proof (e.g. a wrong PIN) or the proof does not verify
+   */
   async sendM3(pin: string, salt: Buffer, serverPublicKey: Buffer): Promise<void> {
     this.srp.init(salt, pin);
     this.srp.setServerPublicKey(serverPublicKey);
@@ -161,6 +182,12 @@ export class CompanionPairSetup {
     this.sessionKey = this.srp.getSharedSecret();
   }
 
+  /**
+   * Send M5 (our identifier, Ed25519 public key and signature, encrypted) and decrypt
+   * M6 to learn the Apple TV's identifier and long-term public key.
+   * @returns credentials to persist for later pair-verify
+   * @throws if called before sendM3, or if M6 is missing or malformed
+   */
   async sendM5(): Promise<HAPCredentials> {
     if (!this.sessionKey) {
       throw new Error('Session key not available; call sendM3 first');
@@ -241,6 +268,7 @@ export class CompanionPairSetup {
   /**
    * Complete pairing with the PIN displayed on the Apple TV.
    * start() must have been called first (sends M1, receives M2).
+   * Always closes the socket, whether pairing succeeds or fails.
    */
   async finish(pin: string): Promise<HAPCredentials> {
     if (!this.salt || !this.serverPublicKey) {
@@ -254,16 +282,19 @@ export class CompanionPairSetup {
     }
   }
 
+  /** Close the socket. Safe to call more than once. */
   destroy(): void {
     this.socket?.destroy();
     this.socket = undefined;
   }
 
+  /** Frame and write a payload; a no-op once the socket is gone. */
   private writeFrame(type: FrameType, payload: Buffer): void {
     const frame = encodeFrame(type, payload);
     this.socket?.write(frame);
   }
 
+  /** Resolve with the next frame of any type, taking from the queue first. */
   private waitForAnyFrame(timeoutMs = 10000): Promise<Frame> {
     if (this.frameQueue.length > 0) {
       return Promise.resolve(this.frameQueue.shift()!);
@@ -286,6 +317,7 @@ export class CompanionPairSetup {
     });
   }
 
+  /** Parse buffered frames, handing each to the oldest waiter or queuing it. */
   private processFrames(): void {
     const { frames, remainder } = parseFrames(this.buffer);
     this.buffer = remainder;

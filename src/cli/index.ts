@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+/**
+ * `atv` command-line tool: scan, pair, send remote keys, and inspect now-playing,
+ * keyboard, and Companion events. A thin consumer of the public AppleTV API;
+ * credentials are stored as JSON in ~/.atv-credentials.json keyed by device ID.
+ */
 import { scan, type DiscoveredDeviceInfo } from '../discovery.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { AppleTV, Key, contentItems } from '../appletv.js';
@@ -10,8 +15,10 @@ import { createInterface } from 'node:readline';
 import type { Message } from '../message.js';
 import type { KeyboardInfo, TextInputEvent, CompanionEvent } from '../appletv.js';
 
+/** Where paired credentials are stored (falls back to the current directory if HOME is unset). */
 const CREDS_FILE = join(process.env.HOME ?? '.', '.atv-credentials.json');
 
+/** Ask one question on stdin and resolve with the raw answer. */
 function prompt(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
@@ -22,6 +29,7 @@ function prompt(question: string): Promise<string> {
   });
 }
 
+/** `atv scan`: list Apple TVs found via mDNS within 5 s. */
 async function cmdScan() {
   console.log('Scanning for Apple TVs...');
   const devices = await scan({ timeout: 5000 });
@@ -34,6 +42,7 @@ async function cmdScan() {
   });
 }
 
+/** `atv pair`: pick a device, run AirPlay pair-setup with the on-screen PIN, and save the credentials. */
 async function cmdPair() {
   console.log('Scanning for Apple TVs...');
   const devices = await scan({ timeout: 5000 });
@@ -70,10 +79,16 @@ async function cmdPair() {
   console.log(`Paired! Credentials saved to ${CREDS_FILE}`);
 }
 
-/** Map of CLI command names to Key enum values */
+/** Every Key value; these strings are the accepted CLI command names. */
 const COMMAND_NAMES = Object.values(Key);
+/** Fast membership check for COMMAND_NAMES. */
 const COMMAND_SET = new Set<string>(COMMAND_NAMES);
 
+/**
+ * Load stored credentials for the first device ID containing `deviceId`
+ * (case-insensitive), or the most recently added device if none is given or none matches.
+ * @throws if the credentials file is missing or empty.
+ */
 function loadCredentials(deviceId?: string): { id: string; credentials: Credentials } {
   if (!existsSync(CREDS_FILE)) {
     throw new Error('No credentials found. Run "atv pair" first.');
@@ -91,6 +106,10 @@ function loadCredentials(deviceId?: string): { id: string; credentials: Credenti
   return { id, credentials: Credentials.deserialize(credsJson as string) };
 }
 
+/**
+ * Scan and return the device whose ID equals or contains `id`, or whose name contains it (case-insensitive).
+ * @throws if nothing matches; the message lists the devices that were found.
+ */
 async function findDevice(id: string): Promise<DiscoveredDeviceInfo> {
   console.log('Finding device...');
   const devices = await scan({ timeout: 5000 });
@@ -106,6 +125,7 @@ async function findDevice(id: string): Promise<DiscoveredDeviceInfo> {
   return device;
 }
 
+/** Load credentials, find the device on the network, and open an AirPlay/MRP connection. */
 async function connectToDevice(deviceId?: string): Promise<AppleTV> {
   const { id, credentials } = loadCredentials(deviceId);
   const device = await findDevice(id);
@@ -116,6 +136,7 @@ async function connectToDevice(deviceId?: string): Promise<AppleTV> {
   return atv;
 }
 
+/** `atv command <cmd> [device]`: send one key, wait 1 s for it to land, then disconnect. */
 async function cmdCommand(command: string, deviceId?: string) {
   const atv = await connectToDevice(deviceId);
 
@@ -130,6 +151,7 @@ async function cmdCommand(command: string, deviceId?: string) {
   await atv.close();
 }
 
+/** `atv remote [device]`: interactive prompt that sends each typed key name. */
 async function cmdRemote(deviceId?: string) {
   const atv = await connectToDevice(deviceId);
 
@@ -171,6 +193,7 @@ async function cmdRemote(deviceId?: string) {
   });
 }
 
+/** `atv state [device]`: print title, artist, album, play state, progress, and app for the current item. */
 async function cmdState(deviceId?: string) {
   const atv = await connectToDevice(deviceId);
   try {
@@ -227,6 +250,7 @@ async function cmdState(deviceId?: string) {
   await atv.close();
 }
 
+/** `atv queue [device]`: print up to 20 items from the playback queue. */
 async function cmdQueue(deviceId?: string) {
   const atv = await connectToDevice(deviceId);
   try {
@@ -252,6 +276,7 @@ async function cmdQueue(deviceId?: string) {
   await atv.close();
 }
 
+/** `atv artwork [device] [file]`: save 600x600 now-playing artwork (default artwork.jpg). */
 async function cmdArtwork(deviceId?: string, outputFile?: string) {
   const atv = await connectToDevice(deviceId);
   try {
@@ -270,6 +295,7 @@ async function cmdArtwork(deviceId?: string, outputFile?: string) {
   await atv.close();
 }
 
+/** `atv messages [device]`: print every incoming MRP message until Ctrl+C. */
 async function cmdMessages(deviceId?: string) {
   const atv = await connectToDevice(deviceId);
   console.log('Listening for messages (Ctrl+C to stop)...\n');
@@ -285,6 +311,7 @@ async function cmdMessages(deviceId?: string) {
   });
 }
 
+/** `atv companion-pair`: Companion pair-setup; merges the result into the device's existing AirPlay credentials, or stores it standalone. */
 async function cmdCompanionPair() {
   console.log('Scanning for Apple TVs...');
   const devices = await scan({ timeout: 5000 });
@@ -333,6 +360,7 @@ async function cmdCompanionPair() {
   console.log(`Companion paired! Credentials saved to ${CREDS_FILE}`);
 }
 
+/** `atv companion-test [device]`: connect over Companion with stored credentials and print events until Ctrl+C. */
 async function cmdCompanionTest(deviceId?: string) {
   const { id, credentials } = loadCredentials(deviceId);
   if (!credentials.companionCredentials) {
@@ -372,6 +400,7 @@ async function cmdCompanionTest(deviceId?: string) {
   });
 }
 
+/** `atv keyboard [device]`: print keyboard focus and text-input events (plus their raw messages) until Ctrl+C. */
 async function cmdKeyboard(deviceId?: string) {
   const atv = await connectToDevice(deviceId);
   console.log('Listening for keyboard/textInput events (Ctrl+C to stop)...\n');

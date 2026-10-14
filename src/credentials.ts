@@ -1,15 +1,23 @@
+/**
+ * Persistable pairing credentials: AirPlay HAP keys plus optional Companion
+ * keys, serialized as JSON with hex-encoded key buffers.
+ */
+
 import type { HAPCredentials } from './auth/types.js';
 
+/** Parse a string produced by Credentials.serialize(); alias for Credentials.deserialize. */
 export function parseCredentials(text: string): Credentials {
   return Credentials.deserialize(text);
 }
 
+/** AirPlay pair-setup credentials, optionally bundled with the separately paired Companion credentials. */
 export class Credentials implements HAPCredentials {
   clientId: string;
   clientLTSK: Buffer;
   clientLTPK: Buffer;
   serverLTPK: Buffer;
   serverId: string;
+  /** Credentials from Companion pairing; stored under the `companion` key when serialized. */
   companionCredentials?: HAPCredentials;
 
   constructor(creds: HAPCredentials, companionCredentials?: HAPCredentials) {
@@ -21,6 +29,7 @@ export class Credentials implements HAPCredentials {
     this.companionCredentials = companionCredentials;
   }
 
+  /** Encode as JSON with keys hex-encoded; the inverse of deserialize(). */
   serialize(): string {
     const obj: Record<string, unknown> = {
       clientId: this.clientId,
@@ -41,6 +50,10 @@ export class Credentials implements HAPCredentials {
     return JSON.stringify(obj);
   }
 
+  /**
+   * Decode JSON from serialize(). Fields are not validated.
+   * @throws {SyntaxError} If `json` is not valid JSON.
+   */
   static deserialize(json: string): Credentials {
     const data = JSON.parse(json);
     let companionCreds: HAPCredentials | undefined;
