@@ -222,22 +222,15 @@ describe('NowPlayingInfo app bundle ID', () => {
 });
 
 describe('sendKeyCommand routing', () => {
-  it('routes skip keys to media commands and home_hold to a long HID press', async () => {
-    vi.useFakeTimers();
-    try {
-      const atv = makeAtv();
-      const sent = fakeMrp(atv);
-      await atv.sendKeyCommand(Key.SkipForward);
-      const hold = atv.sendKeyCommand(Key.HomeHold);
-      await vi.advanceTimersByTimeAsync(1000);
-      await hold;
-      expect((sent[0]['.sendCommandMessage'] as any).command).toBe(18);
-      expect(sent.slice(1).map((m) => m.type)).toEqual([
-        MessageType.SendHIDEvent, MessageType.SendHIDEvent, MessageType.GenericMessage,
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
+  it('routes skip keys to media commands and home_hold to a 1 s HID press', async () => {
+    const atv = makeAtv();
+    const sent = fakeMrp(atv);
+    const sendKey = vi.spyOn(atv as any, 'sendKey').mockResolvedValue(undefined);
+    await atv.sendKeyCommand(Key.SkipForward);
+    await atv.sendKeyCommand(Key.HomeHold);
+    await atv.sendKeyCommand(Key.Up);
+    expect((sent[0]['.sendCommandMessage'] as any).command).toBe(18);
+    expect(sendKey.mock.calls).toEqual([['home', 1000], ['up']]);
   });
 });
 
