@@ -67,6 +67,11 @@ export interface ScanOptions {
   timeout?: number;
   /** Keep only devices for which this returns true. */
   filter?: (device: DiscoveredDevice) => boolean;
+  /**
+   * Stop browsing early once any (filtered) device satisfies this; `timeout` still caps the wait.
+   * Checked after every mDNS record, once the Companion port has been joined.
+   */
+  until?: (device: DiscoveredDevice) => boolean;
 }
 
 /** Routable IPv4 addresses, in advertised order (link-local 169.254.x.x excluded). */
@@ -75,7 +80,7 @@ function usableAddresses(service: Service): string[] {
 }
 
 /**
- * Browse the local network for `timeout` ms and return discovered Apple TVs
+ * Browse the local network for `timeout` ms (or until `until` matches) and return discovered Apple TVs
  * sorted by name. Devices are deduplicated by AirPlay device ID (or address);
  * services with no routable IPv4 address are skipped. Never rejects.
  */
@@ -87,6 +92,32 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
 
   return new Promise((resolve) => {
     const instance = new Bonjour();
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    // Join devices to Companion ports (independent of advertisement order) and apply the filter.
+    const collect = (): DiscoveredDevice[] => {
+      for (const [key, device] of devices) {
+        const match = airplayAddresses.get(key)!.find((a) => companionPorts.has(a));
+        device.companionPort = match === undefined ? undefined : companionPorts.get(match);
+      }
+      const all = Array.from(devices.values());
+      return options.filter ? all.filter(options.filter) : all;
+    };
+
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      browser.stop();
+      companionBrowser.stop();
+      instance.destroy();
+      resolve(collect().sort((a, b) => a.name.localeCompare(b.name)));
+    };
+
+    const check = (): void => {
+      if (!done && options.until && collect().some(options.until)) finish();
+    };
 
     const browser = instance.find({ type: 'airplay', protocol: 'tcp' }, (service: Service) => {
       const addresses = usableAddresses(service);
@@ -110,6 +141,7 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
         );
         airplayAddresses.set(key, addresses);
       }
+      check();
     });
 
     const companionBrowser = instance.find(
@@ -120,24 +152,10 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
         for (const address of usableAddresses(service)) {
           companionPorts.set(address, service.port);
         }
+        check();
       },
     );
 
-    setTimeout(() => {
-      browser.stop();
-      companionBrowser.stop();
-      instance.destroy();
-
-      let result = Array.from(devices.values());
-      // Join once after both browsers stop, independent of advertisement order.
-      for (const [key, device] of devices) {
-        const match = airplayAddresses.get(key)!.find((a) => companionPorts.has(a));
-        device.companionPort = match === undefined ? undefined : companionPorts.get(match);
-      }
-      if (options.filter) {
-        result = result.filter(options.filter);
-      }
-      resolve(result.sort((a, b) => a.name.localeCompare(b.name)));
-    }, timeout);
+    timer = setTimeout(finish, timeout);
   });
 }

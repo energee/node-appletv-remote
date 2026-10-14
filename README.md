@@ -24,7 +24,12 @@ atv artwork [deviceId] [out.jpg]  # save current artwork
 atv messages [deviceId]           # stream raw MRP messages until Ctrl+C
 ```
 
-Credentials are saved to `~/.atv-credentials.json`. Leave out `deviceId` to use the most recently paired device.
+Credentials are saved to `~/.atv-credentials.json`. Leave out `deviceId` to use the most recently paired device. Each device's last working address is cached in `~/.atv-devices.json`, so commands skip the network scan. If the TV has moved, the CLI rescans automatically.
+
+Two timing knobs exist for older or slower Apple TVs. Both default to `0`:
+
+- `ATV_SETTLE_MS`: pause after the MRP handshake before sending anything (previously a fixed 500 ms).
+- `ATV_POST_SEND_MS`: pause after `atv command` sends a key, before disconnecting (previously a fixed 1000 ms).
 
 ```
 $ atv state
@@ -47,6 +52,8 @@ Requires Node.js 18+ (ESM).
 import { scan, AppleTV } from 'node-appletv-remote';
 
 const [device] = await scan({ timeout: 5000 });
+// or stop as soon as the TV you want shows up:
+// await scan({ until: (d) => d.name === 'Living Room' });
 const atv = new AppleTV(device);
 
 // AirPlay pairing: a PIN appears on the TV

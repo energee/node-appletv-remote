@@ -11,12 +11,15 @@ import { MessageType } from '../mrp/messages.js';
 import { Credentials } from '../credentials.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { loadCachedDevice, saveCachedDevice, withCachedDevice } from './device-cache.js';
 import { createInterface } from 'node:readline';
 import type { Message } from '../message.js';
 import type { KeyboardInfo, TextInputEvent, CompanionEvent } from '../appletv.js';
 
 /** Where paired credentials are stored (falls back to the current directory if HOME is unset). */
 const CREDS_FILE = join(process.env.HOME ?? '.', '.atv-credentials.json');
+/** Last-known address of each paired device, so commands can skip the mDNS scan. */
+const DEVICES_FILE = join(process.env.HOME ?? '.', '.atv-devices.json');
 
 /** Ask one question on stdin and resolve with the raw answer. */
 function prompt(question: string): Promise<string> {
@@ -107,47 +110,67 @@ function loadCredentials(deviceId?: string): { id: string; credentials: Credenti
 }
 
 /**
- * Scan and return the device whose ID equals or contains `id`, or whose name contains it (case-insensitive).
+ * Scan (stopping early once found) and return the device whose ID equals or contains `id`, or whose name contains it (case-insensitive).
  * @throws if nothing matches; the message lists the devices that were found.
  */
 async function findDevice(id: string): Promise<DiscoveredDeviceInfo> {
   console.log('Finding device...');
-  const devices = await scan({ timeout: 5000 });
   const idLower = id.toLowerCase();
-  const device = devices.find((d) =>
+  const matches = (d: DiscoveredDeviceInfo) =>
     d.deviceId.toLowerCase() === idLower ||
     d.name.toLowerCase().includes(idLower) ||
-    d.deviceId.toLowerCase().includes(idLower),
-  );
+    d.deviceId.toLowerCase().includes(idLower);
+  // Stop as soon as the device and its Companion port (if advertised) have both arrived.
+  const devices = await scan({ timeout: 5000, until: (d) => matches(d) && d.companionPort !== undefined });
+  const device = devices.find(matches);
   if (!device) {
     throw new Error(`Device not found on network (looking for "${id}"). Found: ${devices.map((d) => `${d.name} [${d.deviceId}]`).join(', ')}`);
   }
   return device;
 }
 
-/** Load credentials, find the device on the network, and open an AirPlay/MRP connection. */
-async function connectToDevice(deviceId?: string): Promise<AppleTV> {
-  const { id, credentials } = loadCredentials(deviceId);
-  const device = await findDevice(id);
-
-  console.log(`Connecting to ${device.name} (${device.address}:${device.port})...`);
-  const atv = new AppleTV(device);
-  await atv.connect(credentials);
-  return atv;
+/**
+ * Run `connect` against the device's cached address, rescanning once if that fails,
+ * and remember the address that worked.
+ */
+async function connectCached<T>(id: string, connect: (device: DiscoveredDeviceInfo) => Promise<T>): Promise<T> {
+  return withCachedDevice(loadCachedDevice(DEVICES_FILE, id), () => findDevice(id), async (device) => {
+    const result = await connect(device);
+    saveCachedDevice(DEVICES_FILE, id, device);
+    return result;
+  });
 }
 
-/** `atv command <cmd> [device]`: send one key, wait 1 s for it to land, then disconnect. */
-async function cmdCommand(command: string, deviceId?: string) {
-  const atv = await connectToDevice(deviceId);
+/** Load credentials, locate the device (cache first, then mDNS), and open an AirPlay/MRP connection. */
+async function connectToDevice(deviceId?: string): Promise<AppleTV> {
+  const { id, credentials } = loadCredentials(deviceId);
+  return connectCached(id, async (device) => {
+    console.log(`Connecting to ${device.name} (${device.address}:${device.port})...`);
+    const atv = new AppleTV(device);
+    try {
+      await atv.connect(credentials);
+    } catch (e) {
+      await atv.close();
+      throw e;
+    }
+    return atv;
+  });
+}
 
+/** `atv command <cmd> [device]`: send one key, wait `ATV_POST_SEND_MS` (default 0), then disconnect. */
+async function cmdCommand(command: string, deviceId?: string) {
   if (!COMMAND_SET.has(command)) {
     console.log(`Unknown command: ${command}`);
     console.log(`Available: ${COMMAND_NAMES.join(', ')}`);
-  } else {
-    await atv.sendKeyCommand(command as Key);
-    console.log(`Sent: ${command}`);
-    await delay(1000);
+    return;
   }
+  const atv = await connectToDevice(deviceId);
+  await atv.sendKeyCommand(command as Key);
+  console.log(`Sent: ${command}`);
+  // ponytail: writes have already reached the kernel, so no wait by default. Raise
+  // ATV_POST_SEND_MS (old value 1000) if a key is dropped when the CLI exits.
+  const postSendMs = Number(process.env.ATV_POST_SEND_MS ?? 0);
+  if (postSendMs > 0) await delay(postSendMs);
   await atv.close();
 }
 
@@ -367,14 +390,15 @@ async function cmdCompanionTest(deviceId?: string) {
     throw new Error('No companion credentials. Run "atv companion-pair" first.');
   }
 
-  const device = await findDevice(id);
-  if (!device.companionPort) {
-    throw new Error('Device has no companion-link port');
-  }
-
-  const atv = new AppleTV(device);
-  console.log(`Connecting companion to ${device.name} (${device.address}:${device.companionPort})...`);
-  await atv.connectCompanion(credentials.companionCredentials);
+  const atv = await connectCached(id, async (device) => {
+    if (!device.companionPort) {
+      throw new Error('Device has no companion-link port');
+    }
+    const atv = new AppleTV(device);
+    console.log(`Connecting companion to ${device.name} (${device.address}:${device.companionPort})...`);
+    await atv.connectCompanion(credentials.companionCredentials!);
+    return atv;
+  });
   console.log('Companion connected! Listening for events (Ctrl+C to stop)...\n');
 
   atv.on('companionEvent', (event: CompanionEvent) => {

@@ -47,3 +47,35 @@ describe('mDNS service ordering', () => {
     expect((await pending)[0].companionPort).toBe(49153);
   });
 });
+
+describe('scan until', () => {
+  const tv = { name: 'Synthetic TV', addresses: ['192.0.2.10'], port: 7000, txt: { deviceid: 'synthetic-tv', model: 'AppleTV6,2' } };
+
+  it('resolves as soon as a device matches, without waiting for the timeout', async () => {
+    const pending = scan({ timeout: 5000, until: (d) => d.deviceId === 'synthetic-tv' });
+    mock.callbacks.get('airplay')!(tv);
+    await vi.advanceTimersByTimeAsync(0);
+    const devices = await pending;
+    expect(devices.map((d) => d.deviceId)).toEqual(['synthetic-tv']);
+    expect(mock.destroyed).toHaveBeenCalledOnce();
+  });
+
+  it('checks the condition after the Companion join, so it can wait for the Companion port', async () => {
+    let settled = false;
+    const pending = scan({ timeout: 5000, until: (d) => !!d.companionPort }).then((r) => { settled = true; return r; });
+    mock.callbacks.get('airplay')!(tv);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    mock.callbacks.get('companion-link')!({ addresses: ['192.0.2.10'], port: 49153 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await pending)[0].companionPort).toBe(49153);
+  });
+
+  it('falls back to the timeout when nothing matches', async () => {
+    const pending = scan({ timeout: 10, until: () => false });
+    mock.callbacks.get('airplay')!(tv);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await pending).toHaveLength(1);
+    expect(mock.destroyed).toHaveBeenCalledOnce();
+  });
+});
