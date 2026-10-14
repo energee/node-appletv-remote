@@ -1,5 +1,5 @@
 /**
- * Minimal keep-alive HTTP POST client for the HAP pairing endpoints
+ * Bounded keep-alive HTTP client for DMAP and the HAP pairing endpoints
  * (`/pair-setup`, `/pair-verify`) on the AirPlay port.
  */
 
@@ -22,7 +22,7 @@ export class PersistentHttp {
   private host: string;
   private port: number;
 
-  constructor(host: string, port: number) {
+  constructor(host: string, port: number, private headers: Record<string, string> = DEFAULT_HEADERS) {
     this.host = host;
     this.port = port;
     this.agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
@@ -33,32 +33,45 @@ export class PersistentHttp {
    * @throws (rejects) on a socket error or any HTTP status >= 400.
    */
   async post(path: string, body: Buffer): Promise<Buffer> {
+    const response = await this.request('POST', path, body);
+    if (response.status >= 400) throw new Error(`HTTP ${response.status} from ${path}`);
+    return response.body;
+  }
+
+  /** Raw GET/POST response for protocols that handle authentication statuses themselves.
+   * Requests time out after 10 seconds of socket inactivity and responses are capped at 8 MiB.
+   */
+  async request(method: 'GET' | 'POST', path: string, body: Buffer = Buffer.alloc(0)): Promise<{ status: number; body: Buffer }> {
     return new Promise((resolve, reject) => {
       const req = http.request(
         {
           hostname: this.host,
           port: this.port,
           path,
-          method: 'POST',
+          method,
           agent: this.agent,
           headers: {
-            ...DEFAULT_HEADERS,
+            ...this.headers,
             'Content-Length': String(body.length),
           },
         },
         (res) => {
           const chunks: Buffer[] = [];
-          res.on('data', (c: Buffer) => chunks.push(c));
+          let size = 0;
+          res.on('error', reject);
+          res.on('aborted', () => reject(new Error('HTTP response aborted')));
+          res.on('data', (c: Buffer) => {
+            size += c.length;
+            if (size > 8 * 1024 * 1024) res.destroy(new Error('HTTP response size limit exceeded'));
+            else chunks.push(c);
+          });
           res.on('end', () => {
             const responseBody = Buffer.concat(chunks);
-            if (res.statusCode && res.statusCode >= 400) {
-              reject(new Error(`HTTP ${res.statusCode} from ${path}`));
-            } else {
-              resolve(responseBody);
-            }
+            resolve({ status: res.statusCode ?? 0, body: responseBody });
           });
         },
       );
+      req.setTimeout(10_000, () => req.destroy(new Error('HTTP request timeout')));
       req.on('error', reject);
       req.write(body);
       req.end();

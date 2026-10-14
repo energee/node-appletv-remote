@@ -52,3 +52,9 @@ describe('DataStream framing', () => {
     expect(command).toBe('comm');
   });
 });
+
+it.each([0, 1, 31])('rejects totalSize %s smaller than its DataStream header', (size) => {
+  const bytes = Buffer.alloc(32);
+  bytes.writeUInt32BE(size);
+  expect(() => parseDataStreamFrame(bytes)).toThrow(/size|header/i);
+});

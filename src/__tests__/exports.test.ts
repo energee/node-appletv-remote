@@ -15,5 +15,7 @@ describe('pyatv-parity exports', () => {
     expect(lib.ShuffleState.Songs).toBe(3);
     expect(lib.RepeatState.All).toBe(3);
     expect(lib.PowerState.On).toBe('on');
+    expect(lib.TouchAction.Press).toBe(1);
+    expect(lib.TouchAction.Release).toBe(4);
   });
 });

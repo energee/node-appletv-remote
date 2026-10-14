@@ -20,6 +20,10 @@ function fakeMrp(atv: AppleTV) {
   const sent: Record<string, unknown>[] = [];
   (atv as any).connection = {
     sendMRPMessage: vi.fn(async (buf: Buffer) => { sent.push(await MRPMessage.decode(buf) as any); }),
+    sendMRPMessageAndWait: async (buf: Buffer) => {
+      sent.push(await MRPMessage.decode(buf));
+      return { type: 2, '.sendCommandResultMessage': { sendError: 0, handlerReturnStatus: 0 } };
+    },
   };
   return sent;
 }
@@ -230,7 +234,7 @@ describe('sendKeyCommand routing', () => {
     await atv.sendKeyCommand(Key.HomeHold);
     await atv.sendKeyCommand(Key.Up);
     expect((sent[0]['.sendCommandMessage'] as any).command).toBe(18);
-    expect(sendKey.mock.calls).toEqual([['home', 1000], ['up']]);
+    expect(sendKey.mock.calls).toEqual([['home', 'hold'], ['up', 'singleTap']]);
   });
 });
 

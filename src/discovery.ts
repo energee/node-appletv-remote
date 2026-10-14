@@ -1,9 +1,10 @@
 /**
- * Bonjour/mDNS discovery of Apple TVs: browses `_airplay._tcp` for devices and
- * `_companion-link._tcp` for their Companion ports, then joins the two by address.
+ * Bonjour discovery of independent AirPlay, Companion, standalone MRP and legacy DMAP services.
+ * Joins services by stable identity, hostname, or overlapping usable addresses.
  */
 
 import { Bonjour, type Service } from 'bonjour-service';
+import { isIP } from 'node:net';
 
 /** Fields this library reads from an `_airplay._tcp` TXT record. */
 export interface AirPlayTxtRecord {
@@ -29,12 +30,24 @@ export function parseAirPlayTxt(txt: Record<string, string>): AirPlayTxtRecord {
 export interface DiscoveredDeviceInfo {
   name: string;
   address: string;
-  /** AirPlay port. */
+  /** AirPlay port; zero when AirPlay was not advertised. */
   port: number;
   deviceId: string;
   model: string;
   /** Companion-link port, when a matching `_companion-link._tcp` service was found. */
   companionPort?: number;
+  /** Standalone MRP port, independent of the AirPlay tunnel. */
+  mrpPort?: number;
+  /** False for standalone advertisements on tvOS 15+ (Darwin build 19+). */
+  mrpEnabled?: boolean;
+  /** Stable advertised IDs across services, for matching stored credentials. */
+  identifiers?: string[];
+  /** Service-specific endpoints; addresses can differ across address families. */
+  companionAddress?: string;
+  mrpAddress?: string;
+  /** Legacy DMAP endpoint, independent of AirPlay. */
+  dmapPort?: number;
+  dmapAddress?: string;
 }
 
 /** An Apple TV found by scan(). */
@@ -45,6 +58,18 @@ export class DiscoveredDevice {
   readonly deviceId: string;
   readonly model: string;
   companionPort?: number;
+  /** Standalone MRP port, independent of the AirPlay tunnel. */
+  mrpPort?: number;
+  /** False for standalone advertisements on tvOS 15+ (Darwin build 19+). */
+  mrpEnabled?: boolean;
+  /** Stable advertised IDs across services, for matching stored credentials. */
+  identifiers?: string[];
+  /** Service-specific endpoints; addresses can differ across address families. */
+  companionAddress?: string;
+  mrpAddress?: string;
+  /** Legacy DMAP endpoint, independent of AirPlay. */
+  dmapPort?: number;
+  dmapAddress?: string;
 
   constructor(info: DiscoveredDeviceInfo) {
     this.name = info.name;
@@ -53,6 +78,13 @@ export class DiscoveredDevice {
     this.deviceId = info.deviceId;
     this.model = info.model;
     this.companionPort = info.companionPort;
+    this.mrpPort = info.mrpPort;
+    this.mrpEnabled = info.mrpEnabled;
+    this.identifiers = info.identifiers ?? [info.deviceId];
+    this.companionAddress = info.companionAddress;
+    this.mrpAddress = info.mrpAddress;
+    this.dmapPort = info.dmapPort;
+    this.dmapAddress = info.dmapAddress;
   }
 
   /** `name (address:port) [model]`. */
@@ -74,88 +106,88 @@ export interface ScanOptions {
   until?: (device: DiscoveredDevice) => boolean;
 }
 
-/** Routable IPv4 addresses, in advertised order (link-local 169.254.x.x excluded). */
+/** Usable unicast addresses, preferring IPv4 for compatibility; scoped IPv6 is preserved. */
 function usableAddresses(service: Service): string[] {
-  return (service.addresses ?? []).filter((a) => a.includes('.') && !a.startsWith('169.254'));
+  return (service.addresses ?? []).filter((address) => {
+    const family = isIP(address);
+    if (family === 4) return !/^(169\.254\.|127\.|0\.|22[4-9]\.|23\d\.)/.test(address);
+    if (family !== 6) return false;
+    const ip = address.split('%')[0].toLowerCase();
+    return ip !== '::' && ip !== '::1' && !ip.startsWith('ff') &&
+      (!/^fe[89ab]/.test(ip) || address.includes('%'));
+  }).sort((a, b) => (isIP(a) === 4 ? 0 : 1) - (isIP(b) === 4 ? 0 : 1));
 }
 
-/**
- * Browse the local network for `timeout` ms (or until `until` matches) and return discovered Apple TVs
- * sorted by name. Devices are deduplicated by AirPlay device ID (or address);
- * services with no routable IPv4 address are skipped. Never rejects.
- */
+/** Browse supported services and join stable aliases. Callback errors reject after stopping all browsers. */
 export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[]> {
-  const timeout = options.timeout ?? 5000;
-  const devices = new Map<string, DiscoveredDevice>();
-  const companionPorts = new Map<string, number>();
-  const airplayAddresses = new Map<string, string[]>();
-
-  return new Promise((resolve) => {
+  type RecordEntry = { type: string; service: Service; addresses: string[]; txt: Record<string, string>; ids: string[] };
+  const records: RecordEntry[] = [];
+  return new Promise((resolve, reject) => {
     const instance = new Bonjour();
     let done = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const browsers: ReturnType<Bonjour['find']>[] = [];
 
-    // Join devices to Companion ports (independent of advertisement order) and apply the filter.
     const collect = (): DiscoveredDevice[] => {
-      for (const [key, device] of devices) {
-        const match = airplayAddresses.get(key)!.find((a) => companionPorts.has(a));
-        device.companionPort = match === undefined ? undefined : companionPorts.get(match);
+      const groups: RecordEntry[][] = [];
+      for (const record of records) {
+        const matching = groups.filter((group) => group.some((other) =>
+          record.ids.some((id) => other.ids.some((candidate) => candidate.toLowerCase() === id.toLowerCase())) ||
+          (record.service.host && record.service.host.toLowerCase() === other.service.host?.toLowerCase()) ||
+          record.addresses.some((address) => other.addresses.includes(address))));
+        const merged = [record, ...matching.flat()];
+        for (const group of matching) groups.splice(groups.indexOf(group), 1);
+        groups.push(merged);
       }
-      const all = Array.from(devices.values());
-      return options.filter ? all.filter(options.filter) : all;
+      const devices = groups.map((group) => {
+        const airplay = group.find((r) => r.type === 'airplay');
+        const companion = group.find((r) => r.type === 'companion-link');
+        const mrp = group.find((r) => r.type === 'mediaremotetv');
+        const dmap = group.find(r => r.type === 'touch-able') ?? group.find(r => r.type === 'appletv-v2');
+        const primary = airplay ?? mrp ?? dmap ?? companion!;
+        const identifiers = [...new Set([airplay, mrp, dmap, companion].flatMap((r) => r?.ids ?? []))];
+        const build = Number(mrp?.txt.systembuildversion?.match(/^(\d+)[A-Z]/)?.[1]);
+        return new DiscoveredDevice({
+          name: primary.txt.ctln ?? primary.txt.name ?? primary.service.name ?? 'Unknown',
+          address: primary.addresses[0], port: airplay?.service.port ?? 0,
+          deviceId: identifiers[0] ?? primary.service.host ?? primary.service.fqdn ?? primary.service.name,
+          identifiers,
+          model: airplay?.txt.model ?? companion?.txt.rpmd ?? (dmap ? 'Legacy DMAP device' : 'Unknown'),
+          dmapPort: dmap?.service.port, dmapAddress: dmap?.addresses[0],
+          companionPort: companion?.service.port, companionAddress: companion?.addresses[0],
+          mrpPort: mrp?.service.port, mrpAddress: mrp?.addresses[0],
+          mrpEnabled: mrp ? !(build >= 19) : undefined,
+        });
+      });
+      return options.filter ? devices.filter(options.filter) : devices;
     };
-
-    const finish = (): void => {
-      if (done) return;
+    const cleanup = (): void => {
       done = true;
       clearTimeout(timer);
-      browser.stop();
-      companionBrowser.stop();
+      for (const browser of browsers) browser.stop();
       instance.destroy();
-      resolve(collect().sort((a, b) => a.name.localeCompare(b.name)));
     };
-
-    const check = (): void => {
-      if (!done && options.until && collect().some(options.until)) finish();
+    const fail = (error: unknown): void => { if (!done) { cleanup(); reject(error); } };
+    const finish = (): void => {
+      if (done) return;
+      try {
+        const result = collect().sort((a, b) => a.name.localeCompare(b.name));
+        cleanup(); resolve(result);
+      } catch (error) { fail(error); }
     };
-
-    const browser = instance.find({ type: 'airplay', protocol: 'tcp' }, (service: Service) => {
-      const addresses = usableAddresses(service);
-      const address = addresses[0];
-      if (!address) return;
-
-      const txt = service.txt as Record<string, string>;
-      const parsed = parseAirPlayTxt(txt);
-      const key = parsed.deviceId || address;
-
-      if (!devices.has(key)) {
-        devices.set(
-          key,
-          new DiscoveredDevice({
-            name: service.name,
-            address,
-            port: service.port,
-            deviceId: parsed.deviceId,
-            model: parsed.model,
-          }),
-        );
-        airplayAddresses.set(key, addresses);
-      }
-      check();
-    });
-
-    const companionBrowser = instance.find(
-      { type: 'companion-link', protocol: 'tcp' },
-      (service: Service) => {
-        // A multihomed TV may list its addresses in a different order per service,
-        // so index the port under every address rather than only the first.
-        for (const address of usableAddresses(service)) {
-          companionPorts.set(address, service.port);
-        }
-        check();
-      },
-    );
-
-    timer = setTimeout(finish, timeout);
+    for (const type of ['airplay', 'companion-link', 'mediaremotetv', 'touch-able', 'appletv-v2']) {
+      browsers.push(instance.find({ type, protocol: 'tcp' }, (service: Service) => {
+        if (done) return;
+        const addresses = usableAddresses(service);
+        if (!addresses.length || !service.port) return;
+        const txt = Object.fromEntries(Object.entries(service.txt ?? {}).map(([k, v]) => [k.toLowerCase(), String(v)]));
+        if (type === 'companion-link' && txt.rpmd && !txt.rpmd.startsWith('AppleTV')) return;
+        const ids = (type === 'airplay' ? [txt.deviceid] : type === 'companion-link' ? [txt.rpmrtid] : type === 'mediaremotetv' ? [txt.uniqueidentifier, txt.macaddress] : [service.name]).filter((id): id is string => !!id);
+        records.push({ type, service, addresses, txt, ids });
+        try { if (options.until && collect().some(options.until)) finish(); }
+        catch (error) { fail(error); }
+      }));
+    }
+    timer = setTimeout(finish, options.timeout ?? 5000);
   });
 }

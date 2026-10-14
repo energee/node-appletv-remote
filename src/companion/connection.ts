@@ -74,10 +74,13 @@ function envelope(content: OpackDict, type: number): OpackDict {
 
 /**
  * An authenticated, encrypted Companion link to one Apple TV.
- * Emits `event` ({ identifier, data }) for unsolicited messages, plus `error` and `close`.
+ * Emits `event` ({ identifier, data }) for unsolicited messages, plus `error` (when observed) and `close`.
  */
 export class CompanionConnection extends EventEmitter {
   private socket: Socket | undefined;
+  private closed = false;
+  private connecting = false;
+  private setupAbort?: AbortController;
   private session: CompanionSession | undefined;
   private buffer: Buffer = Buffer.alloc(0);
   // A real TV may treat transaction zero as unacknowledged traffic.
@@ -100,18 +103,34 @@ export class CompanionConnection extends EventEmitter {
 
   /**
    * Open the TCP socket and run pair-verify; resolves once traffic is encrypted.
-   * @throws on socket errors, a bad server signature, a pair-verify error, or a frame timeout
+   * Concurrent connect calls reject; await canceled setup before reusing this instance.
+   * @throws on cancellation, socket errors, a bad server signature, or a frame timeout
    */
   async connect(): Promise<void> {
-    await this.openSocket();
-    await this.pairVerify();
+    if (this.connecting || this.socket) throw new Error('Companion already connected');
+    this.connecting = true;
+    this.closed = false;
+    this.setupAbort = new AbortController();
+    try {
+      await this.openSocket();
+      await this.pairVerify();
+      if (this.closed) throw new Error('Companion closed during setup');
+    } catch (err) {
+      this.close();
+      throw err;
+    } finally {
+      this.connecting = false;
+    }
   }
 
   /** Connect the socket (Nagle off, 5 s timeout) and wire its events; later errors are re-emitted as `error`. */
   private async openSocket(): Promise<void> {
-    this.socket = await connectSocket(this.host, this.port);
-    this.socket.on('error', (err) => this.emit('error', err));
-    this.socket.on('close', () => this.emit('close'));
+    const socket = await connectSocket(this.host, this.port, 5000, this.setupAbort?.signal);
+    if (this.closed) { socket.destroy(); throw new Error('Companion closed during setup'); }
+    this.socket = socket;
+    socket.on('error', err => { if (this.socket === socket) this.fail(err); });
+    socket.on('close', () => { if (this.socket === socket) this.close(); });
+    socket.on('end', () => { if (this.socket === socket) this.close(); });
     this.socket.on('data', (data: Buffer) => this.onData(data));
   }
 
@@ -165,10 +184,11 @@ export class CompanionConnection extends EventEmitter {
       [TlvTag.SeqNo]: Buffer.from([0x01]),
       [TlvTag.PublicKey]: ephemeralPubRaw,
     });
-    this.sendPairingData(FrameType.PV_Start, m1, new Map([['_auTy', 4]]));
-
-    // M2: Receive server ephemeral key + encrypted proof
-    const m2Data = await this.receivePairingData(FrameType.PV_Next);
+    // Register before writing: a write failure or immediate reply must settle this waiter.
+    const m2Response = this.receivePairingData(FrameType.PV_Next);
+    try { this.sendPairingData(FrameType.PV_Start, m1, new Map([['_auTy', 4]])); }
+    catch (err) { this.fail(err); }
+    const m2Data = await m2Response;
     const m2 = tlvDecode(m2Data);
 
     const serverEphemeralPub = m2[TlvTag.PublicKey];
@@ -242,10 +262,11 @@ export class CompanionConnection extends EventEmitter {
       [TlvTag.SeqNo]: Buffer.from([0x03]),
       [TlvTag.EncryptedData]: encryptedData,
     });
-    this.sendPairingData(FrameType.PV_Next, m3);
-
-    // M4: Wait for acknowledgement
-    const m4Data = await this.receivePairingData(FrameType.PV_Next);
+    if (this.closed) throw new Error('Companion closed during setup');
+    const m4Response = this.receivePairingData(FrameType.PV_Next);
+    try { this.sendPairingData(FrameType.PV_Next, m3); }
+    catch (err) { this.fail(err); }
+    const m4Data = await m4Response;
     const m4 = tlvDecode(m4Data);
     const m4Error = m4[TlvTag.Error];
     if (m4Error && m4Error[0] !== 0) {
@@ -266,6 +287,7 @@ export class CompanionConnection extends EventEmitter {
       32,
     );
 
+    if (this.closed) throw new Error('Companion closed during setup');
     this.session = new CompanionSession(outputKey, inputKey);
   }
 
@@ -293,8 +315,6 @@ export class CompanionConnection extends EventEmitter {
 
     const payload = opackEncode(message);
     const encrypted = this.session.encrypt(FrameType.E_OPACK, payload);
-    this.writeRaw(encrypted);
-
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingRequests.delete(tid);
@@ -315,6 +335,8 @@ export class CompanionConnection extends EventEmitter {
           reject(err);
         },
       });
+      try { this.writeRaw(encrypted); }
+      catch (err) { this.fail(err); }
     });
   }
 
@@ -361,10 +383,17 @@ export class CompanionConnection extends EventEmitter {
     this.writeRaw(encrypted);
   }
 
-  /** Reject every pending request, release reserved IDs, and destroy the socket. */
-  close(): void {
+  /** Cancel TCP/setup, reject pending work, and destroy the socket.
+   * Idempotent; emits close for partial setup once a socket was installed, even before connect resolves.
+   */
+  close(reason = new Error('Connection closed')): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.setupAbort?.abort();
+    const hadSocket = !!this.socket;
+    for (const entry of this.pendingFrameResolvers.splice(0)) entry.reject(reason);
     for (const [, pending] of this.pendingRequests) {
-      pending.reject(new Error('Connection closed'));
+      pending.reject(reason);
     }
     this.pendingRequests.clear();
     for (const timer of this.timedOutIds.values()) clearTimeout(timer);
@@ -372,15 +401,29 @@ export class CompanionConnection extends EventEmitter {
     this.socket?.destroy();
     this.socket = undefined;
     this.session = undefined;
+    this.buffer = Buffer.alloc(0);
+    if (hadSocket) this.emit('close');
   }
 
-  /** Write bytes as-is; a no-op once the socket is gone. */
+  /** Terminate a failed transport and notify observers after pending work has settled. */
+  private fail(cause: unknown): void {
+    if (this.closed) return;
+    const err = cause instanceof Error ? cause : new Error(String(cause));
+    this.close(err);
+    if (this.listenerCount('error')) this.emit('error', err);
+  }
+
+  /** Write bytes as-is; write errors terminate the connection and reject pending work; synchronous errors also throw. */
   private writeRaw(data: Buffer): void {
-    this.socket?.write(data);
+    if (!this.socket) throw new Error('Companion not connected');
+    const socket = this.socket;
+    try { socket.write(data, err => { if (err && this.socket === socket) this.fail(err); }); }
+    catch (err) { this.fail(err); throw err; }
   }
 
   /** Buffer socket data and route it to the plaintext or encrypted frame handler. */
   private onData(data: Buffer): void {
+    if (this.closed) return;
     this.buffer = Buffer.concat([this.buffer, data]);
 
     if (!this.session) {
@@ -397,6 +440,7 @@ export class CompanionConnection extends EventEmitter {
   private pendingFrameResolvers: Array<{
     type: FrameType;
     resolve: (frame: Frame) => void;
+    reject: (err: Error) => void;
   }> = [];
 
   /**
@@ -407,6 +451,7 @@ export class CompanionConnection extends EventEmitter {
     return new Promise((resolve, reject) => {
       const entry = {
         type,
+        reject: (err: Error): void => { clearTimeout(timer); reject(err); },
         resolve: (frame: Frame): void => {
           clearTimeout(timer);
           resolve(frame);
@@ -444,7 +489,7 @@ export class CompanionConnection extends EventEmitter {
 
   /**
    * Decrypt and dispatch every complete frame in the buffer. A decrypt or decode failure
-   * emits `error` and skips that frame. The frame type byte is not checked.
+   * terminates the connection and rejects pending work. The frame type byte is not checked.
    */
   private processEncryptedFrames(): void {
     // Encrypted frames: 4-byte header + ciphertext + 16-byte tag.
@@ -468,7 +513,8 @@ export class CompanionConnection extends EventEmitter {
         const decoded = opackDecode(plaintext);
         this.handleMessage(decoded);
       } catch (e) {
-        this.emit('error', new Error(`Companion decrypt error: ${e}`));
+        this.fail(new Error(`Companion decrypt error: ${e}`));
+        return;
       }
     }
   }

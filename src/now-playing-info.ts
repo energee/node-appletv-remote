@@ -1,5 +1,5 @@
 /**
- * Now-playing snapshot built from an MRP SetState message, emitted by AppleTV
+ * Normalized now-playing snapshot built from MRP direct and queue metadata, emitted by AppleTV
  * as its `nowPlaying` event.
  */
 
@@ -15,6 +15,9 @@ export enum PlaybackState {
 
 /** Track metadata and playback position for the currently playing item. */
 export class NowPlayingInfo {
+  /** False when the active player has no current metadata/item; separate from Stopped. */
+  readonly hasPlayback: boolean;
+  readonly playerIdentifier: string;
   readonly title: string;
   readonly artist: string;
   readonly album: string;
@@ -30,13 +33,16 @@ export class NowPlayingInfo {
 
   /**
    * Missing fields default to empty strings, 0, or PlaybackState.Unknown.
-   * @param setStatePayload The SetStateMessage; supplies playback state, app name and bundle ID.
-   * @param nowPlayingPayload Its `nowPlayingInfo` field; supplies track metadata and timing.
+   * @param setStatePayload State context; supplies playback state, presence, player and app identity.
+   * @param nowPlayingPayload Normalized direct/queue fields; supplies track metadata and timing.
    */
   constructor(
     setStatePayload: Record<string, unknown>,
     nowPlayingPayload: Record<string, unknown>,
   ) {
+    this.hasPlayback = (setStatePayload.hasPlayback as boolean) ?? (Object.keys(nowPlayingPayload).length > 0);
+    const path = setStatePayload.playerPath as { player?: { identifier?: string } } | undefined;
+    this.playerIdentifier = path?.player?.identifier ?? '';
     this.title = (nowPlayingPayload.title as string) ?? '';
     this.artist = (nowPlayingPayload.artist as string) ?? '';
     this.album = (nowPlayingPayload.album as string) ?? '';

@@ -1,0 +1,12 @@
+// Runtime player message from pyatv v0.18.0 (d88abc960e188d3cd2498d19117e75d7711d8600).
+syntax = "proto2";
+import "ProtocolMessage.proto";
+import "PlayerPath.proto";
+import "SupportedCommands.proto";
+extend ProtocolMessage {
+  optional SetDefaultSupportedCommandsMessage setDefaultSupportedCommandsMessage = 75;
+}
+message SetDefaultSupportedCommandsMessage {
+  optional SupportedCommands supportedCommands = 2;
+  optional PlayerPath playerPath = 9;
+}

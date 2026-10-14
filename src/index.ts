@@ -1,11 +1,11 @@
 /**
  * Public entry point for node-atv: re-exports device discovery, the AppleTV
- * client, pairing, the Companion and AirPlay/MRP transports, and their types.
+ * client selection, pairing, Companion, AirPlay/MRP and DMAP APIs.
  */
 
 export { scan } from './discovery.js';
-export { AppleTV, Key, TextInputActionType, ShuffleState, RepeatState, PowerState } from './appletv.js';
-export type { KeyboardInfo, TextInputEvent, CompanionEvent, App, UserAccount, ConnectOptions } from './appletv.js';
+export { AppleTV, Key, TextInputActionType, ShuffleState, RepeatState, PowerState, TouchAction } from './appletv.js';
+export type { KeyboardInfo, TextInputEvent, CompanionEvent, App, UserAccount, ConnectOptions, Feature, FeatureAvailability, InputAction, OutputDevice } from './appletv.js';
 export { CompanionConnection } from './companion/connection.js';
 export { PairSetup } from './auth/pair-setup.js';
 export { CompanionPairSetup } from './companion/pair-setup.js';
@@ -20,4 +20,36 @@ export { SupportedCommand, Command } from './supported-command.js';
 export { Message } from './message.js';
 export { AirPlayConnection } from './connection.js';
 export type { HAPCredentials } from './auth/types.js';
-export type { ScanOptions, DiscoveredDevice } from './discovery.js';
+export type { ScanOptions, DiscoveredDevice, DiscoveredDeviceInfo } from './discovery.js';
+
+export { LegacyMRPConnection } from './mrp/legacy-connection.js';
+export { MRPConnection } from './mrp/connection.js';
+
+export { DmapClient } from './dmap/client.js';
+export type { DmapCapability } from './dmap/client.js';
+export { DmapPairing } from './dmap/pairing.js';
+export type { DmapPairingOptions } from './dmap/pairing.js';
+import { AppleTV } from './appletv.js';
+import { DmapClient } from './dmap/client.js';
+import type { DiscoveredDeviceInfo } from './discovery.js';
+
+/** Prefer usable modern AirPlay, then enabled standalone MRP, then DMAP; explicit DMAP never converts HAP credentials. */
+export function createClient(info: DiscoveredDeviceInfo, protocol: 'airplay' | 'mrp'): AppleTV;
+export function createClient(info: DiscoveredDeviceInfo, protocol: 'dmap'): DmapClient;
+export function createClient(info: DiscoveredDeviceInfo): AppleTV | DmapClient;
+export function createClient(info: DiscoveredDeviceInfo, protocol?: 'airplay' | 'mrp' | 'dmap'): AppleTV | DmapClient {
+  if (protocol !== undefined && !['airplay', 'mrp', 'dmap'].includes(protocol)) throw new Error('Unsupported protocol');
+  // AppleTV generations 1-3 advertise legacy AirPlay, not the AirPlay 2 MRP tunnel.
+  const modernAirPlay = !!info.port && !/^AppleTV[1-3],/.test(info.model);
+  const selected = protocol ?? (modernAirPlay ? 'airplay' : info.mrpPort && info.mrpEnabled !== false ? 'mrp' : info.dmapPort ? 'dmap' : 'airplay');
+  if (selected === 'dmap') return new DmapClient(info);
+  if (selected === 'mrp') {
+    if (!info.mrpPort || info.mrpEnabled === false) throw new Error('No enabled standalone MRP port available');
+    return new AppleTV({ ...info, port: 0 });
+  }
+  if (!info.port) throw new Error('No AirPlay port available');
+  return new AppleTV(info);
+}
+
+export { AirPlayPlaybackSession } from './airplay-playback.js';
+export type { AirPlayPlaybackStatus } from './airplay-playback.js';

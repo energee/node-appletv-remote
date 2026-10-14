@@ -100,12 +100,14 @@ export interface ParsedDataStreamFrame {
 
 /**
  * Parse one frame starting at `offset`. Returns null if the buffer does not yet hold the
- * whole frame. Plist parse errors are swallowed and reported as a frame with null payload.
+ * whole frame; sizes smaller than the header or above 16 MiB throw. Plist parse errors are swallowed and reported as a frame with null payload.
  */
 export function parseDataStreamFrame(buf: Buffer, offset = 0): ParsedDataStreamFrame | null {
   if (buf.length - offset < HEADER_SIZE) return null;
 
   const totalSize = buf.readUInt32BE(offset);
+  if (totalSize > 16 * 1024 * 1024) throw new Error('DataStream size limit exceeded');
+  if (totalSize < HEADER_SIZE) throw new Error(`DataStream size ${totalSize} is smaller than its header`);
   if (buf.length - offset < totalSize) return null;
 
   const messageTypeStr = buf.subarray(offset + 4, offset + 8).toString('ascii');

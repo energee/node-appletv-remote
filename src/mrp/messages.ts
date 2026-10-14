@@ -57,6 +57,8 @@ export enum MessageType {
   RemovePlayer = 54,
   UpdateClient = 55,
   UpdateContentItem = 56,
+  ModifyOutputContextRequest = 65,
+  ModifyOutputContextResponse = 66,
   SetDefaultSupportedCommands = 72,
 }
 
@@ -141,6 +143,16 @@ async function encodeMessage(
 
 /** Static builders that return encoded ProtocolMessage buffers ready to frame and send, plus `decode` for incoming ones. */
 export class MRPMessage {
+  /** Modify the shared audio presentation; paired fields support cluster-aware receivers. */
+  static async modifyOutputDevices(mode: 'add' | 'remove' | 'set', devices: string[]): Promise<Buffer> {
+    const field = { add: 'addingDevices', remove: 'removingDevices', set: 'settingDevices' }[mode];
+    return encodeMessage(MessageType.ModifyOutputContextRequest, {
+      key: '.modifyOutputContextRequestMessage', typeName: 'ModifyOutputContextRequestMessage',
+      fields: { type: 1, [field]: devices,
+        [`clusterAware${field[0].toUpperCase()}${field.slice(1)}`]: devices },
+    });
+  }
+
   /** DeviceInfo: the first message after connecting, describing this client to the Apple TV. */
   static async deviceInfo(options: DeviceInfoOptions): Promise<Buffer> {
     return encodeMessage(MessageType.DeviceInfo, {
@@ -250,8 +262,8 @@ export class MRPMessage {
     });
   }
 
-  /** CryptoPairing: wraps a HAP pairing TLV for pairing carried inside MRP. */
-  static async cryptoPairing(pairingData: Buffer): Promise<Buffer> {
+  /** CryptoPairing: wraps HAP TLV; isPairing selects state 2 for pair-setup M1 only. */
+  static async cryptoPairing(pairingData: Buffer, isPairing = false): Promise<Buffer> {
     // CryptoPairing messages must NOT include an identifier.
     // pyatv uses generate_identifier=False; the Apple TV never echoes
     // identifiers for crypto messages and may ignore requests that have one.
@@ -265,7 +277,7 @@ export class MRPMessage {
           status: 0,
           isRetrying: false,
           isUsingSystemPairing: false,
-          state: 0,
+          state: isPairing ? 2 : 0,
         },
       },
       { omitIdentifier: true },

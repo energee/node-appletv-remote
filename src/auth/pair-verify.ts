@@ -1,8 +1,8 @@
 /**
- * Standalone HAP pair-verify over HTTP POST /pair-verify. Proves both sides hold
+ * HAP pair-verify over HTTP POST /pair-verify or an injected MRP TLV carrier. Proves both sides hold
  * the long-term keys from pair-setup and derives the session's ChaCha20 keys.
  * AirPlayConnection runs its own copy of this exchange on its socket; within the
- * library this class is currently exercised only by tests.
+ * library this class authenticates standalone legacy MRP and URL playback.
  */
 
 import {
@@ -53,14 +53,14 @@ function ed25519PrivateKeyFromSeed(seed: Buffer): KeyObject {
 
 /** One pair-verify attempt using previously stored HAP credentials. */
 export class PairVerify {
-  private http: PersistentHttp;
+  private http: Pick<PersistentHttp, 'post' | 'destroy'>;
   private credentials: HAPCredentials;
   private ephemeralPrivateKey: KeyObject;
   private ephemeralPublicKeyRaw: Buffer;
 
-  /** Opens a persistent HTTP connection and generates a fresh ephemeral X25519 key pair. */
-  constructor(host: string, port: number, credentials: HAPCredentials) {
-    this.http = new PersistentHttp(host, port);
+  /** Generate ephemeral keys; use the provided TLV carrier or persistent AirPlay HTTP. */
+  constructor(host: string, port: number, credentials: HAPCredentials, transport?: Pick<PersistentHttp, 'post' | 'destroy'>) {
+    this.http = transport ?? new PersistentHttp(host, port);
     this.credentials = credentials;
 
     const { publicKey, privateKey } = generateKeyPairSync('x25519');
@@ -79,11 +79,11 @@ export class PairVerify {
   }
 
   /**
-   * Run M1–M4, then close the HTTP connection whether or not it succeeded.
+   * Run M1–M4, then destroy the carrier whether or not it succeeded. Caller-owned sockets supply a no-op destroy.
    * @returns `outputKey` (Control-Write, for data we send), `inputKey` (Control-Read,
    *   for data we receive), and the raw X25519 shared secret.
    * @throws if M2 is malformed, the server signature does not match the stored
-   *   serverLTPK, or M4 carries a non-zero error.
+   *   serverLTPK, or M4 carries an error or lacks state 4.
    */
   async verify(): Promise<{ outputKey: Buffer; inputKey: Buffer; sharedSecret: Buffer }> {
     try {
@@ -93,7 +93,7 @@ export class PairVerify {
     }
   }
 
-  /** The M1–M4 exchange itself; `verify` wraps it so the connection is always closed. */
+  /** The M1–M4 exchange itself; `verify` always invokes carrier cleanup. */
   private async runVerify(): Promise<{ outputKey: Buffer; inputKey: Buffer; sharedSecret: Buffer }> {
     // Step 1: Send M1
     const m1 = this.buildM1();
@@ -188,6 +188,8 @@ export class PairVerify {
     if (m4Error && m4Error[0] !== 0) {
       throw new Error(`Pair-verify M4 error: ${m4Error[0]}`);
     }
+
+    if (m4[TlvTag.SeqNo]?.[0] !== 4) throw new Error('Unexpected pair-verify M4 state');
 
     // Step 9: Derive final encryption keys
     const outputKey = await hkdfSha512(

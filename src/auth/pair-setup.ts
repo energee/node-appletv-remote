@@ -1,6 +1,6 @@
 /**
  * HAP pair-setup (SRP-6a with the PIN shown on screen) for the AirPlay/MRP channel.
- * Runs the M1–M6 exchange over HTTP POST /pair-setup and returns long-term
+ * Runs M1–M6 over HTTP POST /pair-setup or an injected standalone MRP TLV carrier, returning long-term
  * credentials that PairVerify / AirPlayConnection use on later connections.
  */
 
@@ -17,16 +17,16 @@ import type { HAPCredentials } from './types.js';
  * Ed25519 long-term key pair, which end up in the returned credentials.
  */
 export class PairSetup {
-  private http: PersistentHttp;
+  private http: Pick<PersistentHttp, 'post' | 'destroy'>;
   private clientId: string;
   private edPrivateKeyRaw: Buffer;
   private edPublicKeyRaw: Buffer;
   private srp = new SRPClient();
   private sessionKey: Buffer | undefined;
 
-  /** Opens a persistent HTTP connection and generates this controller's identity and Ed25519 key pair. */
-  constructor(host: string, port: number) {
-    this.http = new PersistentHttp(host, port);
+  /** Generate controller keys; use the provided TLV carrier or persistent AirPlay HTTP. */
+  constructor(host: string, port: number, transport?: Pick<PersistentHttp, 'post' | 'destroy'>) {
+    this.http = transport ?? new PersistentHttp(host, port);
     this.clientId = randomUUID();
 
     const { publicKey, privateKey } = generateKeyPairSync('ed25519');

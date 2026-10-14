@@ -780,7 +780,6 @@ export const MRP_SCHEMA: Record<string, unknown> = {
       "edition": "proto2",
       "fields": {
         "uniqueIdentifier": {
-          "rule": "required",
           "type": "string",
           "id": 1
         },
@@ -794,12 +793,10 @@ export const MRP_SCHEMA: Record<string, unknown> = {
           "id": 3
         },
         "systemBuildVersion": {
-          "rule": "required",
           "type": "string",
           "id": 4
         },
         "applicationBundleIdentifier": {
-          "rule": "required",
           "type": "string",
           "id": 5
         },
@@ -808,7 +805,6 @@ export const MRP_SCHEMA: Record<string, unknown> = {
           "id": 6
         },
         "protocolVersion": {
-          "rule": "required",
           "type": "int32",
           "id": 7
         },
@@ -888,6 +884,11 @@ export const MRP_SCHEMA: Record<string, unknown> = {
           "type": "string",
           "id": 27
         },
+        "groupedDevices": {
+          "rule": "repeated",
+          "type": "DeviceInfoMessage",
+          "id": 28
+        },
         "isGroupLeader": {
           "type": "bool",
           "id": 29
@@ -912,6 +913,14 @@ export const MRP_SCHEMA: Record<string, unknown> = {
         "linkAgent": {
           "type": "string",
           "id": 34
+        },
+        "clusterID": {
+          "type": "string",
+          "id": 35
+        },
+        "supportsOutputContextSync": {
+          "type": "bool",
+          "id": 49
         }
       }
     },
@@ -977,6 +986,51 @@ export const MRP_SCHEMA: Record<string, unknown> = {
         "identifier": {
           "type": "string",
           "id": 5
+        }
+      }
+    },
+    "modifyOutputContextRequestMessage": {
+      "edition": "proto2",
+      "type": "ModifyOutputContextRequestMessage",
+      "id": 52,
+      "extend": "ProtocolMessage"
+    },
+    "ModifyOutputContextRequestMessage": {
+      "edition": "proto2",
+      "fields": {
+        "type": {
+          "type": "int32",
+          "id": 1
+        },
+        "addingDevices": {
+          "rule": "repeated",
+          "type": "string",
+          "id": 2
+        },
+        "removingDevices": {
+          "rule": "repeated",
+          "type": "string",
+          "id": 3
+        },
+        "settingDevices": {
+          "rule": "repeated",
+          "type": "string",
+          "id": 4
+        },
+        "clusterAwareAddingDevices": {
+          "rule": "repeated",
+          "type": "string",
+          "id": 5
+        },
+        "clusterAwareRemovingDevices": {
+          "rule": "repeated",
+          "type": "string",
+          "id": 6
+        },
+        "clusterAwareSettingDevices": {
+          "rule": "repeated",
+          "type": "string",
+          "id": 7
         }
       }
     },
@@ -1341,13 +1395,17 @@ export const MRP_SCHEMA: Record<string, unknown> = {
           "type": "string",
           "id": 2
         },
-        "priority": {
+        "errorCode": {
           "type": "int32",
           "id": 4
         },
         "timestamp": {
           "type": "uint64",
           "id": 5
+        },
+        "errorDescription": {
+          "type": "string",
+          "id": 78
         }
       },
       "extensions": [
@@ -1405,8 +1463,40 @@ export const MRP_SCHEMA: Record<string, unknown> = {
             "REMOVE_PLAYER_MESSAGE": 54,
             "UPDATE_CLIENT_MESSAGE": 55,
             "UPDATE_CONTENT_ITEM_MESSAGE": 56,
+            "MODIFY_OUTPUT_CONTEXT_REQUEST_MESSAGE": 65,
+            "MODIFY_OUTPUT_CONTEXT_RESPONSE_MESSAGE": 66,
             "SET_DEFAULT_SUPPORTED_COMMANDS_MESSAGE": 72
           }
+        }
+      }
+    },
+    "removeClientMessage": {
+      "edition": "proto2",
+      "type": "RemoveClientMessage",
+      "id": 57,
+      "extend": "ProtocolMessage"
+    },
+    "RemoveClientMessage": {
+      "edition": "proto2",
+      "fields": {
+        "client": {
+          "type": "NowPlayingClient",
+          "id": 1
+        }
+      }
+    },
+    "removePlayerMessage": {
+      "edition": "proto2",
+      "type": "RemovePlayerMessage",
+      "id": 58,
+      "extend": "ProtocolMessage"
+    },
+    "RemovePlayerMessage": {
+      "edition": "proto2",
+      "fields": {
+        "playerPath": {
+          "type": "PlayerPath",
+          "id": 1
         }
       }
     },
@@ -1456,6 +1546,34 @@ export const MRP_SCHEMA: Record<string, unknown> = {
         }
       }
     },
+    "sendCommandResultMessage": {
+      "edition": "proto2",
+      "type": "SendCommandResultMessage",
+      "id": 7,
+      "extend": "ProtocolMessage"
+    },
+    "SendCommandResultMessage": {
+      "edition": "proto2",
+      "fields": {
+        "sendError": {
+          "type": "uint32",
+          "id": 1
+        },
+        "handlerReturnStatus": {
+          "type": "uint32",
+          "id": 2
+        },
+        "handlerReturnStatusDatas": {
+          "rule": "repeated",
+          "type": "bytes",
+          "id": 3
+        },
+        "commandID": {
+          "type": "string",
+          "id": 4
+        }
+      }
+    },
     "sendHIDEventMessage": {
       "edition": "proto2",
       "type": "SendHIDEventMessage",
@@ -1496,6 +1614,25 @@ export const MRP_SCHEMA: Record<string, unknown> = {
         }
       }
     },
+    "setDefaultSupportedCommandsMessage": {
+      "edition": "proto2",
+      "type": "SetDefaultSupportedCommandsMessage",
+      "id": 75,
+      "extend": "ProtocolMessage"
+    },
+    "SetDefaultSupportedCommandsMessage": {
+      "edition": "proto2",
+      "fields": {
+        "supportedCommands": {
+          "type": "SupportedCommands",
+          "id": 2
+        },
+        "playerPath": {
+          "type": "PlayerPath",
+          "id": 9
+        }
+      }
+    },
     "setHiliteModeMessage": {
       "edition": "proto2",
       "type": "SetHiliteModeMessage",
@@ -1522,6 +1659,21 @@ export const MRP_SCHEMA: Record<string, unknown> = {
       "fields": {
         "client": {
           "type": "NowPlayingClient",
+          "id": 1
+        }
+      }
+    },
+    "setNowPlayingPlayerMessage": {
+      "edition": "proto2",
+      "type": "SetNowPlayingPlayerMessage",
+      "id": 51,
+      "extend": "ProtocolMessage"
+    },
+    "SetNowPlayingPlayerMessage": {
+      "edition": "proto2",
+      "fields": {
+        "playerPath": {
+          "type": "PlayerPath",
           "id": 1
         }
       }
