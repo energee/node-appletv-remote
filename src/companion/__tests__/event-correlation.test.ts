@@ -108,6 +108,38 @@ describe('Companion request and event correlation', () => {
     }
   });
 
+  it('wraps bare request content in the {_i, _t: 2, _c, _x} envelope', () => {
+    const { connection, requests } = fixture();
+    try {
+      connection.sendRequest('_systemInfo', new Map<OpackValue, OpackValue>([['_bf', 0]])).catch(() => {});
+      const sent = requests[0];
+      expect(sent.get('_i')).toBe('_systemInfo');
+      expect(sent.get('_t')).toBe(2);
+      expect(sent.get('_x')).toBe(1);
+      expect((sent.get('_c') as OpackDict).get('_bf')).toBe(0);
+      expect(sent.has('_bf')).toBe(false);
+    } finally { connection.close(); }
+  });
+
+  it('wraps bare message content as an event with _t: 1', () => {
+    const { connection, requests } = fixture();
+    try {
+      connection.sendMessage('_hidC', new Map<OpackValue, OpackValue>([['_hBtS', 1]]));
+      expect(requests[0].get('_t')).toBe(1);
+      expect((requests[0].get('_c') as OpackDict).get('_hBtS')).toBe(1);
+    } finally { connection.close(); }
+  });
+
+  it('sends a caller-built envelope unchanged apart from _i and _x', () => {
+    const { connection, requests } = fixture();
+    try {
+      connection.sendRequest('_ping', new Map<OpackValue, OpackValue>([['_t', 2], ['_c', new Map([['k', 1]])]])).catch(() => {});
+      expect(requests[0].get('_t')).toBe(2);
+      expect((requests[0].get('_c') as OpackDict).get('k')).toBe(1);
+      expect((requests[0].get('_c') as OpackDict).has('_c')).toBe(false);
+    } finally { connection.close(); }
+  });
+
   it('sends fire-and-forget messages even when every request ID is in use', () => {
     const { connection, requests } = fixture();
     try {

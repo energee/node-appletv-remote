@@ -58,6 +58,16 @@ const MAX_TRANSFER_ID = 127;
 /** How long a timed-out request ID stays reserved in case its reply arrives late. */
 const LATE_REPLY_WINDOW_MS = 30_000;
 
+/**
+ * Wrap content in the Companion envelope `{ _t, _c }`. Content that already has an envelope
+ * key (`_t`, `_c` or `_x`) is a prebuilt envelope and is copied as-is, so callers that built
+ * the envelope themselves keep working. Companion content keys never use these names.
+ */
+function envelope(content: OpackDict, type: number): OpackDict {
+  if (content.has('_t') || content.has('_c') || content.has('_x')) return new Map(content);
+  return new Map<OpackValue, OpackValue>([['_t', type], ['_c', content]]);
+}
+
 export class CompanionConnection extends EventEmitter {
   private socket: Socket | undefined;
   private session: CompanionSession | undefined;
@@ -252,6 +262,8 @@ export class CompanionConnection extends EventEmitter {
 
   /**
    * Send an OPACK request and wait for a correlated response.
+   * Bare content is wrapped as `{ _i, _t: 2, _c: content, _x }`; content that already has
+   * `_t`, `_c` or `_x` is treated as a prebuilt envelope and only gets `_i` and `_x`.
    */
   async sendRequest(
     identifier: string,
@@ -264,10 +276,11 @@ export class CompanionConnection extends EventEmitter {
 
     const tid = this.nextTransferId();
     if (tid === undefined) throw new Error('Companion has no free request ID');
-    content.set('_i', identifier);
-    content.set('_x', tid);
+    const message = envelope(content, 2);
+    message.set('_i', identifier);
+    message.set('_x', tid);
 
-    const payload = opackEncode(content);
+    const payload = opackEncode(message);
     const encrypted = this.session.encrypt(FrameType.E_OPACK, payload);
     this.writeRaw(encrypted);
 
@@ -313,21 +326,24 @@ export class CompanionConnection extends EventEmitter {
   }
 
   /**
-   * Send an OPACK message without waiting for a response. It shares the request ID counter;
-   * when every ID is in use it reuses one rather than throwing, since no reply is awaited.
+   * Send an OPACK message without waiting for a response. Bare content is wrapped as an
+   * event, `{ _i, _t: 1, _c: content, _x }`, unless it already has `_t`, `_c` or `_x`.
+   * It shares the request ID counter; when every ID is in use it reuses one rather than
+   * throwing, since no reply is awaited.
    */
   sendMessage(identifier: string, content: OpackDict): void {
     if (!this.session || !this.socket) {
       throw new Error('Companion not connected');
     }
 
-    content.set('_i', identifier);
-    if (!content.has('_x')) {
-      content.set('_x', this.nextTransferId() ?? this.transferId);
-    } else if (this.isIdInUse(content.get('_x')!)) {
-      throw new Error(`Companion _x ${content.get('_x')} is in use by a pending request`);
+    const message = envelope(content, 1);
+    message.set('_i', identifier);
+    if (!message.has('_x')) {
+      message.set('_x', this.nextTransferId() ?? this.transferId);
+    } else if (this.isIdInUse(message.get('_x')!)) {
+      throw new Error(`Companion _x ${message.get('_x')} is in use by a pending request`);
     }
-    const payload = opackEncode(content);
+    const payload = opackEncode(message);
     const encrypted = this.session.encrypt(FrameType.E_OPACK, payload);
     this.writeRaw(encrypted);
   }

@@ -150,6 +150,8 @@ const pairingSession = await atv.startPairing();
 const credentials = await pairingSession.finish(pin);
 ```
 
+`startPairing()` returns a `PairSetup`, which is also exported from the package entry.
+
 ### Pair with a device (Companion)
 
 ```typescript
@@ -272,7 +274,8 @@ src/
 ├── mrp/                 # MRP protobuf message builders
 ├── util/                # Crypto, TLV, HTTP, framing helpers
 ├── cli/                 # CLI entry point (atv command)
-└── proto/               # 66 protobuf schema files
+├── mrp/schema.ts        # MRP schema generated from proto/ (npm run gen:proto)
+└── proto/               # 66 protobuf schema files (build input only)
 ```
 
 ## Development
@@ -285,6 +288,16 @@ volume endpoints 0 and 1. Ordinary nonnegative safe integers keep their compact
 integer encoding. Negative numbers use float64; unsigned 64-bit identifiers
 must use `bigint` to preserve precision. The decoder accepts compact and extended
 object references in device replies.
+
+`sendCompanionRequest` and `sendCompanionMessage` wrap bare content in the Companion
+envelope `{ _i, _t, _c, _x }`, with `_t` 2 for a request and 1 for a message:
+
+```typescript
+const info = await atv.sendCompanionRequest('_systemInfo', new Map([['_bf', 0]]));
+```
+
+Content that already has `_t`, `_c` or `_x` is sent as a prebuilt envelope, with only
+`_i` and `_x` filled in.
 
 Encrypted Companion frame lengths include their authentication tag. Independent
 pyatv fixtures verify both encryption and streaming reception of these frames.
@@ -301,14 +314,19 @@ The compatibility tests include independent fixtures from pyatv 0.18.0 and the
 # Install dependencies
 npm install
 
-# Build
+# Build (regenerates src/mrp/schema.ts from src/proto)
 npm run build
 
-# Run tests (68 tests)
+# Run tests
 npm test
 
 # Run tests in watch mode
 npm run test:watch
 ```
+
+The MRP schema is compiled into `src/mrp/schema.ts`, so no `.proto` files are read at
+run time and the package can be bundled (e.g. `bun build`). After editing a `.proto` file
+or adding one to `PROTO_FILES` in `scripts/gen-proto.mjs`, run `npm run gen:proto` and
+commit the regenerated schema.
 
 Requires Node.js 18+ (ES2022 target, ESM modules).

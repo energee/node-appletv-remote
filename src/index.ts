@@ -2,6 +2,7 @@ export { scan } from './discovery.js';
 export { AppleTV, Key, TextInputActionType } from './appletv.js';
 export type { KeyboardInfo, TextInputEvent, CompanionEvent } from './appletv.js';
 export { CompanionConnection } from './companion/connection.js';
+export { PairSetup } from './auth/pair-setup.js';
 export { CompanionPairSetup } from './companion/pair-setup.js';
 export { CompanionSession } from './companion/companion-session.js';
 export { opackEncode, opackDecode, OpackFloat } from './companion/opack.js';

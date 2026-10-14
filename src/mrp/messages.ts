@@ -1,10 +1,6 @@
 import protobuf from 'protobufjs';
-import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROTO_DIR = join(__dirname, '..', 'proto');
+import { MRP_SCHEMA } from './schema.js';
 
 export enum MessageType {
   SendCommand = 1,
@@ -47,61 +43,23 @@ export enum MessageType {
   GenericMessage = 42,
   SendButtonEvent = 43,
   SetNowPlayingClient = 46,
+  SetNowPlayingPlayer = 47,
+  VolumeDidChange = 52,
+  RemoveClient = 53,
+  RemovePlayer = 54,
   UpdateClient = 55,
   UpdateContentItem = 56,
+  SetDefaultSupportedCommands = 72,
 }
 
-let rootPromise: Promise<protobuf.Root> | null = null;
-
-// Core proto files to load. Many of the proto files in the proto directory have
-// conflicting extension IDs or duplicate type names, so we load only the files
-// needed for our use cases. Additional files can be added as needed, but must
-// be checked for conflicts first.
-const PROTO_FILES = [
-  'ProtocolMessage.proto',
-  'DeviceInfoMessage.proto',
-  'SendCommandMessage.proto',
-  'CryptoPairingMessage.proto',
-  'ClientUpdatesConfigMessage.proto',
-  'SetStateMessage.proto',
-  'GetStateMessage.proto',
-  'NotificationMessage.proto',
-  'KeyboardMessage.proto',
-  'TextInputMessage.proto',
-  'GetKeyboardSessionMessage.proto',
-  'VolumeControlAvailabilityMessage.proto',
-  'WakeDeviceMessage.proto',
-  'SetConnectionStateMessage.proto',
-  'SetHiliteModeMessage.proto',
-  'SetNowPlayingClientMessage.proto',
-  'PlaybackQueueRequestMessage.proto',
-  'TransactionMessage.proto',
-  'UpdateClientMessage.proto',
-  'UpdateContentItemMessage.proto',
-  'SendButtonEventMessage.proto',
-  'SendHIDEventMessage.proto',
-];
+// The MRP schema is compiled from src/proto into ./schema.ts by `npm run gen:proto`, so no
+// .proto files are read at run time and bundlers (e.g. `bun build`) see a plain module.
+// To support another message, add its file to PROTO_FILES in scripts/gen-proto.mjs.
+let root: protobuf.Root | null = null;
 
 async function loadRoot(): Promise<protobuf.Root> {
-  if (!rootPromise) {
-    rootPromise = (async () => {
-      const root = new protobuf.Root();
-      root.resolvePath = (_origin: string, target: string) => {
-        // If target is already absolute, return as-is
-        if (target.startsWith('/')) return target;
-        return join(PROTO_DIR, target);
-      };
-
-      await root.load(
-        PROTO_FILES,
-        { keepCase: true },
-      );
-
-      root.resolveAll();
-      return root;
-    })();
-  }
-  return rootPromise;
+  root ??= protobuf.Root.fromJSON(MRP_SCHEMA as protobuf.INamespace);
+  return root;
 }
 
 export const HID_KEY_MAP: Record<string, { usagePage: number; usage: number }> = {

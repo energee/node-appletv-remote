@@ -6,7 +6,8 @@
   "types": "dist/index.d.ts",
   "type": "module",
   "scripts": {
-    "build": "tsc && rm -rf dist/proto && cp -r src/proto dist/proto",
+    "build": "npm run gen:proto && rm -rf dist && tsc",
+    "gen:proto": "node scripts/gen-proto.mjs",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest"
