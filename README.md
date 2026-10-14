@@ -415,3 +415,5 @@ npm test             # or npm run test:watch
 ```
 
 The MRP schema is compiled into `src/mrp/schema.ts`, so no `.proto` files are read at run time and the package bundles cleanly. After editing a `.proto` (or adding one to `PROTO_FILES` in `scripts/gen-proto.mjs`), run `npm run gen:proto` and commit the result.
+
+Use `protobufjs >=8.8.1` within major 8; the manifest and pnpm lockfile exclude older vulnerable releases. Fresh npm installs and pnpm's locked installs must both pass. Patched protobufjs enforces proto2 closed enums, so every supported message discriminator must be declared in `ProtocolMessage.Type`, not just in the TypeScript `MessageType` enum. The bare HID flush is `GENERIC_MESSAGE = 42`. `SendButtonEvent` is message type 39 with payload extension field 43, not message type 43 ([pinned pyatv 0.18.0 schema](https://github.com/postlund/pyatv/blob/d88abc960e188d3cd2498d19117e75d7711d8600/pyatv/protocols/mrp/protobuf/ProtocolMessage.proto)). Independent wire fixtures test these values in addition to builder/decoder round trips.

@@ -46,7 +46,7 @@
     "bplist-parser": "^0.3.2",
     "fast-srp-hap": "^2.0.4",
     "plist": "^3.1.0",
-    "protobufjs": "^8.0.0"
+    "protobufjs": "^8.8.1"
   },
   "devDependencies": {
     "@types/node": "^25.1.0",

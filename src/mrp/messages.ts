@@ -45,10 +45,10 @@ export enum MessageType {
   SetReadyState = 36,
   DeviceInfoUpdate = 37,
   SetConnectionState = 38,
+  SendButtonEvent = 39,
   SetHiliteMode = 40,
   WakeDevice = 41,
   GenericMessage = 42,
-  SendButtonEvent = 43,
   SetNowPlayingClient = 46,
   SetNowPlayingPlayer = 47,
   SetVolume = 51,
@@ -225,7 +225,7 @@ export class MRPMessage {
     });
   }
 
-  /** SendButtonEvent: a button down or up identified by HID usage page and usage. */
+  /** SendButtonEvent: type 39 with extension field 43, carrying HID usage page, usage and down/up. */
   static async sendButtonEvent(
     usagePage: number,
     usage: number,

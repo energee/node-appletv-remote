@@ -6,7 +6,14 @@ import { DmapPairing } from '../pairing.js';
 import { decodeDmap } from '../codec.js';
 const published = vi.hoisted(() => ({ options: {} as Record<string, unknown>, service: undefined as import('bonjour-service').Service | undefined, stop: vi.fn(), destroy: vi.fn() }));
 vi.mock('bonjour-service', async (original) => ({ ...(await original<typeof import('bonjour-service')>()), Bonjour: class {
-  publish(options: Record<string, unknown>) { published.options = options; const service = new Service(options as unknown as import('bonjour-service').ServiceConfig); service.stop = published.stop; published.service = service; return service; }
+  publish(options: Record<string, unknown>) {
+    published.options = options;
+    // 1.4 requires lifecycle callbacks; 1.3 ignores them. Keep real records without mDNS sockets.
+    const service = Reflect.construct(Service, [options, () => {}, published.stop]) as Service;
+    service.stop = published.stop;
+    published.service = service;
+    return service;
+  }
   destroy() { published.destroy(); }
 } }));
 let pairing: DmapPairing | undefined;

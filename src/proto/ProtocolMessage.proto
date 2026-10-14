@@ -39,8 +39,10 @@ message ProtocolMessage {
     SET_READY_STATE_MESSAGE = 36;
     DEVICE_INFO_UPDATE_MESSAGE = 37;
     SET_CONNECTION_STATE_MESSAGE = 38;
+    SEND_BUTTON_EVENT_MESSAGE = 39; // Payload extension field is 43, not the type.
     SET_HILITE_MODE_MESSAGE = 40;
     WAKE_DEVICE_MESSAGE = 41;
+    GENERIC_MESSAGE = 42; // Bare HID flush; must be declared in this proto2 closed enum.
     SEND_PACKED_VIRTUAL_TOUCH_EVENT_MESSAGE = 43;
     SET_NOW_PLAYING_CLIENT_MESSAGE = 46;
     SET_NOW_PLAYING_PLAYER_MESSAGE = 47;

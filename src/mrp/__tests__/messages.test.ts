@@ -1,3 +1,4 @@
+/** MRP builder and decoder regressions, including independent pyatv 0.18.0 wire fixtures. */
 import { describe, it, expect } from 'vitest';
 import { MRPMessage, MessageType, HID_KEY_MAP } from '../messages.js';
 
@@ -14,6 +15,33 @@ describe('MRP Messages', () => {
   it('creates a SendCommandMessage', async () => {
     const msg = await MRPMessage.sendCommand(MessageType.SendCommand);
     expect(msg).toBeInstanceOf(Buffer);
+  });
+
+  it('decodes a Generic flush from independent wire bytes as type 42', async () => {
+    const decoded = await MRPMessage.decode(Buffer.from('082a', 'hex'));
+    expect(decoded.type).toBe(42);
+    expect(Object.hasOwn(decoded, 'type')).toBe(true);
+  });
+
+  it('encodes a Generic flush with wire discriminator 42', async () => {
+    const msg = await MRPMessage.sendCommand(MessageType.GenericMessage);
+    expect(msg.subarray(0, 2).toString('hex')).toBe('082a');
+    expect((await MRPMessage.decode(msg)).type).toBe(42);
+  });
+
+  it('encodes SendButton with type 39 and payload extension 43', async () => {
+    const msg = await MRPMessage.sendButtonEvent(1, 0x8C, true);
+    expect(msg.subarray(0, 2).toString('hex')).toBe('0827');
+    expect(msg.subarray(msg.indexOf(Buffer.from('da02', 'hex'))).toString('hex'))
+      .toBe('da02070801108c011801');
+  });
+
+  it('decodes the independent type 39 SendButton fixture', async () => {
+    const decoded = await MRPMessage.decode(Buffer.from('0827da02070801108c011801', 'hex'));
+    expect(decoded.type).toBe(39);
+    expect(decoded['.sendButtonEventMessage']).toMatchObject({
+      usagePage: 1, usage: 0x8C, buttonDown: true,
+    });
   });
 
   it('decodes a ProtocolMessage', async () => {
