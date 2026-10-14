@@ -508,7 +508,7 @@ export class AppleTV extends EventEmitter {
   /** Replace selected outputs, including [] to clear; waits for matching reported state. */
   async setOutputDevices(devices: string[]): Promise<void> { await this.modifyOutputs('set', devices); }
 
-  /** Serialize routing changes and correlate rejection; socket transmission alone is not success. */
+  /** Send type-48 routing changes; only matching reported groups confirm success, not an acknowledgement. */
   private async modifyOutputs(mode: 'add' | 'remove' | 'set', devices: string[]): Promise<void> {
     if (!Array.isArray(devices) || devices.some(id => typeof id !== 'string' || !id.trim()) ||
         new Set(devices).size !== devices.length || (mode !== 'set' && !devices.length)) {
@@ -541,12 +541,13 @@ export class AppleTV extends EventEmitter {
     });
   }
 
-  /** Parse selected groups from DeviceInfo / DeviceInfoUpdate; emit snapshots only on change. */
+  /** Track DeviceInfo selected groups; reject UUID-correlated envelope errors regardless of discriminator. */
   private handleOutputMessage(msg: Record<string, unknown>): void {
     if (msg.identifier === this.pendingRouting?.identifier && msg.errorCode) {
       this.pendingRouting?.reject(new Error(`Output routing rejected: ${msg.errorDescription ?? msg.errorCode}`));
       return;
     }
+    // Types 65/66 update/remove output-device records; neither confirms the selected group.
     if (msg.type !== MessageType.DeviceInfo && msg.type !== MessageType.DeviceInfoUpdate) return;
     const info = msg['.deviceInfoMessage'] as Record<string, unknown> | undefined;
     if (!info) return;

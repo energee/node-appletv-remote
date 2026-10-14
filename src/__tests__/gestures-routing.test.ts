@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AppleTV, Key } from '../appletv.js';
 import { MRPMessage, MessageType } from '../mrp/messages.js';
+import { Message } from '../message.js';
 import type { OpackDict, OpackValue } from '../companion/opack.js';
 
 function device() {
@@ -114,13 +115,13 @@ describe('output routing', () => {
     expect((atv as any).outputDevices).toEqual([{ name: 'TV', identifier: 'tv' }, { name: 'Speaker', identifier: 'speaker' }]);
     expect(seen).toHaveLength(1);
   });
-  it.each(['add', 'remove', 'set'])('%s sends type 65 and both cluster-aware fields; waits for reported state', async mode => {
+  it.each(['add', 'remove', 'set'])('%s sends type 48 and both cluster-aware fields; waits for reported state', async mode => {
     const atv = device(); const sent = mrp(atv);
     (atv as any).handleMRPMessage({ type: 15, '.deviceInfoMessage': { groupedDevices: mode === 'remove' ? [{ name: 'S', deviceUID: 'speaker' }] : [] } });
     let done = false;
     const promise = (atv as any)[`${mode}OutputDevices`](['speaker']).then(() => { done = true; });
     await new Promise(resolve => setImmediate(resolve)); expect(done).toBe(false);
-    expect(sent[0].type).toBe(65);
+    expect(sent[0].type).toBe(48);
     const field = { add: 'addingDevices', remove: 'removingDevices', set: 'settingDevices' }[mode]!;
     expect(sent[0]['.modifyOutputContextRequestMessage'][field]).toEqual(['speaker']);
     expect(sent[0]['.modifyOutputContextRequestMessage'][`clusterAware${field[0].toUpperCase()}${field.slice(1)}`]).toEqual(['speaker']);
@@ -133,13 +134,68 @@ describe('output routing', () => {
     const rejected = expect(promise).rejects.toThrow(/confirm|timeout/i);
     await vi.runAllTimersAsync(); await rejected; expect((atv as any).outputDevices).toEqual([]);
   });
-  it('correlated unsupported response rejects routing', async () => {
+  it.each([48, 65, 66])('a UUID-correlated envelope error rejects routing regardless of type %s', async type => {
     const atv = device(); const sent = mrp(atv);
     const promise = (atv as any).addOutputDevices(['s']);
     const rejected = expect(promise).rejects.toThrow(/unsupported/i);
     await new Promise(resolve => setImmediate(resolve));
-    (atv as any).handleMRPMessage({ type: 66, identifier: sent[0].identifier, errorCode: 1, errorDescription: 'unsupported' });
+    // Envelope fields: type 1, UUID 2, UnsupportedOperation 4, description 78.
+    const wire = Buffer.concat([Buffer.from([0x08, type, 0x12, 0x24]), Buffer.from(sent[0].identifier),
+      Buffer.from('2006f2040b756e737570706f72746564', 'hex')]);
+    (atv as any).handleMRPMessage(await MRPMessage.decode(wire));
     await rejected;
+    expect(atv.outputDevices).toEqual([]);
+  });
+  it.each([
+    ['UpdateOutputDevice', '0841aa04080a060a0153120173'],
+    ['RemoveOutputDevices', '0842b204030a0173'],
+  ])('unsolicited %s wire events are neither routing success nor rejection', async (name, hex) => {
+    vi.useFakeTimers(); const atv = device(); mrp(atv);
+    const observed: Message[] = []; const updates: unknown[] = [];
+    atv.on('message', message => observed.push(message));
+    atv.on('outputDevices', devices => updates.push(devices));
+    let settled = false;
+    const pending = atv.addOutputDevices(['s']).then(() => { settled = true; }, error => { settled = true; throw error; });
+    await vi.advanceTimersByTimeAsync(0);
+    // pyatv types 65/66 use extensions 69/70, not the routing request extension 52.
+    for (const identifier of ['', '12056f74686572']) {
+      for (const error of ['2000', '2006f2040b756e737570706f72746564']) {
+        (atv as any).handleMRPMessage(await MRPMessage.decode(Buffer.from(hex + identifier + error, 'hex')));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe(false);
+        expect(atv.outputDevices).toEqual([]);
+        expect(updates).toEqual([]);
+      }
+    }
+    // A nonmatching selected group is not confirmation either.
+    (atv as any).handleMRPMessage({ type: 37, '.deviceInfoMessage': { groupedDevices: [{ name: 'Other', deviceUID: 'other' }] } });
+    await vi.advanceTimersByTimeAsync(0); expect(settled).toBe(false);
+    // Type 37, extension 20: groupedDevices(name="S", deviceUID="s").
+    (atv as any).handleMRPMessage(await MRPMessage.decode(Buffer.from('0825a2010e12025456e201071201539a010173', 'hex')));
+    await pending;
+    expect(atv.outputDevices).toEqual([{ name: 'S', identifier: 's' }]);
+    expect(observed.slice(0, 4).map(message => message.toString())).toEqual([
+      `Message(${name}, id=)`, `Message(${name}, id=)`,
+      `Message(${name}, id=other)`, `Message(${name}, id=other)`,
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('a UUID-correlated non-error envelope is not selected-group confirmation', async () => {
+    vi.useFakeTimers(); const atv = device(); const sent = mrp(atv);
+    let settled = false;
+    const pending = atv.setOutputDevices(['s']).then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    const wire = Buffer.concat([Buffer.from('08301224', 'hex'), Buffer.from(sent[0].identifier), Buffer.from('2000', 'hex')]);
+    (atv as any).handleMRPMessage(await MRPMessage.decode(wire));
+    await vi.advanceTimersByTimeAsync(0); expect(settled).toBe(false);
+    (atv as any).handleMRPMessage(await MRPMessage.decode(Buffer.from('0825a2010e12025456e201071201539a010173', 'hex')));
+    await pending; expect(vi.getTimerCount()).toBe(0);
+  });
+  it('a transmission failure rejects routing and cancels its confirmation timer', async () => {
+    vi.useFakeTimers(); const atv = device(); mrp(atv);
+    (atv as any).connection.sendMRPMessage = async () => { throw new Error('write failed'); };
+    await expect(atv.addOutputDevices(['s'])).rejects.toThrow('write failed');
+    expect(atv.outputDevices).toEqual([]); expect(vi.getTimerCount()).toBe(0);
   });
 });
 
@@ -164,17 +220,22 @@ describe('cleanup and independent wire evidence', () => {
     expect(conn.close).toHaveBeenCalledOnce(); expect(airplay.close).toHaveBeenCalledOnce();
     expect((atv as any).touchSession).toBeUndefined();
   });
-  it('pins add and set payload extension and field numbers independent of decoding', async () => {
-    const add = await MRPMessage.modifyOutputDevices('add', ['x']);
-    const set = await MRPMessage.modifyOutputDevices('set', ['x']);
-    expect(add.subarray(add.indexOf(Buffer.from('a203', 'hex'))).toString('hex')).toBe('a2030808011201782a0178');
-    expect(set.subarray(set.indexOf(Buffer.from('a203', 'hex'))).toString('hex')).toBe('a2030808012201783a0178');
-    expect(add.subarray(0, 2).toString('hex')).toBe('0841');
+  it.each([
+    ['add', ['x'], 'a2030808011201782a0178'],
+    ['remove', ['x'], 'a2030808011a0178320178'],
+    ['set', ['x'], 'a2030808012201783a0178'],
+    ['set', [], 'a203020801'],
+  ] as const)('pins %s routing wire discriminator, extension and fields for %j', async (mode, devices, payload) => {
+    const buffer = await MRPMessage.modifyOutputDevices(mode, [...devices]);
+    // Independent literal fixture: type 48, UUID field 2 (36 bytes), extension 52.
+    expect(buffer.subarray(0, 4).toString('hex')).toBe('08301224');
+    expect(buffer.subarray(4, 40).toString()).toMatch(/^[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}$/);
+    expect(buffer.subarray(40).toString('hex')).toBe(payload);
   });
   it('decodes correlated rejection fields 4 and 78 from independent bytes', async () => {
-    const message = await MRPMessage.decode(Buffer.from('08421201692001f2040b756e737570706f72746564', 'hex'));
-    expect(message.type).toBe(66); expect(message.identifier).toBe('i');
-    expect(message.errorCode).toBe(1); expect(message.errorDescription).toBe('unsupported');
+    const message = await MRPMessage.decode(Buffer.from('08301201692006f2040b756e737570706f72746564', 'hex'));
+    expect(message.type).toBe(48); expect(message.identifier).toBe('i');
+    expect(message.errorCode).toBe(6); expect(message.errorDescription).toBe('unsupported');
   });
 });
 

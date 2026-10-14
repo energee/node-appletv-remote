@@ -8,7 +8,7 @@ import protobuf from 'protobufjs';
 import { randomUUID } from 'node:crypto';
 import { MRP_SCHEMA } from './schema.js';
 
-/** ProtocolMessage.type values: which extension field a message carries. Gaps are types this library does not use. */
+/** ProtocolMessage.type discriminators, not extension IDs; declare each value in ProtocolMessage.proto too. */
 export enum MessageType {
   SendCommand = 1,
   SendCommandResult = 2,
@@ -51,14 +51,15 @@ export enum MessageType {
   GenericMessage = 42,
   SetNowPlayingClient = 46,
   SetNowPlayingPlayer = 47,
+  ModifyOutputContextRequest = 48,
   SetVolume = 51,
   VolumeDidChange = 52,
   RemoveClient = 53,
   RemovePlayer = 54,
   UpdateClient = 55,
   UpdateContentItem = 56,
-  ModifyOutputContextRequest = 65,
-  ModifyOutputContextResponse = 66,
+  UpdateOutputDevice = 65,
+  RemoveOutputDevices = 66,
   SetDefaultSupportedCommands = 72,
 }
 
@@ -143,7 +144,7 @@ async function encodeMessage(
 
 /** Static builders that return encoded ProtocolMessage buffers ready to frame and send, plus `decode` for incoming ones. */
 export class MRPMessage {
-  /** Modify the shared audio presentation; paired fields support cluster-aware receivers. */
+  /** Shared audio routing uses discriminator 48, extension 52; paired fields support cluster-aware receivers. */
   static async modifyOutputDevices(mode: 'add' | 'remove' | 'set', devices: string[]): Promise<Buffer> {
     const field = { add: 'addingDevices', remove: 'removingDevices', set: 'settingDevices' }[mode];
     return encodeMessage(MessageType.ModifyOutputContextRequest, {
