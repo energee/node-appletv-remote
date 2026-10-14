@@ -5,7 +5,8 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { Socket } from 'node:net';
+import type { Socket } from 'node:net';
+import { connectSocket } from '../connection.js';
 import {
   generateKeyPairSync,
   diffieHellman,
@@ -106,23 +107,12 @@ export class CompanionConnection extends EventEmitter {
     await this.pairVerify();
   }
 
-  /**
-   * Connect the socket and wire its events. Socket errors both reject the pending
-   * connect and are re-emitted as `error`.
-   */
-  private openSocket(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.socket = new Socket();
-      // Touch events are paced by the caller; Nagle buffering distorts gestures.
-      this.socket.setNoDelay(true);
-      this.socket.connect(this.port, this.host, () => resolve());
-      this.socket.on('error', (err) => {
-        reject(err);
-        this.emit('error', err);
-      });
-      this.socket.on('close', () => this.emit('close'));
-      this.socket.on('data', (data: Buffer) => this.onData(data));
-    });
+  /** Connect the socket (Nagle off, 5 s timeout) and wire its events; later errors are re-emitted as `error`. */
+  private async openSocket(): Promise<void> {
+    this.socket = await connectSocket(this.host, this.port);
+    this.socket.on('error', (err) => this.emit('error', err));
+    this.socket.on('close', () => this.emit('close'));
+    this.socket.on('data', (data: Buffer) => this.onData(data));
   }
 
   /** Send TLV pairing data wrapped in OPACK `{ _pd: tlvBytes, ...extraFields }`, unencrypted. */

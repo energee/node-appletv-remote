@@ -1,11 +1,11 @@
 /** Tests for connect-speed changes: socket options/timeout and the CLI's cached-address fallback. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer, Socket, type AddressInfo } from 'node:net';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { connectSocket } from '../connection.js';
-import { loadCachedDevice, saveCachedDevice, withCachedDevice } from '../cli/device-cache.js';
+import { withCachedDevice } from '../cli/device-cache.js';
 import type { DiscoveredDeviceInfo } from '../discovery.js';
 
 afterEach(() => vi.restoreAllMocks());
@@ -28,33 +28,35 @@ describe('connectSocket', () => {
 });
 
 const device: DiscoveredDeviceInfo = { name: 'TV', address: '192.0.2.10', port: 7000, deviceId: 'aa:bb', model: 'AppleTV6,2' };
+const cacheFile = (contents?: object) => {
+  const file = join(mkdtempSync(join(tmpdir(), 'atv-')), 'devices.json');
+  if (contents) writeFileSync(file, JSON.stringify(contents));
+  return file;
+};
 
 describe('device cache', () => {
-  it('round-trips a device by ID through the cache file', () => {
-    const file = join(mkdtempSync(join(tmpdir(), 'atv-')), 'devices.json');
-    expect(loadCachedDevice(file, 'aa:bb')).toBeUndefined();
-    saveCachedDevice(file, 'aa:bb', device);
-    expect(loadCachedDevice(file, 'aa:bb')).toEqual(device);
-  });
-
   it('connects to the cached device without scanning', async () => {
     const rescan = vi.fn();
-    const result = await withCachedDevice(device, rescan, async (d) => d.address);
+    const result = await withCachedDevice(cacheFile({ 'aa:bb': device }), 'aa:bb', rescan, async (d) => d.address);
     expect(result).toBe('192.0.2.10');
     expect(rescan).not.toHaveBeenCalled();
   });
 
-  it('rescans and retries once when the cached address fails', async () => {
+  it('rescans, retries once, and caches the new address when the cached one fails', async () => {
+    const file = cacheFile({ 'aa:bb': device });
     const moved = { ...device, address: '192.0.2.20' };
     const connect = vi.fn(async (d: DiscoveredDeviceInfo) => {
       if (d.address === device.address) throw new Error('ECONNREFUSED');
       return d.address;
     });
-    expect(await withCachedDevice(device, async () => moved, connect)).toBe('192.0.2.20');
+    expect(await withCachedDevice(file, 'aa:bb', async () => moved, connect)).toBe('192.0.2.20');
     expect(connect).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(readFileSync(file, 'utf-8'))['aa:bb'].address).toBe('192.0.2.20');
   });
 
-  it('scans when nothing is cached', async () => {
-    expect(await withCachedDevice(undefined, async () => device, async (d) => d.port)).toBe(7000);
+  it('scans and caches when nothing is cached (missing file)', async () => {
+    const file = cacheFile();
+    expect(await withCachedDevice(file, 'aa:bb', async () => device, async (d) => d.port)).toBe(7000);
+    expect(JSON.parse(readFileSync(file, 'utf-8'))['aa:bb']).toEqual(device);
   });
 });

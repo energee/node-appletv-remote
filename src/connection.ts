@@ -125,6 +125,8 @@ export class AirPlayConnection extends EventEmitter {
     private host: string,
     private port: number,
     private credentials: HAPCredentials,
+    /** Pause after the MRP handshake before resolving connect(); see ConnectOptions.settleMs. */
+    private settleMs = 0,
   ) {
     super();
   }
@@ -526,7 +528,7 @@ export class AirPlayConnection extends EventEmitter {
 
   /**
    * MRP handshake on the data channel: DeviceInfo (awaits the reply), SetConnectionState,
-   * ClientUpdatesConfig, GetKeyboardSession, then an optional `ATV_SETTLE_MS` settle delay (default 0).
+   * ClientUpdatesConfig, GetKeyboardSession, then the optional `settleMs` delay (default 0).
    * @throws if the DeviceInfo reply does not arrive within 5 s.
    */
   private async initMRPProtocol(): Promise<void> {
@@ -565,10 +567,9 @@ export class AirPlayConnection extends EventEmitter {
     const getKeyboard = await MRPMessage.sendCommand(MessageType.GetKeyboardSession);
     await this.sendMRPMessage(getKeyboard);
 
-    // ponytail: optional settle after init; 0 by default. Raise ATV_SETTLE_MS (old value 500)
-    // if the first command after connect is ignored on some Apple TV model.
-    const settleMs = Number(process.env.ATV_SETTLE_MS ?? 0);
-    if (settleMs > 0) await delay(settleMs);
+    // ponytail: fixed settle, 0 by default (was 500 ms). Replace with waiting for the first
+    // update message if some Apple TV model turns out to drop the first command.
+    if (this.settleMs > 0) await delay(this.settleMs);
   }
 
   /**

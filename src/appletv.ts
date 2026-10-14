@@ -45,6 +45,15 @@ export enum TextInputActionType {
   ClearText = 4,
 }
 
+/** Options for AppleTV.connect(). */
+export interface ConnectOptions {
+  /**
+   * Pause after the MRP handshake before connect() resolves, in ms; default 0.
+   * Raise it (e.g. 500) if a command sent right after connecting is ignored.
+   */
+  settleMs?: number;
+}
+
 /**
  * Buttons accepted by sendKeyCommand(). Values are HID_KEY_MAP names; keys without
  * a HID mapping (play, pause, next, previous, skip, wake, suspend, home_hold) are
@@ -180,8 +189,8 @@ export class AppleTV extends EventEmitter {
   }
 
   /** Open the AirPlay/MRP connection with stored credentials; emits `connect` once ready. */
-  async connect(credentials: Credentials): Promise<void> {
-    this.connection = new AirPlayConnection(this.address, this.port, credentials);
+  async connect(credentials: Credentials, options: ConnectOptions = {}): Promise<void> {
+    this.connection = new AirPlayConnection(this.address, this.port, credentials, options.settleMs);
     this.connection.on('close', () => this.emit('close'));
     this.connection.on('error', (err) => this.emit('error', err));
     this.connection.on('mrp-message', (msg: Record<string, unknown>) => {

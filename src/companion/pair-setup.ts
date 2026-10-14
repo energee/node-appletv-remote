@@ -6,7 +6,8 @@
  * the `_pd` key, and frames use PS_Start for M1, PS_Next for all subsequent messages.
  */
 
-import { Socket } from 'node:net';
+import type { Socket } from 'node:net';
+import { connectSocket } from '../connection.js';
 import { generateKeyPairSync, sign, createPrivateKey, randomUUID } from 'node:crypto';
 import { TlvTag, tlvEncode, tlvDecode } from '../util/tlv.js';
 import { hkdfSha512, encryptChaCha20, decryptChaCha20 } from '../util/crypto.js';
@@ -68,21 +69,13 @@ export class CompanionPairSetup {
     this.serverPublicKey = serverPublicKey;
   }
 
-  /** Connect the socket and feed incoming data to the frame parser. Errors only reject the connect. */
-  private openSocket(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.socket = new Socket();
-      this.socket.connect(this.port, this.host, () => {
-        this.socket!.setNoDelay(true);
-        resolve();
-      });
-      this.socket.on('error', (err) => {
-        reject(err);
-      });
-      this.socket.on('data', (data: Buffer) => {
-        this.buffer = Buffer.concat([this.buffer, data]);
-        this.processFrames();
-      });
+  /** Connect the socket (Nagle off, 5 s timeout) and feed incoming data to the frame parser. */
+  private async openSocket(): Promise<void> {
+    this.socket = await connectSocket(this.host, this.port);
+    this.socket.on('error', () => {}); // Post-connect errors surface as reply timeouts.
+    this.socket.on('data', (data: Buffer) => {
+      this.buffer = Buffer.concat([this.buffer, data]);
+      this.processFrames();
     });
   }
 

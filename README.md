@@ -28,7 +28,7 @@ Credentials are saved to `~/.atv-credentials.json`. Leave out `deviceId` to use 
 
 Two timing knobs exist for older or slower Apple TVs. Both default to `0`:
 
-- `ATV_SETTLE_MS`: pause after the MRP handshake before sending anything (previously a fixed 500 ms).
+- `ATV_SETTLE_MS`: pause after the MRP handshake before sending anything (previously a fixed 500 ms). Library equivalent: `atv.connect(credentials, { settleMs: 500 })`.
 - `ATV_POST_SEND_MS`: pause after `atv command` sends a key, before disconnecting (previously a fixed 1000 ms).
 
 ```

@@ -11,7 +11,7 @@ import { MessageType } from '../mrp/messages.js';
 import { Credentials } from '../credentials.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadCachedDevice, saveCachedDevice, withCachedDevice } from './device-cache.js';
+import { withCachedDevice } from './device-cache.js';
 import { createInterface } from 'node:readline';
 import type { Message } from '../message.js';
 import type { KeyboardInfo, TextInputEvent, CompanionEvent } from '../appletv.js';
@@ -113,15 +113,15 @@ function loadCredentials(deviceId?: string): { id: string; credentials: Credenti
  * Scan (stopping early once found) and return the device whose ID equals or contains `id`, or whose name contains it (case-insensitive).
  * @throws if nothing matches; the message lists the devices that were found.
  */
-async function findDevice(id: string): Promise<DiscoveredDeviceInfo> {
+async function findDevice(id: string, needCompanion: boolean): Promise<DiscoveredDeviceInfo> {
   console.log('Finding device...');
   const idLower = id.toLowerCase();
   const matches = (d: DiscoveredDeviceInfo) =>
     d.deviceId.toLowerCase() === idLower ||
     d.name.toLowerCase().includes(idLower) ||
     d.deviceId.toLowerCase().includes(idLower);
-  // Stop as soon as the device and its Companion port (if advertised) have both arrived.
-  const devices = await scan({ timeout: 5000, until: (d) => matches(d) && d.companionPort !== undefined });
+  // Stop as soon as the device (and, if needed, its Companion port) has arrived.
+  const devices = await scan({ timeout: 5000, until: (d) => matches(d) && (!needCompanion || !!d.companionPort) });
   const device = devices.find(matches);
   if (!device) {
     throw new Error(`Device not found on network (looking for "${id}"). Found: ${devices.map((d) => `${d.name} [${d.deviceId}]`).join(', ')}`);
@@ -129,26 +129,23 @@ async function findDevice(id: string): Promise<DiscoveredDeviceInfo> {
   return device;
 }
 
-/**
- * Run `connect` against the device's cached address, rescanning once if that fails,
- * and remember the address that worked.
- */
-async function connectCached<T>(id: string, connect: (device: DiscoveredDeviceInfo) => Promise<T>): Promise<T> {
-  return withCachedDevice(loadCachedDevice(DEVICES_FILE, id), () => findDevice(id), async (device) => {
-    const result = await connect(device);
-    saveCachedDevice(DEVICES_FILE, id, device);
-    return result;
-  });
+/** Run `connect` against the device's cached address, rescanning once if that fails. */
+function connectCached<T>(
+  id: string,
+  needCompanion: boolean,
+  connect: (device: DiscoveredDeviceInfo) => Promise<T>,
+): Promise<T> {
+  return withCachedDevice(DEVICES_FILE, id, () => findDevice(id, needCompanion), connect);
 }
 
 /** Load credentials, locate the device (cache first, then mDNS), and open an AirPlay/MRP connection. */
 async function connectToDevice(deviceId?: string): Promise<AppleTV> {
   const { id, credentials } = loadCredentials(deviceId);
-  return connectCached(id, async (device) => {
+  return connectCached(id, false, async (device) => {
     console.log(`Connecting to ${device.name} (${device.address}:${device.port})...`);
     const atv = new AppleTV(device);
     try {
-      await atv.connect(credentials);
+      await atv.connect(credentials, { settleMs: Number(process.env.ATV_SETTLE_MS) || 0 });
     } catch (e) {
       await atv.close();
       throw e;
@@ -169,8 +166,7 @@ async function cmdCommand(command: string, deviceId?: string) {
   console.log(`Sent: ${command}`);
   // ponytail: writes have already reached the kernel, so no wait by default. Raise
   // ATV_POST_SEND_MS (old value 1000) if a key is dropped when the CLI exits.
-  const postSendMs = Number(process.env.ATV_POST_SEND_MS ?? 0);
-  if (postSendMs > 0) await delay(postSendMs);
+  await delay(Number(process.env.ATV_POST_SEND_MS) || 0);
   await atv.close();
 }
 
@@ -390,7 +386,7 @@ async function cmdCompanionTest(deviceId?: string) {
     throw new Error('No companion credentials. Run "atv companion-pair" first.');
   }
 
-  const atv = await connectCached(id, async (device) => {
+  const atv = await connectCached(id, true, async (device) => {
     if (!device.companionPort) {
       throw new Error('Device has no companion-link port');
     }
