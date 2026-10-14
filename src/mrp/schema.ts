@@ -179,13 +179,14 @@ export const MRP_SCHEMA: Record<string, unknown> = {
         "RepeatMode": {
           "values": {
             "Unknown": 0,
-            "One": 1,
-            "All": 2
+            "Off": 1,
+            "One": 2,
+            "All": 3
           }
         },
         "ShuffleMode": {
           "values": {
-            "Unkown": 0,
+            "Unknown": 0,
             "Off": 1,
             "Albums": 2,
             "Songs": 3
@@ -321,13 +322,14 @@ export const MRP_SCHEMA: Record<string, unknown> = {
         "RepeatMode": {
           "values": {
             "Unknown": 0,
-            "One": 1,
-            "All": 2
+            "Off": 1,
+            "One": 2,
+            "All": 3
           }
         },
         "ShuffleMode": {
           "values": {
-            "Unkown": 0,
+            "Unknown": 0,
             "Off": 1,
             "Albums": 2,
             "Songs": 3
@@ -1113,13 +1115,14 @@ export const MRP_SCHEMA: Record<string, unknown> = {
         "RepeatMode": {
           "values": {
             "Unknown": 0,
-            "One": 1,
-            "All": 2
+            "Off": 1,
+            "One": 2,
+            "All": 3
           }
         },
         "ShuffleMode": {
           "values": {
-            "Unkown": 0,
+            "Unknown": 0,
             "Off": 1,
             "Albums": 2,
             "Songs": 3

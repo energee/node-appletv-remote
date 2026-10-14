@@ -62,9 +62,12 @@ describe('MRP playback commands', () => {
     const atv = makeAtv();
     const sent = fakeMrp(atv);
     await atv.setRepeat(RepeatState.Track);
+    await atv.setRepeat(RepeatState.Off);
     const cmd = sent[0]['.sendCommandMessage'] as any;
     expect(cmd.command).toBe(46);
-    expect(cmd.options.repeatMode).toBe(1);
+    // pyatv RepeatMode: Off 1, One 2, All 3
+    expect(cmd.options.repeatMode).toBe(2);
+    expect((sent[1]['.sendCommandMessage'] as any).options.repeatMode).toBe(1);
   });
 
   it('skipForward with an interval sends SkipForward (18) with skipInterval', async () => {

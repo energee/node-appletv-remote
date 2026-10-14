@@ -53,14 +53,16 @@ enum Command {
 }
 
 message CommandInfo {
+  // Values from pyatv Common.proto RepeatMode; Off is 1.
   enum RepeatMode {
     Unknown = 0;
-    One = 1;
-    All = 2;
+    Off = 1;
+    One = 2;
+    All = 3;
   }
 
   enum ShuffleMode {
-    Unkown = 0;
+    Unknown = 0;
     Off = 1;
     Albums = 2;
     Songs = 3;

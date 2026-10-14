@@ -64,11 +64,11 @@ export enum ShuffleState {
   Songs = 3,
 }
 
-/** Repeat modes for setRepeat; values are the MRP CommandOptions.RepeatMode enum (Off is 0). */
+/** Repeat modes for setRepeat; values are the MRP CommandOptions.RepeatMode enum. */
 export enum RepeatState {
-  Off = 0,
-  Track = 1,
-  All = 2,
+  Off = 1,
+  Track = 2,
+  All = 3,
 }
 
 /** Device power as reported by Companion SystemStatus (pyatv PowerState). */
