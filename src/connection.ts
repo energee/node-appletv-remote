@@ -10,6 +10,7 @@ import {
   createPrivateKey,
 } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
 import { HAPSession } from './util/hap-session.js';
@@ -86,7 +87,7 @@ export class AirPlayConnection extends EventEmitter {
   private feedbackInterval?: ReturnType<typeof setInterval>;
   private dataDecBuffer = Buffer.alloc(0);
   private pendingMRPResolvers: Array<{
-    type?: number;
+    type: number;
     resolve: (msg: Record<string, unknown>) => void;
   }> = [];
 
@@ -106,7 +107,7 @@ export class AirPlayConnection extends EventEmitter {
     this.log(`TCP connected (local ${this.localAddress})`);
 
     // Initially handle raw (unencrypted) data for pair-verify
-    this.socket.on('data', (data) => this.onRawData(Buffer.from(data)));
+    this.socket.on('data', (data: Buffer) => this.onRawData(data));
     this.socket.on('close', () => this.emit('close'));
     this.socket.on('error', (err) => this.emit('error', err));
 
@@ -119,7 +120,7 @@ export class AirPlayConnection extends EventEmitter {
 
     // Switch from raw mode to encrypted RTSP mode
     this.socket.removeAllListeners('data');
-    this.socket.on('data', (data) => this.onEncryptedData(Buffer.from(data)));
+    this.socket.on('data', (data: Buffer) => this.onEncryptedData(data));
 
     // Step 3: Set up event channel via RTSP SETUP
     this.log('SETUP event channel...');
@@ -389,7 +390,7 @@ export class AirPlayConnection extends EventEmitter {
       this.log(`connecting to event port ${eventPort}...`);
       this.eventSocket = await connectSocket(this.host, eventPort);
       this.log('event socket connected');
-      this.eventSocket.on('data', (data) => this.onEventChannelData(Buffer.from(data)));
+      this.eventSocket.on('data', (data: Buffer) => this.onEventChannelData(data));
       this.eventSocket.on('error', (err) => this.log(`event channel error: ${err.message}`));
       this.eventSocket.on('close', () => this.log('event channel closed'));
     }
@@ -454,7 +455,7 @@ export class AirPlayConnection extends EventEmitter {
     this.dataSocket = await connectSocket(this.host, dataPort);
     this.log('data socket connected');
 
-    this.dataSocket.on('data', (data) => this.onDataChannelData(Buffer.from(data)));
+    this.dataSocket.on('data', (data: Buffer) => this.onDataChannelData(data));
     this.dataSocket.on('error', (err) => this.log(`data channel error: ${err.message}`));
     this.dataSocket.on('close', () => this.log('data channel closed by remote'));
     this.dataSocket.on('end', () => this.log('data channel ended by remote'));
@@ -500,7 +501,7 @@ export class AirPlayConnection extends EventEmitter {
     await this.sendMRPMessage(getKeyboard);
 
     // Wait a moment for the Apple TV to process init messages and send updates
-    await new Promise((r) => setTimeout(r, 500));
+    await delay(500);
   }
 
   /** Wait for an MRP message of a specific type from the data channel */
@@ -520,116 +521,6 @@ export class AirPlayConnection extends EventEmitter {
         },
       });
     });
-  }
-
-  /** Perform MRP-level pair-verify using CryptoPairingMessage */
-  private async mrpPairVerify(): Promise<void> {
-    const { publicKey, privateKey } = generateKeyPairSync('x25519');
-    const ephemeralPublicKeyRaw = Buffer.from(
-      publicKey.export({ type: 'spki', format: 'der' }).subarray(-32),
-    );
-
-    // M1: Send our ephemeral public key
-    // Manually construct TLV with SeqNo first (pyatv order) since JS sorts
-    // numeric object keys ascending, which would put PublicKey(3) before SeqNo(6)
-    const m1Tlv = Buffer.concat([
-      Buffer.from([TlvTag.SeqNo, 0x01, 0x01]),
-      Buffer.from([TlvTag.PublicKey, ephemeralPublicKeyRaw.length]),
-      ephemeralPublicKeyRaw,
-    ]);
-    const m1Msg = await MRPMessage.cryptoPairing(m1Tlv);
-    const m2Promise = this.waitForMRPMessage(MessageType.CryptoPairing, 10000);
-    await this.sendMRPMessage(m1Msg);
-
-    // Wait for M2 response
-    const m2Response = await m2Promise;
-    const m2PairingData = (m2Response as any)['.cryptoPairingMessage']?.pairingData as Buffer;
-    if (!m2PairingData) throw new Error('M2 missing pairingData');
-
-    const m2Tlv = tlvDecode(m2PairingData);
-    const serverEphemeralPub = m2Tlv[TlvTag.PublicKey];
-    const m2Encrypted = m2Tlv[TlvTag.EncryptedData];
-    if (!serverEphemeralPub || !m2Encrypted) {
-      throw new Error('MRP M2 missing PublicKey or EncryptedData');
-    }
-
-    // Compute shared secret
-    const serverEphemeralKeyObj = createPublicKey({
-      key: Buffer.concat([X25519_SPKI_PREFIX, serverEphemeralPub]),
-      format: 'der',
-      type: 'spki',
-    });
-    const sharedSecret = diffieHellman({ privateKey, publicKey: serverEphemeralKeyObj });
-
-    // Derive session key for TLV encryption
-    const sessionKey = await hkdfSha512(
-      Buffer.from(sharedSecret),
-      'Pair-Verify-Encrypt-Salt',
-      'Pair-Verify-Encrypt-Info',
-      32,
-    );
-
-    // Decrypt M2 sub-TLV
-    const m2Nonce = Buffer.alloc(12, 0);
-    m2Nonce.write('PV-Msg02', 4);
-    const m2Ciphertext = m2Encrypted.subarray(0, m2Encrypted.length - 16);
-    const m2Tag = m2Encrypted.subarray(m2Encrypted.length - 16);
-    const decrypted = decryptChaCha20(sessionKey, m2Nonce, m2Ciphertext, m2Tag, Buffer.alloc(0));
-    const serverInfo = tlvDecode(decrypted);
-
-    const serverIdentifier = serverInfo[TlvTag.Identifier];
-    const serverSignature = serverInfo[TlvTag.Signature];
-    if (!serverIdentifier || !serverSignature) {
-      throw new Error('MRP M2 decrypted data missing Identifier or Signature');
-    }
-
-    // Verify server signature
-    const serverSignedData = Buffer.concat([serverEphemeralPub, serverIdentifier, ephemeralPublicKeyRaw]);
-    const serverLTPKObj = createPublicKey({
-      key: Buffer.concat([ED25519_SPKI_PREFIX, this.credentials.serverLTPK]),
-      format: 'der',
-      type: 'spki',
-    });
-    const valid = cryptoVerify(null, serverSignedData, serverLTPKObj, serverSignature);
-    if (!valid) throw new Error('MRP server signature verification failed');
-
-    // Sign our proof for M3
-    const clientSignedData = Buffer.concat([
-      ephemeralPublicKeyRaw,
-      Buffer.from(this.credentials.clientId),
-      serverEphemeralPub,
-    ]);
-    const clientPrivKey = createPrivateKey({
-      key: Buffer.concat([ED25519_PKCS8_PREFIX, this.credentials.clientLTSK]),
-      format: 'der',
-      type: 'pkcs8',
-    });
-    const clientSignature = sign(null, clientSignedData, clientPrivKey);
-
-    // Encrypt M3 sub-TLV
-    const subTlv = tlvEncode({
-      [TlvTag.Identifier]: Buffer.from(this.credentials.clientId),
-      [TlvTag.Signature]: clientSignature,
-    });
-    const m3Nonce = Buffer.alloc(12, 0);
-    m3Nonce.write('PV-Msg03', 4);
-    const { ciphertext, tag } = encryptChaCha20(sessionKey, m3Nonce, subTlv, Buffer.alloc(0));
-
-    const m3Tlv = tlvEncode({
-      [TlvTag.SeqNo]: Buffer.from([0x03]),
-      [TlvTag.EncryptedData]: Buffer.concat([ciphertext, tag]),
-    });
-    const m3Msg = await MRPMessage.cryptoPairing(m3Tlv);
-    const m4Promise = this.waitForMRPMessage(MessageType.CryptoPairing);
-    await this.sendMRPMessage(m3Msg);
-
-    // Wait for M4 acknowledgment
-    await m4Promise;
-
-    // Over AirPlay, MRP encryption keys are derived but NOT applied.
-    // The data channel is already encrypted at the transport layer.
-    // This matches pyatv's AirPlayMrpConnection.enable_encryption() which is a no-op.
-    this.log('MRP pair-verify complete (encryption not applied over AirPlay)');
   }
 
   /** Handle encrypted data after pair-verify is complete */
@@ -680,29 +571,20 @@ export class AirPlayConnection extends EventEmitter {
     return true;
   }
 
-  private eventEncBuffer = Buffer.alloc(0);
+  private eventEncBuffer: Buffer = Buffer.alloc(0);
   private eventDecBuffer = Buffer.alloc(0);
 
   private onEventChannelData(data: Buffer): void {
     this.eventEncBuffer = Buffer.concat([this.eventEncBuffer, data]);
     if (!this.eventSession) return;
 
-    // Decrypt HAP frames from the event channel
-    while (this.eventEncBuffer.length >= 2) {
-      const frameLen = this.eventEncBuffer.readUInt16LE(0);
-      const totalFrameSize = 2 + frameLen + 16; // length + ciphertext + auth tag
-      if (this.eventEncBuffer.length < totalFrameSize) break;
-
-      const frame = this.eventEncBuffer.subarray(0, totalFrameSize);
-      this.eventEncBuffer = this.eventEncBuffer.subarray(totalFrameSize);
-
-      try {
-        const decrypted = this.eventSession.decrypt(frame);
-        this.eventDecBuffer = Buffer.concat([this.eventDecBuffer, decrypted]);
-      } catch (e) {
-        this.log(`event channel decrypt error: ${e}`);
-        return;
-      }
+    try {
+      const { plaintext, rest } = this.eventSession.decryptAvailable(this.eventEncBuffer);
+      this.eventEncBuffer = rest;
+      this.eventDecBuffer = Buffer.concat([this.eventDecBuffer, plaintext]);
+    } catch (e) {
+      this.log(`event channel decrypt error: ${e}`);
+      return;
     }
 
     // Parse HTTP requests from decrypted data and respond with 200 OK
@@ -730,27 +612,19 @@ export class AirPlayConnection extends EventEmitter {
     }
   }
 
-  private dataEncBuffer = Buffer.alloc(0);
+  private dataEncBuffer: Buffer = Buffer.alloc(0);
 
   private onDataChannelData(data: Buffer): void {
     this.dataEncBuffer = Buffer.concat([this.dataEncBuffer, data]);
 
-    // Wait for complete HAP frames before decrypting
-    while (this.dataEncBuffer.length >= 2) {
-      const frameLen = this.dataEncBuffer.readUInt16LE(0);
-      const totalFrameSize = 2 + frameLen + 16; // length + ciphertext + auth tag
-      if (this.dataEncBuffer.length < totalFrameSize) break;
-
-      const frame = this.dataEncBuffer.subarray(0, totalFrameSize);
-      this.dataEncBuffer = this.dataEncBuffer.subarray(totalFrameSize);
-
-      try {
-        const decrypted = this.dataSession!.decrypt(frame);
-        this.dataDecBuffer = Buffer.concat([this.dataDecBuffer, decrypted]);
-      } catch (e) {
-        this.log(`data channel decrypt error: ${e}`);
-        return;
-      }
+    // Decrypt all complete HAP frames in one pass; one concat per chunk, not per 1 KB frame.
+    try {
+      const { plaintext, rest } = this.dataSession!.decryptAvailable(this.dataEncBuffer);
+      this.dataEncBuffer = rest;
+      this.dataDecBuffer = Buffer.concat([this.dataDecBuffer, plaintext]);
+    } catch (e) {
+      this.log(`data channel decrypt error: ${e}`);
+      return;
     }
 
     // Parse complete DataStream frames from the decrypted buffer
@@ -785,7 +659,7 @@ export class AirPlayConnection extends EventEmitter {
 
       // Also resolve any pending resolver that matches this message type
       const idx = this.pendingMRPResolvers.findIndex(
-        (r) => r.type === undefined || r.type === msg.type,
+        (r) => r.type === msg.type,
       );
       if (idx >= 0) {
         const resolver = this.pendingMRPResolvers.splice(idx, 1)[0];

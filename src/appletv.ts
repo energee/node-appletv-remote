@@ -107,6 +107,13 @@ function powerStateFromStatus(state: unknown): PowerState {
   return PowerState.Unknown;
 }
 
+/** The `contentItems` of a SetState reply from requestPlaybackQueue/getState (empty if none). */
+export function contentItems(response: Record<string, unknown>): Record<string, unknown>[] {
+  const setState = response['.setStateMessage'] as { playbackQueue?: { contentItems?: unknown } } | undefined;
+  const items = setState?.playbackQueue?.contentItems;
+  return Array.isArray(items) ? items : [];
+}
+
 export interface CompanionEvent {
   identifier: string | undefined;
   data: OpackDict;
@@ -198,14 +205,12 @@ export class AppleTV extends EventEmitter {
     content: OpackDict,
     timeoutMs?: number,
   ): Promise<OpackDict> {
-    if (!this.companionConnection) throw new Error('Companion not connected');
-    return this.companionConnection.sendRequest(identifier, content, timeoutMs);
+    return this.requireCompanion().sendRequest(identifier, content, timeoutMs);
   }
 
   /** Send a companion message without waiting for response */
   sendCompanionMessage(identifier: string, content: OpackDict): void {
-    if (!this.companionConnection) throw new Error('Companion not connected');
-    this.companionConnection.sendMessage(identifier, content);
+    this.requireCompanion().sendMessage(identifier, content);
   }
 
   // --- Companion apps, accounts and buttons ---
@@ -269,7 +274,7 @@ export class AppleTV extends EventEmitter {
   async select(): Promise<void> { await this.sendKey('select'); }
   async menu(): Promise<void> { await this.sendKey('menu'); }
   async home(): Promise<void> { await this.sendKey('home'); }
-  async homeHold(): Promise<void> { await this.sendKey('home_hold'); }
+  async homeHold(): Promise<void> { await this.sendKey('home', 1000); }
   async topMenu(): Promise<void> { await this.sendKey('top_menu'); }
   async playPause(): Promise<void> { await this.sendKey('play_pause'); }
   /** Skip forward; `seconds` overrides the app's default interval. */
@@ -393,16 +398,8 @@ export class AppleTV extends EventEmitter {
       artworkWidth: width,
       artworkHeight: height,
     });
-    const setState = response['.setStateMessage'] as
-      | Record<string, unknown>
-      | undefined;
-    const queue = setState?.playbackQueue as
-      | Record<string, unknown>
-      | undefined;
-    const items = queue?.contentItems as
-      | Record<string, unknown>[]
-      | undefined;
-    if (items && items.length > 0) {
+    const items = contentItems(response);
+    if (items.length > 0) {
       const artworkData = items[0].artworkData;
       if (artworkData && Buffer.isBuffer(artworkData)) {
         return artworkData;
@@ -424,6 +421,9 @@ export class AppleTV extends EventEmitter {
       case Key.Previous: return this.previous();
       case Key.Wake: return this.wake();
       case Key.Suspend: return this.suspend();
+      case Key.SkipForward: return this.skipForward();
+      case Key.SkipBackward: return this.skipBackward();
+      case Key.HomeHold: return this.homeHold();
       default: return this.sendKey(key);
     }
   }
@@ -556,27 +556,11 @@ export class AppleTV extends EventEmitter {
     }
   }
 
-  private static readonly MEDIA_COMMAND_KEYS: Record<string, number> = {
-    skip_forward: 18,
-    skip_backward: 19,
-  };
-
-  private async sendKey(key: string): Promise<void> {
+  /** Press and release a HID_KEY_MAP button, holding it for `holdDuration` ms. */
+  private async sendKey(key: string, holdDuration = 50): Promise<void> {
     const conn = this.requireConnection();
-
-    // Some keys map to media commands instead of HID button events
-    const mediaCommand = AppleTV.MEDIA_COMMAND_KEYS[key];
-    if (mediaCommand !== undefined) {
-      await this.sendMediaCommand(mediaCommand);
-      return;
-    }
-
-    // Button events via HID key map
-    const baseKey = key === 'home_hold' ? 'home' : key;
-    const hid = HID_KEY_MAP[baseKey];
+    const hid = HID_KEY_MAP[key];
     if (!hid) throw new Error(`Unknown key: ${key}`);
-
-    const holdDuration = key === 'home_hold' ? 1000 : 50;
 
     const downMsg = await MRPMessage.sendHIDEvent(hid.usagePage, hid.usage, true);
     await conn.sendMRPMessage(downMsg);

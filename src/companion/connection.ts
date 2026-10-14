@@ -431,7 +431,8 @@ export class CompanionConnection extends EventEmitter {
 
       const header = this.buffer.subarray(0, 4);
       const encryptedPayload = this.buffer.subarray(4, totalLen);
-      this.buffer = Buffer.from(this.buffer.subarray(totalLen));
+      // A view, not a copy: copying the tail per frame is O(n²) for a chunk of many frames.
+      this.buffer = this.buffer.subarray(totalLen);
 
       // Companion leaves empty frames unencrypted; decrypting one would consume a nonce.
       if (payloadLen === 0) continue;

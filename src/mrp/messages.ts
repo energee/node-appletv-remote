@@ -57,10 +57,17 @@ export enum MessageType {
 // .proto files are read at run time and bundlers (e.g. `bun build`) see a plain module.
 // To support another message, add its file to PROTO_FILES in scripts/gen-proto.mjs.
 let root: protobuf.Root | null = null;
+const types = new Map<string, protobuf.Type>();
 
-async function loadRoot(): Promise<protobuf.Root> {
-  root ??= protobuf.Root.fromJSON(MRP_SCHEMA as protobuf.INamespace);
-  return root;
+/** Look up a message type once; every MRP send and receive goes through here. */
+function lookupType(name: string): protobuf.Type {
+  let type = types.get(name);
+  if (!type) {
+    root ??= protobuf.Root.fromJSON(MRP_SCHEMA as protobuf.INamespace);
+    type = root.lookupType(name);
+    types.set(name, type);
+  }
+  return type;
 }
 
 export const HID_KEY_MAP: Record<string, { usagePage: number; usage: number }> = {
@@ -104,8 +111,7 @@ async function encodeMessage(
   extension?: { key: string; typeName: string; fields: Record<string, unknown> },
   options?: { omitIdentifier?: boolean },
 ): Promise<Buffer> {
-  const root = await loadRoot();
-  const ProtocolMessage = root.lookupType('ProtocolMessage');
+  const ProtocolMessage = lookupType('ProtocolMessage');
 
   const fields: Record<string, unknown> = { type };
   if (!options?.omitIdentifier) {
@@ -113,7 +119,7 @@ async function encodeMessage(
   }
 
   if (extension) {
-    const ExtType = root.lookupType(extension.typeName);
+    const ExtType = lookupType(extension.typeName);
     fields[extension.key] = ExtType.create(extension.fields);
   }
 
@@ -154,8 +160,7 @@ export class MRPMessage {
   static async decode(
     buffer: Buffer,
   ): Promise<protobuf.Message & Record<string, unknown>> {
-    const root = await loadRoot();
-    const ProtocolMessage = root.lookupType('ProtocolMessage');
+    const ProtocolMessage = lookupType('ProtocolMessage');
     const decoded = ProtocolMessage.decode(buffer);
     return decoded as protobuf.Message & Record<string, unknown>;
   }
@@ -247,9 +252,8 @@ export class MRPMessage {
     command: number,
     options?: Record<string, unknown>,
   ): Promise<Buffer> {
-    const root = await loadRoot();
     const fields: Record<string, unknown> = { command };
-    if (options) fields.options = root.lookupType('CommandOptions').create(options);
+    if (options) fields.options = lookupType('CommandOptions').create(options);
     return encodeMessage(MessageType.SendCommand, {
       key: '.sendCommandMessage',
       typeName: 'SendCommandMessage',

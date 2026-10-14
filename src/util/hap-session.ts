@@ -39,6 +39,20 @@ export class HAPSession {
     return Buffer.concat(frames);
   }
 
+  /**
+   * Decrypt every complete frame at the start of `data` and return the joined plaintext
+   * plus the bytes of any trailing partial frame, for streaming receive buffers.
+   */
+  decryptAvailable(data: Buffer): { plaintext: Buffer; rest: Buffer } {
+    let end = 0;
+    while (data.length - end >= 2) {
+      const size = 2 + data.readUInt16LE(end) + AUTH_TAG_LENGTH;
+      if (data.length - end < size) break;
+      end += size;
+    }
+    return { plaintext: this.decrypt(data.subarray(0, end)), rest: data.subarray(end) };
+  }
+
   decrypt(data: Buffer): Buffer {
     const parts: Buffer[] = [];
     let offset = 0;

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { scan, type DiscoveredDeviceInfo } from '../discovery.js';
-import { AppleTV, Key } from '../appletv.js';
+import { setTimeout as delay } from 'node:timers/promises';
+import { AppleTV, Key, contentItems } from '../appletv.js';
+import { MessageType } from '../mrp/messages.js';
 import { Credentials } from '../credentials.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -123,7 +125,7 @@ async function cmdCommand(command: string, deviceId?: string) {
   } else {
     await atv.sendKeyCommand(command as Key);
     console.log(`Sent: ${command}`);
-    await new Promise((r) => setTimeout(r, 1000));
+    await delay(1000);
   }
   await atv.close();
 }
@@ -182,13 +184,12 @@ async function cmdState(deviceId?: string) {
     }
 
     // State comes via PlaybackQueueRequest — extract metadata from contentItems
-    const queue = setState.playbackQueue as Record<string, unknown> | undefined;
-    const items = queue?.contentItems as Record<string, unknown>[] | undefined;
+    const items = contentItems(response);
     const playerPath = setState.playerPath as Record<string, unknown> | undefined;
     const client = playerPath?.client as Record<string, unknown> | undefined;
     const appName = client?.bundleIdentifier as string | undefined;
 
-    if (items && items.length > 0) {
+    if (items.length > 0) {
       const metadata = items[0].metadata as Record<string, unknown> | undefined;
       if (metadata) {
         const title = metadata.title ?? '';
@@ -235,10 +236,8 @@ async function cmdQueue(deviceId?: string) {
       length: 20,
       includeMetadata: true,
     });
-    const setState = response['.setStateMessage'] as Record<string, unknown> | undefined;
-    const queue = setState?.playbackQueue as Record<string, unknown> | undefined;
-    const items = queue?.contentItems as Record<string, unknown>[] | undefined;
-    if (items && items.length > 0) {
+    const items = contentItems(response);
+    if (items.length > 0) {
       items.forEach((item, i) => {
         const metadata = item.metadata as Record<string, unknown> | undefined;
         const title = metadata?.title ?? item.identifier ?? '(unknown)';
@@ -394,7 +393,7 @@ async function cmdKeyboard(deviceId?: string) {
   atv.on('message', (msg: Message) => {
     // Also log raw keyboard/text messages for debugging
     const type = msg.type;
-    if (type === 23 || type === 25) {
+    if (type === MessageType.Keyboard || type === MessageType.TextInput) {
       console.log(`  raw: ${JSON.stringify(msg.payload)}`);
     }
   });
