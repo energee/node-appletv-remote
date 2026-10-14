@@ -44,6 +44,7 @@ export enum MessageType {
   SendButtonEvent = 43,
   SetNowPlayingClient = 46,
   SetNowPlayingPlayer = 47,
+  SetVolume = 51,
   VolumeDidChange = 52,
   RemoveClient = 53,
   RemovePlayer = 54,
@@ -241,11 +242,27 @@ export class MRPMessage {
     );
   }
 
-  static async sendMediaCommand(command: number): Promise<Buffer> {
+  /** SendCommand with optional CommandOptions (e.g. playbackPosition, shuffleMode, skipInterval). */
+  static async sendMediaCommand(
+    command: number,
+    options?: Record<string, unknown>,
+  ): Promise<Buffer> {
+    const root = await loadRoot();
+    const fields: Record<string, unknown> = { command };
+    if (options) fields.options = root.lookupType('CommandOptions').create(options);
     return encodeMessage(MessageType.SendCommand, {
       key: '.sendCommandMessage',
       typeName: 'SendCommandMessage',
-      fields: { command },
+      fields,
+    });
+  }
+
+  /** Set absolute volume (0..1) on an output device (pyatv: messages.set_volume). */
+  static async setVolume(outputDeviceUID: string, volume: number): Promise<Buffer> {
+    return encodeMessage(MessageType.SetVolume, {
+      key: '.setVolumeMessage',
+      typeName: 'SetVolumeMessage',
+      fields: { outputDeviceUID, volume },
     });
   }
 

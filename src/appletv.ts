@@ -57,6 +57,56 @@ export enum Key {
   Wake = 'wake',
 }
 
+/** Shuffle modes for setShuffle; values are the MRP CommandOptions.ShuffleMode enum. */
+export enum ShuffleState {
+  Off = 1,
+  Albums = 2,
+  Songs = 3,
+}
+
+/** Repeat modes for setRepeat; values are the MRP CommandOptions.RepeatMode enum (Off is 0). */
+export enum RepeatState {
+  Off = 0,
+  Track = 1,
+  All = 2,
+}
+
+/** Device power as reported by Companion SystemStatus (pyatv PowerState). */
+export enum PowerState {
+  Unknown = 'unknown',
+  Off = 'off',
+  On = 'on',
+}
+
+/** A launchable app from appList(). */
+export interface App {
+  name: string;
+  bundleId: string;
+}
+
+/** A user account from accountList(). */
+export interface UserAccount {
+  name: string;
+  id: string;
+}
+
+/** Companion `_hidC` button codes (pyatv HidCommand) for buttons MRP has no HID usage for. */
+const COMPANION_HID = {
+  screensaver: 11,
+  channelUp: 15,
+  channelDown: 16,
+  guide: 17,
+  pageUp: 18,
+  pageDown: 19,
+} as const;
+
+/** Companion SystemStatus `state`: 1 asleep, 2 screensaver, 3 awake, 4 idle. */
+function powerStateFromStatus(state: unknown): PowerState {
+  if (state === 1) return PowerState.Off;
+  if (state === 2 || state === 3 || state === 4) return PowerState.On;
+  return PowerState.Unknown;
+}
+
 export interface CompanionEvent {
   identifier: string | undefined;
   data: OpackDict;
@@ -71,6 +121,12 @@ export class AppleTV extends EventEmitter {
   readonly companionPort?: number;
   private connection?: AirPlayConnection;
   private companionConnection?: CompanionConnection;
+  /** Output device for SetVolume, from the Apple TV's DeviceInfo reply (clusterID or deviceUID). */
+  private outputDeviceUID?: string;
+  /** Last absolute volume (0..100) reported by VolumeDidChange; undefined until one arrives. */
+  volume?: number;
+  /** Last power state from fetchPowerState() or a SystemStatus event. */
+  powerState: PowerState = PowerState.Unknown;
 
   constructor(info: DiscoveredDeviceInfo) {
     super();
@@ -129,7 +185,7 @@ export class AppleTV extends EventEmitter {
     this.companionConnection.on('close', () => this.emit('companionClose'));
     this.companionConnection.on('error', (err) => this.emit('companionError', err));
     this.companionConnection.on('event', (event: CompanionEvent) => {
-      this.emit('companionEvent', event);
+      this.handleCompanionEvent(event);
     });
 
     await this.companionConnection.connect();
@@ -152,6 +208,58 @@ export class AppleTV extends EventEmitter {
     this.companionConnection.sendMessage(identifier, content);
   }
 
+  // --- Companion apps, accounts and buttons ---
+
+  /** List launchable apps (Companion FetchLaunchableApplicationsEvent). */
+  async appList(): Promise<App[]> {
+    const content = await this.companionContent('FetchLaunchableApplicationsEvent');
+    return [...content].map(([bundleId, name]) => ({ name: String(name), bundleId: String(bundleId) }));
+  }
+
+  /** Launch an app by bundle ID (`com.netflix.Netflix`) or open a URL / URL scheme. */
+  async launchApp(bundleIdOrUrl: string): Promise<void> {
+    // ponytail: pyatv's rule — anything with a URL scheme is a URL.
+    const key = /^[a-z][a-z0-9+.-]*:/i.test(bundleIdOrUrl) ? '_urlS' : '_bundleID';
+    await this.requireCompanion().sendRequest('_launchApp', new Map([[key, bundleIdOrUrl]]));
+  }
+
+  /** List user accounts that can be switched to (Companion FetchUserAccountsEvent). */
+  async accountList(): Promise<UserAccount[]> {
+    const content = await this.companionContent('FetchUserAccountsEvent');
+    return [...content].map(([id, name]) => ({ name: String(name), id: String(id) }));
+  }
+
+  async switchAccount(accountId: string): Promise<void> {
+    await this.requireCompanion().sendRequest(
+      'SwitchUserAccountEvent',
+      new Map([['SwitchAccountID', accountId]]),
+    );
+  }
+
+  async channelUp(): Promise<void> { await this.companionButton(COMPANION_HID.channelUp); }
+  async channelDown(): Promise<void> { await this.companionButton(COMPANION_HID.channelDown); }
+  async screensaver(): Promise<void> { await this.companionButton(COMPANION_HID.screensaver); }
+  async guide(): Promise<void> { await this.companionButton(COMPANION_HID.guide); }
+  async pageUp(): Promise<void> { await this.companionButton(COMPANION_HID.pageUp); }
+  async pageDown(): Promise<void> { await this.companionButton(COMPANION_HID.pageDown); }
+
+  // --- Power state (Companion) ---
+
+  /** Ask the device for its power state (Companion FetchAttentionState) and cache it. */
+  async fetchPowerState(): Promise<PowerState> {
+    const content = await this.companionContent('FetchAttentionState');
+    this.updatePowerState(powerStateFromStatus(content.get('state')));
+    return this.powerState;
+  }
+
+  /** Subscribe to SystemStatus events; changes then emit `powerState`. */
+  subscribePowerState(): void {
+    this.requireCompanion().sendMessage(
+      '_interest',
+      new Map([['_regEvents', ['SystemStatus', 'TVSystemStatus']]]),
+    );
+  }
+
   // --- Remote control commands ---
 
   async up(): Promise<void> { await this.sendKey('up'); }
@@ -164,8 +272,14 @@ export class AppleTV extends EventEmitter {
   async homeHold(): Promise<void> { await this.sendKey('home_hold'); }
   async topMenu(): Promise<void> { await this.sendKey('top_menu'); }
   async playPause(): Promise<void> { await this.sendKey('play_pause'); }
-  async skipForward(): Promise<void> { await this.sendKey('skip_forward'); }
-  async skipBackward(): Promise<void> { await this.sendKey('skip_backward'); }
+  /** Skip forward; `seconds` overrides the app's default interval. */
+  async skipForward(seconds?: number): Promise<void> {
+    await this.sendMediaCommand(18, seconds ? { skipInterval: seconds } : undefined);
+  }
+  /** Skip backward; `seconds` overrides the app's default interval. */
+  async skipBackward(seconds?: number): Promise<void> {
+    await this.sendMediaCommand(19, seconds ? { skipInterval: seconds } : undefined);
+  }
   async volumeUp(): Promise<void> { await this.sendKey('volume_up'); }
   async volumeDown(): Promise<void> { await this.sendKey('volume_down'); }
 
@@ -176,6 +290,27 @@ export class AppleTV extends EventEmitter {
   async stop(): Promise<void> { await this.sendMediaCommand(4); }
   async next(): Promise<void> { await this.sendMediaCommand(5); }
   async previous(): Promise<void> { await this.sendMediaCommand(6); }
+
+  /** Seek to an absolute position in seconds. */
+  async setPosition(seconds: number): Promise<void> {
+    await this.sendMediaCommand(45, { playbackPosition: seconds });
+  }
+
+  async setShuffle(state: ShuffleState): Promise<void> {
+    await this.sendMediaCommand(47, { shuffleMode: state, sendOptions: 0 });
+  }
+
+  async setRepeat(state: RepeatState): Promise<void> {
+    await this.sendMediaCommand(46, { repeatMode: state, sendOptions: 0 });
+  }
+
+  /** Set absolute volume, 0..100. Needs the output device the Apple TV reported on connect. */
+  async setVolume(level: number): Promise<void> {
+    const conn = this.requireConnection();
+    if (!this.outputDeviceUID) throw new Error('No output device known for volume control');
+    if (!(level >= 0 && level <= 100)) throw new Error('Volume must be 0..100');
+    await conn.sendMRPMessage(await MRPMessage.setVolume(this.outputDeviceUID, level / 100));
+  }
 
   // --- Device power ---
 
@@ -300,10 +435,44 @@ export class AppleTV extends EventEmitter {
     return this.connection;
   }
 
-  private async sendMediaCommand(command: number): Promise<void> {
+  private async sendMediaCommand(command: number, options?: Record<string, unknown>): Promise<void> {
     const conn = this.requireConnection();
-    const msg = await MRPMessage.sendMediaCommand(command);
+    const msg = await MRPMessage.sendMediaCommand(command, options);
     await conn.sendMRPMessage(msg);
+  }
+
+  private requireCompanion(): CompanionConnection {
+    if (!this.companionConnection) throw new Error('Companion not connected');
+    return this.companionConnection;
+  }
+
+  /** Send a Companion request and return its `_c` content dict. */
+  private async companionContent(identifier: string): Promise<OpackDict> {
+    const reply = await this.requireCompanion().sendRequest(identifier, new Map());
+    const content = reply.get('_c');
+    if (!(content instanceof Map)) throw new Error(`Companion ${identifier}: missing content`);
+    return content;
+  }
+
+  /** Press and release a Companion HID button (`_hBtS` 1 = down, 2 = up). */
+  private async companionButton(code: number): Promise<void> {
+    const conn = this.requireCompanion();
+    await conn.sendRequest('_hidC', new Map([['_hBtS', 1], ['_hidC', code]]));
+    await conn.sendRequest('_hidC', new Map([['_hBtS', 2], ['_hidC', code]]));
+  }
+
+  private updatePowerState(state: PowerState): void {
+    if (state === this.powerState) return;
+    this.powerState = state;
+    this.emit('powerState', state);
+  }
+
+  private handleCompanionEvent(event: CompanionEvent): void {
+    this.emit('companionEvent', event);
+    if (event.identifier === 'SystemStatus' || event.identifier === 'TVSystemStatus') {
+      const content = event.data.get('_c');
+      if (content instanceof Map) this.updatePowerState(powerStateFromStatus(content.get('state')));
+    }
   }
 
   private handleMRPMessage(msg: Record<string, unknown>): void {
@@ -339,6 +508,22 @@ export class AppleTV extends EventEmitter {
         | undefined;
       if (playbackQueue) {
         this.emit('playbackQueue', playbackQueue);
+      }
+    }
+
+    // DeviceInfo (type 15): remember the output device for SetVolume (pyatv: clusterID or deviceUID)
+    if (msg.type === MessageType.DeviceInfo) {
+      const info = msg['.deviceInfoMessage'] as Record<string, unknown> | undefined;
+      const uid = (info?.clusterID || info?.deviceUID) as string | undefined;
+      if (uid) this.outputDeviceUID = uid;
+    }
+
+    // VolumeDidChange (type 52): track absolute volume for our output device as 0..100
+    if (msg.type === MessageType.VolumeDidChange) {
+      const vol = msg['.volumeDidChangeMessage'] as Record<string, unknown> | undefined;
+      if (vol && vol.outputDeviceUID === this.outputDeviceUID && typeof vol.volume === 'number') {
+        this.volume = Math.round(vol.volume * 1000) / 10;
+        this.emit('volume', this.volume);
       }
     }
 

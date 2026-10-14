@@ -129,6 +129,7 @@ npm install node-appletv-remote
 import {
   scan, AppleTV, Credentials, Key,
   NowPlayingInfo, PlaybackState, SupportedCommand, Command,
+  ShuffleState, RepeatState, PowerState,
   Message, AirPlayConnection, parseCredentials,
 } from 'node-appletv-remote';
 ```
@@ -183,10 +184,14 @@ await atv.pause();
 await atv.playPause();
 await atv.next();
 await atv.previous();
-await atv.skipForward();
-await atv.skipBackward();
+await atv.skipForward();      // app's default interval
+await atv.skipBackward(30);   // or an explicit number of seconds
+await atv.setPosition(120);   // seek to 2:00
+await atv.setShuffle(ShuffleState.Songs);
+await atv.setRepeat(RepeatState.All);
 await atv.volumeUp();
 await atv.volumeDown();
+await atv.setVolume(40);      // absolute, 0..100; atv.volume holds the last reported level
 
 // Device power
 await atv.wake();
@@ -203,6 +208,31 @@ const artwork = await atv.requestArtwork(400, 400); // null if unavailable
 await atv.sendKeyCommand(Key.Play);
 
 atv.close();
+```
+
+### Apps, accounts, power state and extra buttons (Companion)
+
+These go over the Companion protocol, so call `connectCompanion()` first:
+
+```typescript
+await atv.connectCompanion(credentials.companionCredentials);
+
+const apps = await atv.appList();             // [{ name: 'Netflix', bundleId: 'com.netflix.Netflix' }, ...]
+await atv.launchApp('com.netflix.Netflix');   // by bundle ID
+await atv.launchApp('https://www.youtube.com/watch?v=dQw4w9WgXcQ'); // or a URL / URL scheme
+
+const accounts = await atv.accountList();     // [{ name: 'Alice', id: '...' }, ...]
+await atv.switchAccount(accounts[0].id);
+
+await atv.fetchPowerState();                  // PowerState.On | Off | Unknown, also cached in atv.powerState
+atv.subscribePowerState();                    // then 'powerState' fires on changes
+
+await atv.channelUp();
+await atv.channelDown();
+await atv.guide();
+await atv.pageUp();
+await atv.pageDown();
+await atv.screensaver();
 ```
 
 ### Events
@@ -227,6 +257,12 @@ atv.on('playbackQueue', (queue) => {
   console.log(queue);
 });
 
+// Absolute volume (0..100) when it changes
+atv.on('volume', (level: number) => { /* ... */ });
+
+// Power state changes, after subscribePowerState()
+atv.on('powerState', (state: PowerState) => { /* ... */ });
+
 // All raw MRP messages
 atv.on('message', (msg: Message) => {
   console.log(msg.toString());
@@ -237,7 +273,7 @@ atv.on('message', (msg: Message) => {
 
 | Layer | Description |
 |-------|-------------|
-| **AppleTV API** | `scan()` · `connect()` · navigation · media · `getState()` · `requestPlaybackQueue()` · `requestArtwork()` |
+| **AppleTV API** | `scan()` · `connect()` · navigation · media · seek/shuffle/repeat · `setVolume()` · `getState()` · `requestPlaybackQueue()` · `requestArtwork()` · apps · accounts · power state |
 | **AirPlayConnection** | RTSP session · Event channel · Data channel · Heartbeat |
 | **HAP Auth** | SRP pair-setup · X25519 pair-verify · Ed25519 signatures · Companion pair-setup |
 | **MRP Protocol** | Protobuf messages · HID events · Media commands |

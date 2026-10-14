@@ -34,7 +34,8 @@ export class NowPlayingInfo {
     this.playbackState =
       (setStatePayload.playbackState as PlaybackState) ?? PlaybackState.Unknown;
     this.appDisplayName = (setStatePayload.displayName as string) ?? '';
-    this.appBundleIdentifier = '';
+    const playerPath = setStatePayload.playerPath as { client?: { bundleIdentifier?: string } } | undefined;
+    this.appBundleIdentifier = playerPath?.client?.bundleIdentifier ?? '';
   }
 
   percentCompleted(): string {

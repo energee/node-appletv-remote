@@ -8,3 +8,12 @@ describe('package entry', () => {
     expect((entry as Record<string, unknown>).PairSetup).toBe(PairSetup);
   });
 });
+
+describe('pyatv-parity exports', () => {
+  it('exports ShuffleState, RepeatState and PowerState', async () => {
+    const lib = await import('../index.js');
+    expect(lib.ShuffleState.Songs).toBe(3);
+    expect(lib.RepeatState.All).toBe(2);
+    expect(lib.PowerState.On).toBe('on');
+  });
+});

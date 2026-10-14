@@ -36,6 +36,8 @@ const PROTO_FILES = [
   'UpdateContentItemMessage.proto',
   'SendButtonEventMessage.proto',
   'SendHIDEventMessage.proto',
+  'SetVolumeMessage.proto',
+  'VolumeDidChangeMessage.proto',
 ];
 
 const root = new protobuf.Root();
