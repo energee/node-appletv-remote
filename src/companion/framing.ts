@@ -28,10 +28,13 @@ export interface Frame {
 const HEADER_SIZE = 4;
 
 /**
- * Build a frame from a type and payload. Does not check the payload fits the 3-byte
- * length field; payloads over 16 MiB would have their length silently truncated.
+ * Build a frame from a type and payload.
+ * @throws {RangeError} if the payload does not fit the 3-byte length field (max 16 MiB - 1)
  */
 export function encodeFrame(type: FrameType, payload: Buffer): Buffer {
+  if (payload.length > 0xffffff) {
+    throw new RangeError('Companion payload too large for a 3-byte frame length');
+  }
   const header = Buffer.alloc(HEADER_SIZE);
   header[0] = type;
   // 3-byte big-endian length

@@ -79,13 +79,22 @@ export class PairVerify {
   }
 
   /**
-   * Run M1–M4, then close the HTTP connection.
+   * Run M1–M4, then close the HTTP connection whether or not it succeeded.
    * @returns `outputKey` (Control-Write, for data we send), `inputKey` (Control-Read,
    *   for data we receive), and the raw X25519 shared secret.
    * @throws if M2 is malformed, the server signature does not match the stored
-   *   serverLTPK, or M4 carries a non-zero error. The connection is left open on throw.
+   *   serverLTPK, or M4 carries a non-zero error.
    */
   async verify(): Promise<{ outputKey: Buffer; inputKey: Buffer; sharedSecret: Buffer }> {
+    try {
+      return await this.runVerify();
+    } finally {
+      this.http.destroy();
+    }
+  }
+
+  /** The M1–M4 exchange itself; `verify` wraps it so the connection is always closed. */
+  private async runVerify(): Promise<{ outputKey: Buffer; inputKey: Buffer; sharedSecret: Buffer }> {
     // Step 1: Send M1
     const m1 = this.buildM1();
     const m2Body = await this.http.post('/pair-verify', m1);
@@ -195,7 +204,6 @@ export class PairVerify {
       32,
     );
 
-    this.http.destroy();
     return { outputKey, inputKey, sharedSecret: Buffer.from(sharedSecret) };
   }
 }

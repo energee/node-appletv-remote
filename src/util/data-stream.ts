@@ -18,8 +18,8 @@ export function encodeVarint(value: number): Buffer {
 }
 
 /**
- * Decode a protobuf-style unsigned varint at `offset`. Uses 32-bit bitwise math, so values
- * of 2^31 or more are not decoded correctly. Stops at end of buffer if no terminator is found.
+ * Decode a protobuf-style unsigned varint at `offset`. Exact up to 2^53
+ * (Number.MAX_SAFE_INTEGER). Stops at end of buffer if no terminator is found.
  */
 export function decodeVarint(buf: Buffer, offset = 0): { value: number; bytesRead: number } {
   let value = 0;
@@ -28,7 +28,7 @@ export function decodeVarint(buf: Buffer, offset = 0): { value: number; bytesRea
 
   while (offset + bytesRead < buf.length) {
     const byte = buf[offset + bytesRead];
-    value |= (byte & 0x7f) << shift;
+    value += (byte & 0x7f) * 2 ** shift;  // not `<<`: bitwise ops truncate to int32
     bytesRead++;
     if ((byte & 0x80) === 0) break;
     shift += 7;

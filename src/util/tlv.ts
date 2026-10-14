@@ -52,14 +52,17 @@ export function tlvEncode(data: TlvData): Buffer {
 
 /**
  * Decode TLV8 into a tag map, concatenating repeated items with the same tag (reassembling
- * fragmented values). Does not validate lengths: a truncated item yields a short value.
+ * fragmented values).
+ * @throws if an item is truncated (header or value runs past the end of `buf`)
  */
 export function tlvDecode(buf: Buffer): TlvData {
   const result: TlvData = {};
   let offset = 0;
   while (offset < buf.length) {
+    if (offset + 2 > buf.length) throw new Error('TLV truncated: missing length byte');
     const tag = buf[offset];
     const length = buf[offset + 1];
+    if (offset + 2 + length > buf.length) throw new Error(`TLV truncated: tag ${tag} needs ${length} bytes`);
     const value = buf.subarray(offset + 2, offset + 2 + length);
     if (result[tag]) {
       result[tag] = Buffer.concat([result[tag]!, value]);
