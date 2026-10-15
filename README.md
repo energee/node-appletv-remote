@@ -25,18 +25,18 @@ atv messages [deviceId]           # stream raw MRP messages until Ctrl+C
 atv keyboard [deviceId]           # stream keyboard/text events
 atv --help                       # complete syntax and available keys
 
-# AirPlay/MRP playback and text
+# AirPlay/MRP playback
 atv stop [deviceId]
 atv seek 120.5 [deviceId]          # absolute position in seconds (>= 0)
 atv skip-forward 30 [deviceId]    # positive seconds; skip-backward also supported
 atv shuffle songs [deviceId]      # off, albums, songs
 atv repeat all [deviceId]         # off, track, all
 atv volume 40 [deviceId]          # absolute volume, 0..100
-atv text set "search words" [deviceId]
-atv text append " more" [deviceId]
-atv text clear [deviceId]
 
 # Companion only (requires atv companion-pair)
+atv text set "search words" [deviceId]  # prints the new text; fails if no field is focused
+atv text append " more" [deviceId]
+atv text clear [deviceId]
 atv app list [deviceId]           # tab-separated bundle ID and name
 atv app launch com.netflix.Netflix [deviceId] # bundle ID or URL / URL scheme
 atv account list [deviceId]       # tab-separated account ID and name
@@ -495,7 +495,15 @@ await atv.fetchPowerState();                 // PowerState.On / Off / Unknown
 atv.subscribePowerState();                   // then listen for 'powerState'
 
 await atv.guide();  // also channelUp, channelDown, pageUp, pageDown, screensaver
+
+// Text input into the focused field; each resolves with the field's resulting text
+await atv.setText('apple tv');               // 'apple tv'
+await atv.insertText(' remote');             // 'apple tv remote'
+await atv.getText();                         // read without editing
+await atv.clearText();                       // ''
 ```
+
+Text input uses Companion RTI, following pyatv's `CompanionKeyboard`: restart the text session (`_tiStop`/`_tiStart`), read the session UUID and current text from the reply, then send `_tiC` edits. A real Apple TV 4K ignored the older MRP `TextInputMessage`, so text input now needs `connectCompanion()`, and it rejects with `No text field is focused` instead of silently succeeding. `deleteText()` still sends the MRP Delete action.
 
 `connectCompanion()` sends pyatv's `_systemInfo` after pair-verify. Without it, a real Apple TV 4K answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on an Apple TV 4K (tvOS, AppleTV6,2).
 

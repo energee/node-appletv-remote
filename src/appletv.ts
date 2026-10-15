@@ -19,6 +19,7 @@ import { Command, SupportedCommand } from './supported-command.js';
 import { Message } from './message.js';
 import { CompanionConnection } from './companion/connection.js';
 import { CompanionPairSetup } from './companion/pair-setup.js';
+import { readTextSession, rtiClearTextPayload, rtiInputTextPayload } from './companion/text-input.js';
 import type { OpackDict, OpackValue } from './companion/opack.js';
 import type { HAPCredentials } from './auth/types.js';
 import type { DiscoveredDeviceInfo } from './discovery.js';
@@ -40,7 +41,7 @@ export interface TextInputEvent {
   timestamp?: number;
 }
 
-/** MRP TextInputMessage action types used by setText/insertText/clearText/deleteText. */
+/** MRP TextInputMessage action types; deleteText sends Delete (setText/insertText/clearText use Companion RTI). */
 export enum TextInputActionType {
   Unknown = 0,
   Insert = 1,
@@ -620,25 +621,40 @@ export class AppleTV extends EventEmitter {
 
   // --- Text input ---
 
-  /** Replace the focused text field's contents. */
-  async setText(text: string): Promise<void> {
-    const conn = this.requireConnection();
-    const msg = await MRPMessage.textInput(text, TextInputActionType.Set);
-    await conn.sendMRPMessage(msg);
-  }
+  /** Replace the focused text field's contents (Companion); resolves with the new text. */
+  async setText(text: string): Promise<string> { return this.editText(text, true); }
 
-  /** Insert text into the focused text field. */
-  async insertText(text: string): Promise<void> {
-    const conn = this.requireConnection();
-    const msg = await MRPMessage.textInput(text, TextInputActionType.Insert);
-    await conn.sendMRPMessage(msg);
-  }
+  /** Insert text at the cursor of the focused text field (Companion); resolves with the new text. */
+  async insertText(text: string): Promise<string> { return this.editText(text, false); }
 
-  /** Clear the focused text field. */
-  async clearText(): Promise<void> {
-    const conn = this.requireConnection();
-    const msg = await MRPMessage.textInput('', TextInputActionType.ClearText);
-    await conn.sendMRPMessage(msg);
+  /** Clear the focused text field (Companion); resolves with the empty text. */
+  async clearText(): Promise<string> { return this.editText('', true); }
+
+  /** Read the focused text field's contents (Companion) without editing it. */
+  async getText(): Promise<string> { return this.editText('', false); }
+
+  /**
+   * pyatv CompanionKeyboard: restart the RTI session for fresh state, then send `_tiC` edits.
+   * Modern tvOS ignores the MRP TextInputMessage, so text input needs connectCompanion().
+   * @throws If no text field is focused (the `_tiStart` reply has no `_tiD`).
+   */
+  private async editText(text: string, clear: boolean): Promise<string> {
+    const conn = this.requireCompanion();
+    await conn.sendRequest('_tiStop', new Map());
+    const content = (await conn.sendRequest('_tiStart', new Map())).get('_c');
+    const archive = content instanceof Map ? content.get('_tiD') : undefined;
+    if (!Buffer.isBuffer(archive)) throw new Error('No text field is focused');
+    const session = readTextSession(archive);
+    let current = session.text;
+    if (clear) {
+      conn.sendMessage('_tiC', new Map<OpackValue, OpackValue>([['_tiV', 1], ['_tiD', rtiClearTextPayload(session.sessionUUID)]]));
+      current = '';
+    }
+    if (text) {
+      conn.sendMessage('_tiC', new Map<OpackValue, OpackValue>([['_tiV', 1], ['_tiD', rtiInputTextPayload(session.sessionUUID, text)]]));
+      current += text;
+    }
+    return current;
   }
 
   /** Send a Delete text-input action to the focused text field. */
