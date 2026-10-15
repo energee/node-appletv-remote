@@ -139,14 +139,19 @@ describe('AirPlay URL playback', () => {
   }, 10000);
   it('keeps playback alive with feedback and stops feedback after close', async () => {
     const fake = await receiver(); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
+    const feedback = () => fake.requests.filter(r => r.line === 'POST /feedback RTSP/1.0').length;
+    // Only the 2 s heartbeat interval is faked; sockets and request timeouts keep real clocks.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     try {
       await playback.playUrl('https://example.org/movie.mp4');
-      await new Promise(r => setTimeout(r, 2150));
-      expect(fake.requests.filter(r => r.line === 'POST /feedback RTSP/1.0')).toHaveLength(2);
+      expect(feedback()).toBe(1);
+      await vi.advanceTimersByTimeAsync(2000);
+      await vi.waitFor(() => expect(feedback()).toBe(2));
       playback.close();
-      await new Promise(r => setTimeout(r, 2150));
-      expect(fake.requests.filter(r => r.line === 'POST /feedback RTSP/1.0')).toHaveLength(2);
-    } finally { playback.close(); await fake.close(); }
+      await vi.advanceTimersByTimeAsync(4000);
+      await new Promise(r => setTimeout(r, 20));
+      expect(feedback()).toBe(2);
+    } finally { vi.useRealTimers(); playback.close(); await fake.close(); }
   }, 10000);
   it('times out an unanswered receiver request and tears down', async () => {
     const fake = await receiver({ holdStatus: true }); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
