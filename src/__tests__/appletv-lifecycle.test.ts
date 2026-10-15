@@ -102,6 +102,19 @@ it.each(['AirPlay', 'Companion'])('forwards current %s failures even when transp
   expect(observed).toHaveBeenCalledWith(error);
 });
 
+it.each(['AirPlay', 'Companion'])('a failed %s setup that closes its transport emits no close event', async transport => {
+  const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test', companionPort: 1234 });
+  const prototype = transport === 'AirPlay' ? AirPlayConnection.prototype : CompanionConnection.prototype;
+  vi.spyOn(prototype, 'connect').mockImplementation(async function (this: AirPlayConnection | CompanionConnection) {
+    this.emit('close');
+    throw new Error('setup failed');
+  });
+  const closed = vi.fn();
+  tv.on(transport === 'AirPlay' ? 'close' : 'companionClose', closed);
+  await expect(transport === 'AirPlay' ? tv.connect(credentials) : tv.connectCompanion(credentials)).rejects.toThrow('setup failed');
+  expect(closed).not.toHaveBeenCalled();
+});
+
 it('does not throw a facade error when a current transport fails without an error observer', async () => {
   const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test' });
   vi.spyOn(AirPlayConnection.prototype, 'connect').mockResolvedValue();
