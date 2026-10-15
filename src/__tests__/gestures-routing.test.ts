@@ -1,4 +1,4 @@
-/** Protocol regressions for issues 16-18, grounded in pyatv 0.18.0. No hardware is used. */
+/** Protocol regressions for issues 16-18. No hardware is used. */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AppleTV, Key } from '../appletv.js';
 import { MRPMessage, MessageType } from '../mrp/messages.js';
@@ -171,7 +171,7 @@ describe('output routing', () => {
     let settled = false;
     const pending = atv.addOutputDevices(['s']).then(() => { settled = true; }, error => { settled = true; throw error; });
     await vi.advanceTimersByTimeAsync(0);
-    // pyatv types 65/66 use extensions 69/70, not the routing request extension 52.
+    // Types 65/66 use extensions 69/70, not the routing request extension 52.
     for (const identifier of ['', '12056f74686572']) {
       for (const error of ['2000', '2006f2040b756e737570706f72746564']) {
         (atv as any).handleMRPMessage(await MRPMessage.decode(Buffer.from(hex + identifier + error, 'hex')));

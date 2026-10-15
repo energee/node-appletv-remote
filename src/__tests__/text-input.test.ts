@@ -1,5 +1,5 @@
 /**
- * AppleTV text input over Companion RTI (pyatv CompanionKeyboard). A real Apple TV 4K ignored the MRP
+ * AppleTV text input over Companion RTI. A real Apple TV 4K ignored the MRP
  * TextInputMessage; this flow set, appended and cleared YouTube search text on the same device.
  */
 import { describe, expect, it, vi } from 'vitest';

@@ -1,4 +1,4 @@
-/** MRP builder and decoder regressions, including independent pyatv 0.18.0 wire fixtures. */
+/** MRP builder and decoder regressions, including independent wire fixtures. */
 import { describe, it, expect } from 'vitest';
 import { MRPMessage, MessageType, HID_KEY_MAP } from '../messages.js';
 

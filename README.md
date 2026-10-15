@@ -5,7 +5,7 @@
 
 Control an Apple TV from Node.js, as a library or a CLI. It speaks AirPlay 2, MRP (Media Remote Protocol) and Companion Link over your local network, with no native dependencies.
 
-I built this to learn how the Apple TV handshake works, and because the older Node libraries no longer work with current Apple TVs. Inspired by [pyatv](https://pyatv.dev/) and the original [node-appletv](https://github.com/evandcoleman/node-appletv).
+I built this to learn how the Apple TV handshake works, and because the older Node libraries no longer work with current Apple TVs. Inspired by the original [node-appletv](https://github.com/evandcoleman/node-appletv).
 
 **Existing remote-control status:** tested on an Apple TV 4K. Newly added protocol APIs are synthetic/loopback tested, not hardware validated. Discovery, pairing, navigation, media controls, now-playing, playback queue and artwork all work. Some apps (YouTube, for one) don't expose artwork.
 
@@ -116,11 +116,11 @@ await atv.close();
 ### Media results, state and runtime availability
 
 `play`, `pause`, `stop`, `next`, `previous`, seek, shuffle, repeat and skip commands
-wait for the reply carrying the request's identifier (5 s timeout; matched by identifier only, like pyatv).
+wait for the reply carrying the request's identifier (5 s timeout; matched by identifier only).
 Nonzero `sendError` rejects with both numeric codes; handler status is diagnostic
-context, not an independent rejection gate (matching pinned pyatv). Explicit
+context, not an independent rejection gate. Explicit
 nonzero envelope `errorCode` also rejects; an absent `sendError` or an absent
-`SendCommandResult` extension both count as success (pyatv NoError). HID keys (including `playPause`) only report successful writes, not
+`SendCommandResult` extension both count as success (NoError). HID keys (including `playPause`) only report successful writes, not
 device acknowledgments. Correct concurrent result matching depends on the MRP
 transport's request correlation.
 
@@ -147,7 +147,7 @@ Queue metadata uses its current `location`; item updates merge by identifier.
 Direct state updates retain omitted fields; a changed `uniqueIdentifier` clears
 old-track metadata. Runtime evidence is discarded on disconnect/reconnect. Inactive players stay separate until
 an active client/player message selects them; an empty `SetNowPlayingClient` selects the
-empty-bundle client (as pyatv does), so an idle TV reports nothing playing. `hasPlayback` distinguishes absent
+empty-bundle client, so an idle TV reports nothing playing. `hasPlayback` distinguishes absent
 metadata from paused/stopped playback; `playbackState` retains the device's explicit
 state (unknown if not reported). `playerIdentifier` and `appBundleIdentifier`
 identify the selected player. Position is a snapshot, not extrapolated. CLI state uses the same summary as
@@ -183,14 +183,10 @@ while playing, paused and after `stop`: queue replies and pushed state both work
 once an app has a loaded item. With nothing loaded, the HD sends no reply at all
 to `play`, so that command still times out after 5 s.
 
-Reference: pyatv [v0.18.0, commit d88abc960e188d3cd2498d19117e75d7711d8600](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600).
-`protocols/mrp/__init__.py:MrpMetadata.playing` reads cached player state;
-`player_state.py` merges field-present SetState updates and selects clients/players.
-`protocol.py:MrpProtocol.start` awaits ClientUpdatesConfig and GetKeyboardSession
-replies, while this library only sends them. pyatv correlates application replies
-by UUID; this library does too for media commands and the legacy heartbeat, and additionally
-requires the SetState type for queue requests, except that a same-identifier error reply
-also settles them (#10). The handshake is unchanged.
+The handshake sends ClientUpdatesConfig and GetKeyboardSession without waiting for
+their replies. Media commands and the legacy heartbeat correlate replies by identifier;
+queue requests additionally require the SetState type, except that a same-identifier
+error reply also settles them (#10).
 
 #### Sanitized #10 capture (operator-run only)
 
@@ -248,9 +244,6 @@ try {
    and queue type 32 followed by type 4. Check whether type 4 is absent, identifierless,
    carries a different token, matches the request, or routes to an unselected player.
    Record exact timeout vs other failure locally and share only sanitized outcomes.
-4. If available, repeat with pinned pyatv 0.18.0 and an equally sanitized trace;
-   never export its raw debug/auth logs. Use the comparison to test a specific
-   handshake/correlation hypothesis, not to assume a firmware difference.
 
 **Remaining blocker:** no authorized HD/4K trace establishes whether initial state
 pushes arrive, which client/player is selected, or how the failing queue response
@@ -321,7 +314,6 @@ keyboard, artwork, volume, seek, shuffle, repeat and push updates are
 `unsupported` in this minimal implementation. There is no DMAP CLI pairing/control
 flow; the existing CLI remains modern-only, although scan includes legacy TVs.
 
-Wire behavior is based on [pyatv v0.18.0 DMAP sources](https://github.com/postlund/pyatv/tree/v0.18.0/pyatv/protocols/dmap).
 Fixture and loopback-server tests cover codec bounds, auth, commands, metadata,
 pairing callbacks and selection. **No Apple TV 2/3 hardware validation has been
 performed**; interoperability, remote advertisement/interface selection and
@@ -344,11 +336,11 @@ try {
 
 This is actual authenticated media playback, not `launchApp(url)`. The receiver must be able to fetch the HTTP(S) URL directly; web pages and app deep links are not media URLs. AirPlay HAP credentials are supplied by the caller; this API does not read credential files or pair automatically. Each session starts one URL and cannot be reused after closing. `playUrl` resolves when the receiver accepts the setup/play/rate requests, not when playback completes. `idle` means the receiver reports no duration and can also mean startup buffering, so it is not proof that playback ended.
 
-Timing replies are restricted to the connected TCP peer address and, when returned by SETUP, its timing port. Only 32-byte RTP timing requests (payload type `0x52`, or `0xd2` with the marker bit) are answered, whatever their first (version) byte; the reply echoes that byte as pyatv does. Other 32-byte packets get no reply. UDP timing-reply send errors are ignored; timing socket failures still close the session.
+Timing replies are restricted to the connected TCP peer address and, when returned by SETUP, its timing port. Only 32-byte RTP timing requests (payload type `0x52`, or `0xd2` with the marker bit) are answered, whatever their first (version) byte; the reply echoes that byte. Other 32-byte packets get no reply. UDP timing-reply send errors are ignored; timing socket failures still close the session.
 
-HTTP errors, connection loss, malformed status, and `/playback-info` media errors reject and close the failed session. Background heartbeat failures close the session and surface on the next `getStatus`. Requests have a five-second timeout (including URL acceptance); receivers taking longer to probe media will fail. Replies are limited to 1 MiB; duplicate Content-Length framing headers and all Transfer-Encoding responses are rejected. Binary and XML playback-info property lists are supported. Unlike pyatv's player, a rejected `/play` is surfaced immediately rather than retrying the whole authenticated SETUP sequence.
+HTTP errors, connection loss, malformed status, and `/playback-info` media errors reject and close the failed session. Background heartbeat failures close the session and surface on the next `getStatus`. Requests have a five-second timeout (including URL acceptance); receivers taking longer to probe media will fail. Replies are limited to 1 MiB; duplicate Content-Length framing headers and all Transfer-Encoding responses are rejected. Binary and XML playback-info property lists are supported. A rejected `/play` is surfaced immediately; the authenticated SETUP sequence is not retried.
 
-The implementation follows [pyatv 0.18.0](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600): same-socket HAP verification, NTP/event SETUP, feedback, RECORD, binary-plist `/play`, rate/property requests, and `/playback-info`. Stop closes the dedicated connection, matching `AirPlayStream.stop`; it does not send an invented teardown command. Tests use a synthetic loopback receiver and generated keys. **Media/codec compatibility and URL playback on physical hardware remain unverified.** IPv6 receivers are supported: the timing socket binds the matching family and the Host header and RTSP URI bracket the literal. Legacy AirPlay 1, mirroring, DRM, local-file hosting, and transcoding are not supported.
+The implementation uses same-socket HAP verification, NTP/event SETUP, feedback, RECORD, binary-plist `/play`, rate/property requests, and `/playback-info`. Stop closes the dedicated connection; it does not send a teardown command. Tests use a synthetic loopback receiver and generated keys. **Media/codec compatibility and URL playback on physical hardware remain unverified.** IPv6 receivers are supported: the timing socket binds the matching family and the Host header and RTSP URI bracket the literal. Legacy AirPlay 1, mirroring, DRM, local-file hosting, and transcoding are not supported.
 
 ### Legacy RAOP audio (experimental, partial #22)
 
@@ -404,14 +396,14 @@ so the lost time is skipped rather than flooded or aborted. This is not a live-s
 jitter buffer; the receiver may hear a gap. Samples become
 big-endian L16 on the wire, in 352-frame packets; the last packet is zero-padded. The sender
 negotiates ANNOUNCE/SETUP/RECORD/FLUSH, requires UDP unicast receiver ports, and
-uses the pinned upstream 66,150-frame latency (1.5 seconds). Other returned
+uses a fixed 66,150-frame latency (1.5 seconds). Other returned
 `Audio-Latency` values are rejected rather than silently assumed compatible.
 
 The TCP route selects the local interface; all three UDP sockets bind only to
 that address. Timing requests are accepted only after SETUP validates the receiver
 address and timing port; requests before negotiation or from other ports are ignored.
 SETUP must return `server_port` and `control_port`; an omitted `timing_port` defaults
-to 0 as in pinned pyatv AirPlayV1 (an explicit `timing_port=0` is treated the same), and
+to 0 (an explicit `timing_port=0` is treated the same), and
 timing requests are then accepted from any port at the receiver address.
 Playback uses monotonic deadlines, one-second RTP/NTP synchronization, NTP timing
 replies anchored to the same monotonic clock as sync (wall-clock changes do not
@@ -442,7 +434,7 @@ promising a uniform `AbortError` across all APIs.
 Legacy keepalive probes `POST /feedback` once before audio. Only a 200 response
 starts 25-second periodic feedback, with no overlapping feedback requests. Unsupported
 feedback responses disable the initial probe or are best-effort during playback.
-As in pinned pyatv, a periodic request that times out is logged to stderr with a
+A periodic request that times out is logged to stderr with a
 `[RAOP]` prefix and playback continues; transport loss and malformed replies still
 terminate the stream.
 Feedback and sync stop on EOF/drain, cancellation or failure. Receivers rejecting
@@ -454,16 +446,8 @@ artist })` update the receiver. Volume is 0..100, maps linearly to -30..0 dB, an
 zero sends -144 dB mute; decimal wire values are rounded to two places. Metadata uses UTF-8 DMAP `mlit`/`minm`/`asal`/`asar` tags
 (maximum 4,096 bytes per field). Both methods reject outside an active session.
 
-Protocol evidence is pinned to [pyatv 0.18.0,
-commit d88abc960e188d3cd2498d19117e75d7711d8600](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600):
-`pyatv/support/rtsp.py` (L16 SDP and DMAP), `protocols/raop/packets.py`,
-`stream_client.py` (RTP, sync and resend), `protocols/__init__.py` (latency/timing),
-and `audio_source.py` (executable PCM byte swap). Its audio-source docstring says
-little-endian despite swapping on little-endian hosts; this implementation follows
-L16 network byte order and the executable conversion, with independent byte fixtures.
-`protocols/raop/protocols/airplayv1.py` and `support/rtsp.py` establish the
-25-second feedback probe/loop. `protocols/airplay/auth/legacy.py` and
-`protocols/airplay/srp.py` establish legacy pair-verify: two raw `/pair-verify`
+The L16 network byte order conversion is checked with independent byte fixtures.
+Legacy pair-verify sends two raw `/pair-verify`
 HTTP/1.1 POSTs before ANNOUNCE on the same socket, using AirPlay/320.20 and no CSeq.
 Authentication accepts serialized HTTP replies without CSeq; audio setup and feedback
 remain RTSP/1.0 with CSeq correlation. A canceled authentication request closes the
@@ -472,14 +456,13 @@ SHA-512-derived AES-CTR key/IV, and receiver ciphertext advancement before the
 client signature. Supply `stream(source, { legacySeed })` only with a 32-byte seed
 from prior **legacy AirPlay PIN pairing**; HAP `Credentials`, HAP `clientLTSK` and
 DMAP GUIDs are not interchangeable. No key/credential files are read automatically.
-As in pinned upstream, this legacy exchange proves the client's paired key to the
+This legacy exchange proves the client's paired key to the
 receiver, does not verify a receiver identity, and enables no transport encryption;
 use only on a trusted LAN. Tests use synthetic keys, a verifying loopback peer,
-and the independent public legacy verification byte vectors in pinned
-`tests/fake_device/airplay.py`.
+and independent public legacy verification byte vectors.
 
-Modern RAOP is a distinct unfinished profile, not an extra HAP flag here. Pinned
-`airplayv2.py` requires HAP-encrypted control, plist base/audio SETUP, an event
+Modern RAOP is a distinct unfinished profile, not an extra HAP flag here. It
+requires HAP-encrypted control, plist base/audio SETUP, an event
 channel and per-packet ChaCha20-Poly1305 with audio AAD and nonce; none is claimed
 by this legacy L16 implementation. Physical interoperability remains unverified.
 
@@ -506,9 +489,9 @@ await atv.getText();                         // read without editing
 await atv.clearText();                       // ''
 ```
 
-Text input uses Companion RTI, following pyatv's `CompanionKeyboard`: restart the text session (`_tiStop`/`_tiStart`), read the session UUID and current text from the reply, then send `_tiC` edits. A real Apple TV 4K ignored the older MRP `TextInputMessage`, so text input now needs `connectCompanion()`, and it rejects with `No text field is focused` instead of silently succeeding. `deleteText()` still sends the MRP Delete action.
+Text input uses Companion RTI: restart the text session (`_tiStop`/`_tiStart`), read the session UUID and current text from the reply, then send `_tiC` edits. A real Apple TV 4K ignored the older MRP `TextInputMessage`, so text input now needs `connectCompanion()`, and it rejects with `No text field is focused` instead of silently succeeding. `deleteText()` still sends the MRP Delete action.
 
-`connectCompanion()` sends pyatv's `_systemInfo` after pair-verify. Without it, a real Apple TV 4K answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on an Apple TV 4K (tvOS, AppleTV6,2).
+`connectCompanion()` sends `_systemInfo` after pair-verify. Without it, a real Apple TV 4K answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on an Apple TV 4K (tvOS, AppleTV6,2).
 
 ### Connection and request lifecycle
 
@@ -555,7 +538,7 @@ nothing is playing; only the device's error 35 reply is (#10).
 
 ### Button actions, gestures, and audio routing
 
-These library APIs follow [pyatv 0.18.0](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600). They are protocol-tested, not yet hardware-verified here. The CLI has no action-mode, touch, swipe, or output-routing commands.
+These library APIs are protocol-tested, not yet hardware-verified here. The CLI has no action-mode, touch, swipe, or output-routing commands.
 
 ```typescript
 await atv.up('doubleTap');
@@ -608,7 +591,7 @@ atv.on('error', (err) => {});
 4. **AirPlay session:** encrypted RTSP, plus an event channel and a data channel.
 5. **MRP** runs as protobuf over the data channel. A `/feedback` heartbeat every 2s keeps it alive.
 
-MRP's own CryptoPairing is skipped on the AirPlay tunnel because the data channel is already HAP-encrypted, [same as pyatv](https://pyatv.dev/documentation/protocols/).
+MRP's own CryptoPairing is skipped on the AirPlay tunnel because the data channel is already HAP-encrypted.
 
 ```
 src/
@@ -628,11 +611,11 @@ src/
 
 ## Discovery and transport selection
 
-`DiscoveredDeviceInfo.port` remains the AirPlay port, and is **0 when AirPlay is absent**. `companionPort` and `mrpPort` are independent capabilities, not substitute AirPlay ports. `mrpEnabled` is false for Darwin build 19+ (tvOS 15+), where the legacy MRP advertisement no longer indicates a usable transport. Unknown builds retain legacy MRP eligibility, matching pyatv 0.18.0.
+`DiscoveredDeviceInfo.port` remains the AirPlay port, and is **0 when AirPlay is absent**. `companionPort` and `mrpPort` are independent capabilities, not substitute AirPlay ports. `mrpEnabled` is false for Darwin build 19+ (tvOS 15+), where the legacy MRP advertisement no longer indicates a usable transport. Unknown builds retain legacy MRP eligibility.
 
 `AppleTV.connect()` and `startPairing()` preserve the AirPlay tunnel when advertised, otherwise select enabled standalone MRP. Companion-only devices use `connectCompanion()` and `startCompanionPairing()`; calling the MRP methods fails before opening a socket. Standalone credentials use the existing `Credentials` format but must be paired with the selected protocol; AirPlay pairing does not imply legacy MRP pairing. A returned PairSetup owns its open pairing carrier: always call `finish(pin)` or `destroy()`; abandoning it without either intentionally leaves pairing open. `PairSetup.clientId` is a public readonly controller pairing identifier (a random UUID per instance); it is sent in M5 and returned as `clientId` in the finished credentials.
 
-A standalone MRP connection sends a heartbeat (a GenericMessage) every 30 s, never overlapping another. Any reply carrying the request's identifier counts, whatever its type; a miss is retried once immediately, and a second miss fails the connection (pyatv HEARTBEAT_RETRIES=1).
+A standalone MRP connection sends a heartbeat (a GenericMessage) every 30 s, never overlapping another. Any reply carrying the request's identifier counts, whatever its type; a miss is retried once immediately, and a second miss fails the connection.
 
 Discovery associates modern services by compatible advertised identity, primary-protocol hostname, or overlapping primary-protocol addresses, never by display name. AirPlay `deviceid` and MRP `macAddress` share a MAC namespace; MRP `UniqueIdentifier` and Companion `rpMRtID` share an MRP namespace. Other cross-protocol ID equality does not establish an association. Conflicting IDs within a namespace keep devices separate. Same-protocol records with disjoint addresses and different SRV hosts remain separate even when their IDs match; duplicate device IDs are ambiguous, not verified identities. Primary endpoint overlap is scoped to the selected protocol host. Records matching multiple groups remain separate instead of bridging them, independent of arrival order; an ambiguous result must not be treated as a verified TV.
 
@@ -640,7 +623,7 @@ DMAP instance names are not universal device IDs: `deviceId`/`identifiers` use `
 
 IPv4 is preferred when advertised; global/ULA IPv6 and explicitly scoped link-local IPv6 (for example `fe80::1234%en0`) are accepted. Unscoped link-local, loopback, unspecified, and multicast addresses are excluded. Use unbracketed addresses for constructors; the RTSP layer brackets IPv6 authorities. `companionAddress`, `mrpAddress`, and `dmapAddress` prefer an address shared with the primary protocol. Modern services joined by compatible identity or hostname can retain disjoint service-specific endpoints; joined DMAP endpoints must be shared. Dual-stack/multihomed advertisements for the same primary identity retain their usable addresses for overlap checks. No automatic connection retry across alternate addresses is added. Exceptions in `scan` filter/until callbacks reject the scan promise after stopping discovery.
 
-Wire behavior is pinned to [pyatv 0.18.0 MRP connection](https://github.com/postlund/pyatv/blob/v0.18.0/pyatv/protocols/mrp/connection.py), [authentication](https://github.com/postlund/pyatv/blob/v0.18.0/pyatv/protocols/mrp/auth.py), and [service identity rules](https://github.com/postlund/pyatv/blob/v0.18.0/pyatv/helpers.py). Tests use synthetic peers only; IPv6 network discovery and older-tvOS hardware interoperability still require operator validation. An AirPlay advertisement alone does not prove AirPlay 2 MRP or URL-playback compatibility. `createClient` treats known AppleTV1-3 model advertisements as legacy AirPlay; explicit protocol selection remains available.
+Tests use synthetic peers only; IPv6 network discovery and older-tvOS hardware interoperability still require operator validation. An AirPlay advertisement alone does not prove AirPlay 2 MRP or URL-playback compatibility. `createClient` treats known AppleTV1-3 model advertisements as legacy AirPlay; explicit protocol selection remains available.
 
 ## Advanced: raw Companion messages
 
@@ -651,12 +634,12 @@ const reply = await atv.sendCompanionRequest('FetchAttentionState', new Map());
 atv.sendCompanionMessage('_interest', new Map([['_regEvents', ['SystemStatus']]]));
 ```
 
-- A reply carrying an `_em` error rejects with `Companion <id> failed: <_em>` (as pyatv raises), instead of resolving with an empty `_c`.
+- A reply carrying an `_em` error rejects with `Companion <id> failed: <_em>` instead of resolving with an empty `_c`.
 - Plain content is wrapped as `{ _i, _t, _c, _x }`. `_t` is 2 for a request and 1 for a message. If you pass a prebuilt envelope (with `_t`, `_c` or `_x`), only `_i` and `_x` get filled in.
 - Wrap whole numbers in `new OpackFloat(n)` when the protocol expects a float, such as skip seconds or volume 0/1. Use `bigint` for unsigned 64-bit IDs.
 - Request IDs stay in 1..127, since Apple TVs read larger single-byte IDs as negative. A timed-out ID stays reserved for 30s so a late reply can't resolve the wrong request.
 
-The OPACK and framing tests use fixtures from pyatv 0.18.0 and the [published OPACK examples](https://pyatv.dev/documentation/protocols/#opack).
+The OPACK and framing tests use independent wire fixtures, including published OPACK examples.
 
 ## Development
 
@@ -668,4 +651,4 @@ npm test             # or npm run test:watch
 
 The MRP schema is compiled into `src/mrp/schema.ts`, so no `.proto` files are read at run time and the package bundles cleanly. After editing a `.proto` (or adding one to `PROTO_FILES` in `scripts/gen-proto.mjs`), run `npm run gen:proto` and commit the result.
 
-Use `protobufjs >=8.8.1` within major 8; the manifest and pnpm lockfile exclude older vulnerable releases. Fresh npm installs and pnpm's locked installs must both pass. Patched protobufjs enforces proto2 closed enums, so every supported message discriminator must be declared in `ProtocolMessage.Type`, not just in the TypeScript `MessageType` enum. The bare HID flush is `GENERIC_MESSAGE = 42`. `SendButtonEvent` is message type 39 with payload extension field 43, not message type 43 ([pinned pyatv 0.18.0 schema](https://github.com/postlund/pyatv/blob/d88abc960e188d3cd2498d19117e75d7711d8600/pyatv/protocols/mrp/protobuf/ProtocolMessage.proto)). Independent wire fixtures test these values in addition to builder/decoder round trips.
+Use `protobufjs >=8.8.1` within major 8; the manifest and pnpm lockfile exclude older vulnerable releases. Fresh npm installs and pnpm's locked installs must both pass. Patched protobufjs enforces proto2 closed enums, so every supported message discriminator must be declared in `ProtocolMessage.Type`, not just in the TypeScript `MessageType` enum. The bare HID flush is `GENERIC_MESSAGE = 42`. `SendButtonEvent` is message type 39 with payload extension field 43, not message type 43. Independent wire fixtures test these values in addition to builder/decoder round trips.

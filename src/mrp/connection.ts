@@ -39,7 +39,7 @@ export abstract class MRPConnection extends EventEmitter {
   private diagnosticIds = new Map<string, string>();
   private diagnosticCount = 0;
   protected pendingMRPResolvers: Array<{
-    /** Undefined matches any type (identifier-only correlation, as pyatv send_and_receive). */
+    /** Undefined matches any type (identifier-only correlation). */
     type?: number;
     identifier?: string;
     reject: (err: Error) => void;
@@ -74,12 +74,12 @@ export abstract class MRPConnection extends EventEmitter {
 
     // AirPlay is already HAP encrypted; standalone MRP verifies in authenticateMRP.
 
-    // 3. SetConnectionState (fire and forget, pyatv uses send() not send_and_receive())
+    // 3. SetConnectionState (fire and forget)
     const connState = await MRPMessage.setConnectionState(2);
     await this.diagnoseSend(connState);
     await this.sendMRPMessage(connState);
 
-    // 4. ClientUpdatesConfig (pyatv waits for a reply; we only send)
+    // 4. ClientUpdatesConfig (sent without waiting for a reply)
     const updatesConfig = await MRPMessage.clientUpdatesConfig({
       artworkUpdates: true,
       nowPlayingUpdates: true,
@@ -89,7 +89,7 @@ export abstract class MRPConnection extends EventEmitter {
     await this.diagnoseSend(updatesConfig);
     await this.sendMRPMessage(updatesConfig);
 
-    // 5. GetKeyboardSession (pyatv waits for a reply; we only send)
+    // 5. GetKeyboardSession (sent without waiting for a reply)
     const getKeyboard = await MRPMessage.sendCommand(MessageType.GetKeyboardSession);
     await this.diagnoseSend(getKeyboard);
     await this.sendMRPMessage(getKeyboard);

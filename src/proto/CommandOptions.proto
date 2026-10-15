@@ -1,7 +1,7 @@
 syntax = "proto2";
 
 message CommandOptions {
-  // Values from pyatv Common.proto RepeatMode (0.16.1 and 0.18.0); Off is 1, not 0.
+  // RepeatMode values; Off is 1, not 0.
   enum RepeatMode {
     Unknown = 0;
     Off = 1;

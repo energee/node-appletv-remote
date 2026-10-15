@@ -7,7 +7,7 @@ extend ProtocolMessage {
 }
 
 message SendCommandResultMessage {
-  // pyatv v0.18.0: SendError.NoError = 0. Nonzero values reject the command.
+  // SendError.NoError = 0. Nonzero values reject the command.
   optional uint32 sendError = 1;
   optional uint32 handlerReturnStatus = 2;
   repeated bytes handlerReturnStatusDatas = 3;

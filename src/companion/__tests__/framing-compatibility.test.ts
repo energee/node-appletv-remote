@@ -4,7 +4,7 @@ import { CompanionConnection } from '../connection.js';
 import { FrameType } from '../framing.js';
 import type { OpackDict } from '../opack.js';
 
-// pyatv 0.18.0 Chacha20Cipher(nonce_length=12), bytes(range(32)), counters 0 and 1.
+// ChaCha20-Poly1305 with a 12-byte nonce, key bytes 0..31, counters 0 and 1.
 // Public synthetic keys and payloads; no pairing or live device data.
 const key = Buffer.from(Array.from({ length: 32 }, (_, i) => i));
 const payload = Buffer.from('e3425f7409425f694c53797374656d537461747573425f63e14573746174650b', 'hex');

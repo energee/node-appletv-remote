@@ -294,7 +294,7 @@ export class CompanionConnection extends EventEmitter {
       this.pendingRequests.set(tid, {
         resolve: (value) => {
           clearTimeout(timer);
-          // pyatv raises on `_em`; resolving it would report a refused request as an empty result.
+          // Reject on `_em`; resolving it would report a refused request as an empty result.
           if (value.has('_em')) reject(new Error(`Companion ${identifier} failed: ${value.get('_em')}`));
           else resolve(value);
         },

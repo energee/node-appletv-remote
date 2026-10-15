@@ -106,7 +106,7 @@ export enum RepeatState {
   All = 3,
 }
 
-/** Device power as reported by Companion SystemStatus (pyatv PowerState). */
+/** Device power as reported by Companion SystemStatus. */
 export enum PowerState {
   Unknown = 'unknown',
   Off = 'off',
@@ -115,7 +115,7 @@ export enum PowerState {
 
 /** Button action timing: tap retains existing defaults; hold lasts one second. */
 export type InputAction = 'singleTap' | 'doubleTap' | 'hold';
-/** Companion touch phase values from pyatv 0.18.0. */
+/** Companion touch phase values. */
 export enum TouchAction { Press = 1, Hold = 3, Release = 4, Click = 5 }
 /** A currently selected output, not a discovered/available AirPlay receiver. */
 export interface OutputDevice { name: string; identifier: string }
@@ -143,7 +143,7 @@ export interface UserAccount {
   id: string;
 }
 
-/** Companion `_hidC` button codes (pyatv HidCommand) for buttons MRP has no HID usage for. */
+/** Companion `_hidC` button codes for buttons MRP has no HID usage for. */
 const COMPANION_HID = {
   screensaver: 11,
   channelUp: 15,
@@ -385,7 +385,7 @@ export class AppleTV extends EventEmitter {
 
     try {
       await connection.connect();
-      // Without _systemInfo the TV answers app, account and power requests with "No request handler" (pyatv api.py).
+      // Without _systemInfo the TV answers app, account and power requests with "No request handler".
       await connection.sendRequest('_systemInfo', new Map<OpackValue, OpackValue>([
         ['_bf', 0], ['_cf', 512], ['_clFl', 128], ['_i', this.deviceId.replaceAll(':', '').toLowerCase()],
         ['_idsID', credentials.clientId], ['_pubID', this.deviceId], ['_sf', 256], ['_sv', '170.18'],
@@ -425,7 +425,7 @@ export class AppleTV extends EventEmitter {
 
   /** Launch an app by bundle ID (`com.netflix.Netflix`) or open a URL / URL scheme. */
   async launchApp(bundleIdOrUrl: string): Promise<void> {
-    // ponytail: pyatv's rule — anything with a URL scheme is a URL.
+    // ponytail: anything with a URL scheme is a URL.
     const key = /^[a-z][a-z0-9+.-]*:/i.test(bundleIdOrUrl) ? '_urlS' : '_bundleID';
     await this.requireCompanion().sendRequest('_launchApp', new Map([[key, bundleIdOrUrl]]));
   }
@@ -566,7 +566,7 @@ export class AppleTV extends EventEmitter {
         if (matches) finish();
       };
       this.pendingRouting = { identifier, reject: finish, check };
-      // ponytail: like pyatv, an already-reported match needs no further update; it may never come.
+      // ponytail: an already-reported match needs no further update; it may never come.
       conn.sendMRPMessage(buffer).then(check, error => finish(error));
     });
   }
@@ -634,7 +634,7 @@ export class AppleTV extends EventEmitter {
   async getText(): Promise<string> { return this.editText('', false); }
 
   /**
-   * pyatv CompanionKeyboard: restart the RTI session for fresh state, then send `_tiC` edits.
+   * Restart the RTI session for fresh state, then send `_tiC` edits.
    * Modern tvOS ignores the MRP TextInputMessage, so text input needs connectCompanion().
    * @throws If no text field is focused (the `_tiStart` reply has no `_tiD`).
    */
@@ -779,13 +779,13 @@ export class AppleTV extends EventEmitter {
   private async sendMediaCommand(command: number, options?: Record<string, unknown>): Promise<void> {
     const conn = this.requireConnection();
     const msg = await MRPMessage.sendMediaCommand(command, options);
-    // pyatv send_and_receive matches the reply by identifier only, not by message type.
+    // Match the reply by identifier only, not by message type.
     const response = await conn.sendMRPMessageAndWait(msg, undefined);
     if (typeof response.errorCode === 'number' && response.errorCode !== 0) {
       throw new Error(`Media command ${command} rejected: errorCode=${response.errorCode} ${response.errorDescription ?? ''}`);
     }
     const result = response['.sendCommandResultMessage'] as Record<string, unknown> | undefined;
-    // pyatv checks only sendError; an absent result extension or omitted proto2 field means NoError.
+    // Only sendError is checked; an absent result extension or omitted proto2 field means NoError.
     const sendError = result?.sendError ?? 0;
     const status = result?.handlerReturnStatus ?? 0;
     if (sendError !== 0) throw new Error(`Media command ${command} rejected: sendError=${sendError}, handlerReturnStatus=${status}`);
@@ -945,7 +945,7 @@ export class AppleTV extends EventEmitter {
       if (this.activeTouch) this.sendTouch(this.activeTouch.x, this.activeTouch.y, TouchAction.Release);
       await this.checkedCompanion(session.connection, '_sessionStop', new Map<OpackValue, OpackValue>([['_srvT', 'com.apple.tvremoteservices'], ['_sid', session.sid]]));
     } catch (error) {
-      // A real TV drops this session once an AirPlay/MRP connection is open; it is already stopped (pyatv also ignores it).
+      // A real TV drops this session once an AirPlay/MRP connection is open; it is already stopped.
       if (!(error instanceof Error && error.message.endsWith('Session not found'))) errors.push(error);
     } finally {
       this.touchSession = undefined;
@@ -1012,7 +1012,7 @@ export class AppleTV extends EventEmitter {
     }
     this.handleOutputMessage(msg);
 
-    // DeviceInfo (type 15): remember the output device for SetVolume (pyatv: clusterID or deviceUID)
+    // DeviceInfo (type 15): remember the output device for SetVolume (clusterID or deviceUID)
     if (msg.type === MessageType.DeviceInfo) {
       const info = msg['.deviceInfoMessage'] as Record<string, unknown> | undefined;
       const uid = (info?.clusterID || info?.deviceUID) as string | undefined;

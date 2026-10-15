@@ -1,4 +1,4 @@
-// Shared audio routing request, pinned to pyatv 0.18.0 (extension 52, message type 48).
+// Shared audio routing request (extension 52, message type 48).
 syntax = "proto2";
 import "ProtocolMessage.proto";
 extend ProtocolMessage {

@@ -1,4 +1,4 @@
-/** Standalone MRP transport selection and pinned pyatv CryptoPairing regressions. */
+/** Standalone MRP transport selection and CryptoPairing regressions. */
 import { expect, it, vi } from 'vitest';
 import { AppleTV } from '../../appletv.js';
 import { Credentials } from '../../credentials.js';
@@ -47,7 +47,7 @@ it('uses state 2 only for the initial standalone pairing request', async () => {
   expect((verify['.cryptoPairingMessage'] as { state: number }).state).toBe(0);
 });
 
-it('heartbeat matches any reply type by identifier and retries one miss before failing (pyatv HEARTBEAT_RETRIES=1)', async () => {
+it('heartbeat matches any reply type by identifier and retries one miss before failing', async () => {
   const conn = new LegacyMRPConnection('fd00::1', 1234, credentials);
   const errors: Error[] = [];
   conn.on('error', error => errors.push(error));

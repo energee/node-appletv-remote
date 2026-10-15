@@ -60,7 +60,7 @@ message ProtocolMessage {
 
   optional Type type = 1; // Identifies which underlying message is filled in.
   optional string identifier = 2;
-  optional int32 errorCode = 4; // pyatv ProtocolMessage ErrorCode.Enum wire value
+  optional int32 errorCode = 4; // ProtocolMessage ErrorCode.Enum wire value
   optional uint64 timestamp = 5;
   optional string errorDescription = 78;
 }

@@ -1,4 +1,4 @@
-/** Player-scoped MRP snapshots; follows pyatv v0.18.0 player_state.py field-presence semantics. */
+/** Player-scoped MRP snapshots with field-presence semantics. */
 import { NowPlayingInfo } from '../now-playing-info.js';
 import { SupportedCommand } from '../supported-command.js';
 import { MessageType } from './messages.js';
@@ -22,7 +22,7 @@ interface Client {
 }
 /** Player identifier MRP implies when a playerPath omits one. */
 export const DEFAULT_PLAYER = 'MediaRemote-DefaultPlayer';
-/** Bundle key for a client without a bundle identifier; pyatv models the empty now-playing client (idle TV) this way. */
+/** Bundle key for a client without a bundle identifier; the empty now-playing client (idle TV) is modeled this way. */
 const EMPTY_CLIENT = '';
 
 /** SetState evidence of player state: playback state (even unknown), a queue (even empty), or direct now-playing fields. */
@@ -111,7 +111,7 @@ export class PlayerState {
     if (type === MessageType.SetNowPlayingClient) {
       this.routed = true;
       this.selected = true;
-      // pyatv: an empty client is the EMPTY_CLIENT bundle, a normal active client with no players.
+      // An empty client is the EMPTY_CLIENT bundle, a normal active client with no players.
       this.activeClient = bundle;
       return true;
     }

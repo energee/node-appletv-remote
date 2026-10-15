@@ -1,4 +1,4 @@
-/** Standalone legacy MRP: varint protobuf frames and MediaRemote ChaCha20 keys (pyatv 0.18.0). */
+/** Standalone legacy MRP: varint protobuf frames and MediaRemote ChaCha20 keys. */
 import type { Socket } from 'node:net';
 import { connectSocket } from '../connection.js';
 import { PairSetup } from '../auth/pair-setup.js';
@@ -52,7 +52,7 @@ export class LegacyMRPConnection extends MRPConnection {
   }
 
   /**
-   * One heartbeat (pyatv HEARTBEAT_RETRIES=1): any reply carrying the request's identifier counts;
+   * One heartbeat (one retry): any reply carrying the request's identifier counts;
    * a miss is retried at once, and a second miss fails the connection.
    */
   private async heartbeatOnce(timeoutMs = 5000): Promise<void> {

@@ -21,7 +21,7 @@ it('failed Companion setup invalidates the high-level connection', async () => {
   await expect(tv.sendCompanionRequest('test', new Map())).rejects.toThrow('Companion not connected');
 });
 // A real Apple TV 4K answers app/account/power requests with "No request handler" until _systemInfo is sent.
-it('sends pyatv _systemInfo after pair-verify and before companionConnect', async () => {
+it('sends _systemInfo after pair-verify and before companionConnect', async () => {
   const tv = new AppleTV({ name: 'Family Room', address: 'offline', port: 7000, deviceId: 'AA:BB:CC:DD:EE:FF', model: 'AppleTV6,2', companionPort: 1234 });
   vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
   const send = vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockResolvedValue(new Map([['_c', new Map()]]));

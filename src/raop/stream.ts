@@ -237,7 +237,7 @@ export class RaopStream {
       const control = await bind(); const timing = await bind(); const audio = await bind();
       client.setLocalUri(this.ssrc);
       if (legacySeed) {
-        // Pinned pyatv LegacySRPAuthHandler uses the seed for BOTH key types.
+        // The legacy SRP auth handler uses the seed for BOTH key types.
         // This proves the client key only and does not turn on HAP transport encryption.
         const curveDer = Buffer.concat([X25519_PKCS8_PREFIX, legacySeed]);
         let curveKey: ReturnType<typeof createPrivateKey>;
@@ -283,7 +283,7 @@ export class RaopStream {
         return Number(value);
       };
       const serverPort = remotePort('server_port'); const controlPort = remotePort('control_port');
-      // pyatv AirPlayV1 treats an omitted or explicit timing_port=0 as 0; then any receiver port may ask for timing.
+      // An omitted or explicit timing_port=0 is treated as 0; then any receiver port may ask for timing.
       const timingPort = parameters.has('timing_port') && parameters.get('timing_port') !== '0' ? remotePort('timing_port') : 0;
       // One wall-clock sample anchors every session NTP timestamp to monotonic time.
       const clockStart = performance.now(); const clockEpoch = Date.now();
@@ -309,8 +309,8 @@ export class RaopStream {
       this.active = true;
       if (options.volume !== undefined) await this.setVolume(options.volume);
       if (options.metadata) await this.setMetadata(options.metadata);
-      // pyatv AirPlayV1 probes /feedback, then repeats every 25 seconds only if supported.
-      // Like pyatv, a failed periodic request is logged and playback continues; transport loss
+      // Probe /feedback, then repeat every 25 seconds only if supported.
+      // A failed periodic request is logged and playback continues; transport loss
       // and malformed replies still fail the stream through the client's onFailure path.
       const feedback = () => client.request('POST', {}, undefined, controller.signal, 5000, '/feedback', true);
       if ((await feedback()).code === 200) {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { opackDecode, opackEncode, OpackFloat } from '../opack.js';
 
-// Independent wire fixtures: pyatv 0.18.0 and its published OPACK examples.
+// Independent wire fixtures, including published OPACK examples.
 // These test protocol compatibility, rather than just this codec's round trips.
 describe('Companion OPACK compatibility', () => {
   it('preserves a backward seek instead of decoding it as a huge positive integer', () => {

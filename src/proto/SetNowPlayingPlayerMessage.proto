@@ -1,4 +1,4 @@
-// Runtime player message from pyatv v0.18.0 (d88abc960e188d3cd2498d19117e75d7711d8600).
+// Runtime player message.
 syntax = "proto2";
 import "ProtocolMessage.proto";
 import "PlayerPath.proto";

@@ -1,7 +1,6 @@
 /**
- * Tests for the pyatv-parity additions: seek/shuffle/repeat, absolute volume, power state,
+ * Tests for seek/shuffle/repeat, absolute volume, power state,
  * app list/launch, user accounts, extra Companion HID buttons and the playing app's bundle ID.
- * Wire formats follow pyatv (protocols/mrp/messages.py and protocols/companion/api.py).
  */
 import { describe, it, expect, vi } from 'vitest';
 import { AppleTV, Key, PowerState, RepeatState, ShuffleState, contentItems } from '../appletv.js';
@@ -69,7 +68,7 @@ describe('MRP playback commands', () => {
     await atv.setRepeat(RepeatState.Off);
     const cmd = sent[0]['.sendCommandMessage'] as any;
     expect(cmd.command).toBe(46);
-    // pyatv RepeatMode: Off 1, One 2, All 3
+    // RepeatMode: Off 1, One 2, All 3
     expect(cmd.options.repeatMode).toBe(2);
     expect((sent[1]['.sendCommandMessage'] as any).options.repeatMode).toBe(1);
   });
@@ -164,7 +163,7 @@ describe('Companion apps, accounts and HID buttons', () => {
     expect(requests[1]).toEqual(['SwitchUserAccountEvent', new Map([['SwitchAccountID', 'acct-1']])]);
   });
 
-  it('companion buttons send _hidC down then up with the pyatv HID code', async () => {
+  it('companion buttons send _hidC down then up with the Companion HID code', async () => {
     const atv = makeAtv();
     const { requests } = fakeCompanion(atv);
     await atv.channelUp();

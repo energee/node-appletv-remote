@@ -196,7 +196,7 @@ export class MRPMessage {
   /**
    * Decode a ProtocolMessage into a plain object; extensions appear as '.fooMessage' keys.
    * Only fields present on the wire are set: no proto2 defaults (e.g. `playbackState: 0`)
-   * and no empty repeated fields, so `'field' in msg` means the device sent it (pyatv HasField).
+   * and no empty repeated fields, so `'field' in msg` means the device sent it.
    * Enums stay numeric, int64 become numbers and bytes stay Buffers.
    */
   static async decode(buffer: Buffer): Promise<Record<string, unknown>> {
@@ -276,7 +276,7 @@ export class MRPMessage {
   /** CryptoPairing: wraps HAP TLV; isPairing selects state 2 for pair-setup M1 only. */
   static async cryptoPairing(pairingData: Buffer, isPairing = false): Promise<Buffer> {
     // CryptoPairing messages must NOT include an identifier.
-    // pyatv uses generate_identifier=False; the Apple TV never echoes
+    // The Apple TV never echoes
     // identifiers for crypto messages and may ignore requests that have one.
     return encodeMessage(
       MessageType.CryptoPairing,
@@ -309,7 +309,7 @@ export class MRPMessage {
     });
   }
 
-  /** Set absolute volume (0..1) on an output device (pyatv: messages.set_volume). */
+  /** Set absolute volume (0..1) on an output device. */
   static async setVolume(outputDeviceUID: string, volume: number): Promise<Buffer> {
     return encodeMessage(MessageType.SetVolume, {
       key: '.setVolumeMessage',

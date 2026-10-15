@@ -53,7 +53,7 @@ enum Command {
 }
 
 message CommandInfo {
-  // Values from pyatv Common.proto RepeatMode; Off is 1.
+  // RepeatMode values; Off is 1.
   enum RepeatMode {
     Unknown = 0;
     Off = 1;

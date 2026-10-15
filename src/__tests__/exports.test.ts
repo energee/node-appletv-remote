@@ -9,7 +9,7 @@ describe('package entry', () => {
   });
 });
 
-describe('pyatv-parity exports', () => {
+describe('enum exports', () => {
   it('exports ShuffleState, RepeatState and PowerState', async () => {
     const lib = await import('../index.js');
     expect(lib.ShuffleState.Songs).toBe(3);

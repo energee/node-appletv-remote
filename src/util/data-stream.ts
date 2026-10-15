@@ -49,7 +49,7 @@ export function readLengthPrefixed(buf: Buffer, offset = 0): { data: Buffer; nex
 }
 
 /**
- * Split DataStream `params.data` into protobufs like pyatv `decode_protobufs`: an entry starting
+ * Split DataStream `params.data` into protobufs: an entry starting
  * with 0x08 (the ProtocolMessage `type` tag, never a valid length here) is the unprefixed rest of the
  * payload. Stops, keeping earlier messages, at an incomplete entry or one not starting with 0x08.
  */
@@ -63,7 +63,7 @@ function splitProtobufs(data: Buffer): Buffer[] {
       messages.push(entry.data);
       offset = entry.next;
     }
-  } catch { /* oversized prefix: keep earlier messages, like pyatv */ }
+  } catch { /* oversized prefix: keep earlier messages */ }
   return messages;
 }
 
@@ -76,7 +76,7 @@ const MESSAGE_TYPE = Buffer.from('sync\0\0\0\0\0\0\0\0', 'binary');  // "sync" +
 const COMMAND = Buffer.from('comm', 'ascii');  // 4 bytes
 
 /**
- * Sequence number for every outgoing sync frame. Mirrors pyatv: one random value in
+ * Sequence number for every outgoing sync frame: one random value in
  * [0x100000000, 0x1FFFFFFFF) chosen at module load and reused for all messages (never incremented).
  */
 const globalSeqno = BigInt(0x100000000) + BigInt(Math.floor(Math.random() * 0xFFFFFFFF));
@@ -107,7 +107,7 @@ export function buildDataStreamFrame(...protobufs: Buffer[]): Buffer {
   COMMAND.copy(header, offset);
   offset += 4;
 
-  // seqno (8B BE): same value for all outgoing messages (pyatv behavior)
+  // seqno (8B BE): same value for all outgoing messages
   header.writeBigUInt64BE(globalSeqno, offset);
   offset += 8;
 

@@ -1,7 +1,6 @@
 /**
  * Companion RTI text input: the NSKeyedArchiver plists carried in `_tiD`.
- * Ported from pyatv 0.18.0 (`plist_payloads/rti_text_operations.py`, `keyed_archiver.py`), which
- * pre-encodes the payloads in the absence of a general NSKeyedArchiver; object order is kept.
+ * The payloads are pre-encoded in the absence of a general NSKeyedArchiver; object order is kept.
  */
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
@@ -43,7 +42,7 @@ export function rtiInputTextPayload(sessionUUID: Buffer, text: string): Buffer {
 /** Session UUID and current text from a `_tiStart` reply's `_tiD` archive. */
 export function readTextSession(tiD: Buffer): { sessionUUID: Buffer; text: string } {
   const { $top, $objects } = parseBuffer(tiD)[0] as { $top: Record<string, unknown>; $objects: unknown[] };
-  // Follow UID references from $top, like pyatv's read_archive_properties.
+  // Follow UID references from $top.
   const read = (path: string[]) => path.reduce<unknown>((node, key) => {
     const next = (node as Record<string, unknown> | undefined)?.[key];
     return next && typeof next === 'object' && 'UID' in next ? $objects[(next as UID).UID] : next;

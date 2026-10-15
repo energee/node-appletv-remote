@@ -24,7 +24,7 @@ describe('media acknowledgments', () => {
       sendMRPMessage: async () => {},
       sendMRPMessageAndWait: async (bytes: Buffer, type: number) => {
         expect((await MRPMessage.decode(bytes)).type).toBe(1);
-        // pyatv send_and_receive matches by identifier only.
+        // Media command replies match by identifier only.
         expect(type).toBeUndefined();
         return { type: 2, '.sendCommandResultMessage': { sendError, handlerReturnStatus: 0 } };
       },
@@ -36,11 +36,11 @@ describe('media acknowledgments', () => {
     const atv = device();
     (atv as any).connection = { sendMRPMessage: async () => {}, sendMRPMessageAndWait: async () => ({ '.sendCommandResultMessage': { handlerReturnStatus: 2, sendError: 8 } }) };
     await expect(atv.pause()).rejects.toThrow('handlerReturnStatus=2');
-    // pyatv: no inner SendCommandResultMessage means sendError NoError.
+    // No inner SendCommandResultMessage means sendError NoError.
     (atv as any).connection = { sendMRPMessage: async () => {}, sendMRPMessageAndWait: async () => ({ type: 2 }) };
     await expect(atv.pause()).resolves.toBeUndefined();
   });
-  it('accepts a decoded acknowledgment whose status fields are omitted (pyatv: absent sendError is NoError)', async () => {
+  it('accepts a decoded acknowledgment whose status fields are omitted (absent sendError is NoError)', async () => {
     const atv = device();
     (atv as any).connection = { sendMRPMessageAndWait: async () => MRPMessage.decode(Buffer.from([8, 2, 58, 0])) };
     await expect(atv.play()).resolves.toBeUndefined();
@@ -125,7 +125,7 @@ describe('unified player state', () => {
     deliver(atv, MessageType.SetNowPlayingClient, 'setNowPlayingClientMessage', {});
     expect((atv as any).nowPlaying.hasPlayback).toBe(false);
   });
-  it('treats an empty now-playing client as the active client (pyatv: bundle id \'\')', () => {
+  it('treats an empty now-playing client as the active client (bundle id \'\')', () => {
     const atv = device();
     deliver(atv, MessageType.SetNowPlayingClient, 'setNowPlayingClientMessage', {});
     deliver(atv, MessageType.SetState, 'setStateMessage', { playbackState: 3 });

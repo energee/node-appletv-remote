@@ -1,7 +1,6 @@
 /**
  * OPACK encoder/decoder for the Apple Companion protocol.
  * OPACK is the compact binary serialization used for every Companion message body.
- * Tag values matched to pyatv's opack.py implementation.
  */
 
 /**
@@ -30,7 +29,7 @@ export class OpackFloat {
   constructor(readonly value: number) {}
 }
 
-// --- Type tags (matched to pyatv) ---
+// --- Type tags ---
 const TAG_TRUE = 0x01;
 const TAG_FALSE = 0x02;
 /** Ends a 0xDF array or 0xEF dict whose count did not fit in the tag. */

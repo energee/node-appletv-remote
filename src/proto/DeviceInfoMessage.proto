@@ -1,4 +1,4 @@
-// Device output groups and cluster identifiers, pinned to pyatv 0.18.0.
+// Device output groups and cluster identifiers.
 syntax = "proto2";
 
 import "ProtocolMessage.proto";

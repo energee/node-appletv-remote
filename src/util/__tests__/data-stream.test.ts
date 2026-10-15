@@ -53,7 +53,7 @@ describe('DataStream framing', () => {
     ['an entry not starting with the type tag', [2, 8, 15, 1, 0x12], [[8, 15]]],
     ['an unprefixed message after a prefixed one', [2, 8, 15, 8, 4, 0x12, 0], [[8, 15], [8, 4, 0x12, 0]]],
     ['an empty payload', [], []],
-  ])('splits a payload with %s like pyatv decode_protobufs', (_, data, expected) => {
+  ])('splits a payload with %s', (_, data, expected) => {
     const frame = parseDataStreamFrame(frameWithData(Buffer.from(data)));
     expect(frame?.protobufMessages).toEqual(expected.map(bytes => Buffer.from(bytes)));
   });

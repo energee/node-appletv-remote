@@ -1,4 +1,4 @@
-/** Authenticated AirPlay 2 URL playback, based on pyatv 0.18.0 (d88abc960e188d3cd2498d19117e75d7711d8600). */
+/** Authenticated AirPlay 2 URL playback. */
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { isIPv6, type Socket } from 'node:net';
@@ -146,7 +146,7 @@ export class AirPlayPlaybackSession {
     } catch (error) { this.fail(error as Error); throw error; }
   }
 
-  /** Stop by closing the dedicated connection (pyatv AirPlayStream.stop); idempotent. */
+  /** Stop by closing the dedicated connection; idempotent. */
   close(): void {
     this.closed = true;
     if (this.heartbeat) clearInterval(this.heartbeat);

@@ -217,7 +217,7 @@ describe('AirPlay URL playback', () => {
     finally { playback.close(); await fake.close(); }
   });
 
-  it('decodes XML playback-info as used by the pinned pyatv receiver', async () => {
+  it('decodes XML playback-info property lists', async () => {
     const fake = await receiver({ xmlStatus: true }); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
     try { await playback.playUrl('https://example.org/movie.mp4'); expect(await playback.getStatus()).toMatchObject({ state: 'playing', duration: 120, position: 3 }); }
     finally { playback.close(); await fake.close(); }

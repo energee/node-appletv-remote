@@ -1,4 +1,4 @@
-/** RTI text-input archives: payload structure matches pyatv's pre-encoded NSKeyedArchiver plists. */
+/** RTI text-input archives: payload structure of the pre-encoded NSKeyedArchiver plists. */
 import { describe, expect, it } from 'vitest';
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
@@ -8,7 +8,7 @@ const uuid = Buffer.from('00112233445566778899aabbccddeeff', 'hex');
 const decode = (archive: Buffer) => parseBuffer(archive)[0] as { $archiver: string; $top: Record<string, { UID: number }>; $objects: any[] };
 const deref = (archive: ReturnType<typeof decode>, ref: { UID: number }) => archive.$objects[ref.UID];
 
-describe('RTI payloads (pyatv plist_payloads/rti_text_operations.py)', () => {
+describe('RTI payloads', () => {
   it('clear targets the session UUID with an empty textToAssert', () => {
     const archive = decode(rtiClearTextPayload(uuid));
     expect(archive.$archiver).toBe('RTIKeyedArchiver');
@@ -27,7 +27,7 @@ describe('RTI payloads (pyatv plist_payloads/rti_text_operations.py)', () => {
   });
 });
 
-describe('readTextSession (pyatv keyed_archiver.read_archive_properties)', () => {
+describe('readTextSession', () => {
   // Shape of a real Apple TV 4K _tiStart _tiD archive: UID references from $top into $objects.
   const tiD = (text?: string) => bplistCreator({
     $version: 100000, $archiver: 'RTIKeyedArchiver', $top: { sessionUUID: { UID: 1 }, documentState: { UID: 2 } },
