@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { audioPacket, timingReply, syncPacket, PacketHistory, FRAMES_PER_PACKET, SAMPLE_RATE, PACKET_BYTES } from './packets.js';
 import { x25519PublicKeyFromRaw, X25519_PKCS8_PREFIX, ED25519_PKCS8_PREFIX } from '../util/crypto.js';
 import { connectSocket, parseHTTPMessage } from '../connection.js';
+import { encodeDmap } from '../dmap/codec.js';
 
 /** Finite raw PCM chunks; streamed chunks are Buffers of at most 65,536 bytes. */
 export type RaopPcmSource = Buffer | AsyncIterable<Buffer>;
@@ -377,10 +378,9 @@ export class RaopStream {
       if (value === undefined) continue;
       if (typeof value !== 'string') throw new Error('RAOP metadata must be text');
       const text = Buffer.from(value); if (text.length > 4096) throw new Error('RAOP metadata too long');
-      const header = Buffer.alloc(8); header.write(tag!); header.writeUInt32BE(text.length, 4); tags.push(header, text);
+      tags.push(encodeDmap(tag!, text));
     }
-    const body = Buffer.concat(tags); const header = Buffer.alloc(8); header.write('mlit'); header.writeUInt32BE(body.length, 4);
-    return Buffer.concat([header, body]);
+    return encodeDmap('mlit', Buffer.concat(tags));
   }
   /** Update volume only during active playback. */
   async setVolume(volume: number): Promise<void> {
