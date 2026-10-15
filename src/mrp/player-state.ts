@@ -10,6 +10,8 @@ interface Player {
   direct: Payload;
   items: Payload[];
   location: number;
+  /** A SetState carried a playbackQueue (even an empty one); counts as received state. */
+  hasQueue?: boolean;
   commands?: SupportedCommand[];
 }
 interface Client {
@@ -19,6 +21,8 @@ interface Client {
   commands?: SupportedCommand[];
 }
 const DEFAULT_PLAYER = 'MediaRemote-DefaultPlayer';
+/** Bundle key for a client without a bundle identifier; pyatv models the empty now-playing client (idle TV) this way. */
+const EMPTY_CLIENT = '';
 
 /** Keeps inactive-player updates separate until the device selects that client/player. */
 export class PlayerState {
@@ -40,7 +44,7 @@ export class PlayerState {
    * A selected empty client (idle TV) is itself a definitive nothing-playing snapshot.
    */
   get hasSelectedSnapshot(): boolean {
-    return this.routingSelected && (this.hasSnapshot || this.activeClient === '');
+    return this.routingSelected && (this.hasSnapshot || this.activeClient === EMPTY_CLIENT);
   }
 
   /** Received state for the model's current player (also the legacy first-state fallback). Identity/commands alone are not state. */
@@ -48,7 +52,7 @@ export class PlayerState {
     const client = this.activeClient === undefined ? undefined : this.clients.get(this.activeClient);
     const player = client?.active === null ? undefined : client?.players.get(client.active ?? DEFAULT_PLAYER);
     return !!player && (typeof player.state.playbackState === 'number' ||
-      player.state.playbackQueue !== undefined || Object.keys(player.direct).length > 0);
+      player.hasQueue === true || Object.keys(player.direct).length > 0);
   }
 
   /** Fresh normalized snapshot without position extrapolation. */
@@ -77,7 +81,7 @@ export class PlayerState {
   update(type: number, payload: Payload): boolean {
     const path = payload.playerPath ?? {};
     const clientInfo = payload.client ?? path.client ?? {};
-    const bundle = clientInfo.bundleIdentifier ?? '';
+    const bundle = clientInfo.bundleIdentifier ?? EMPTY_CLIENT;
     let client = this.clients.get(bundle);
     if (!client) {
       client = { info: clientInfo, players: new Map() };
@@ -88,7 +92,7 @@ export class PlayerState {
     if (type === MessageType.SetNowPlayingClient) {
       this.routingSelected = true;
       this.selected = true;
-      // pyatv: an empty client is the '' bundle, a normal active client with no players.
+      // pyatv: an empty client is the EMPTY_CLIENT bundle, a normal active client with no players.
       this.activeClient = bundle;
       return true;
     }
@@ -128,6 +132,7 @@ export class PlayerState {
         // Keep only what snapshots and item updates read, so artwork buffers are not retained.
         player.items = (payload.playbackQueue.contentItems ?? []).map((item: Payload) => ({ identifier: item.identifier, metadata: item.metadata ? { ...item.metadata } : undefined }));
         player.location = payload.playbackQueue.location ?? 0;
+        player.hasQueue = true;
         // Replaced queues must not inherit metadata from a previous track.
         player.direct = {};
       }

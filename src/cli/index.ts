@@ -260,8 +260,9 @@ async function cmdState(deviceId?: string) {
   try {
     console.error('Requesting state...');
     const info = await atv.getNowPlaying();
-    console.log(info.hasPlayback || (info.playbackState !== PlaybackState.Unknown && info.playbackState !== PlaybackState.Stopped)
-      ? info.toString() : `Nothing playing. [${info.playbackState === PlaybackState.Stopped ? 'Stopped' : 'Absent'}]`);
+    const stopped = info.playbackState === PlaybackState.Stopped;
+    const idle = !info.hasPlayback && (stopped || info.playbackState === PlaybackState.Unknown);
+    console.log(idle ? `Nothing playing. [${stopped ? 'Stopped' : 'Absent'}]` : info.toString());
   } finally {
     await atv.close();
   }

@@ -163,6 +163,7 @@ describe('cache-first normalized state reads', () => {
     { playbackState: 1, nowPlayingInfo: { title: 'Pushed' } },
     { playbackState: 2, playbackQueue: { location: 0, contentItems: [{ identifier: 'x', metadata: { title: 'Paused' } }] } },
     { playbackState: 3, playbackQueue: { contentItems: [] } },
+    { playbackQueue: { contentItems: [] } },
     { playbackState: 0 },
     { nowPlayingInfo: { title: 'State not reported' } },
   ])('returns received active-player state without a queue response: %j', async payload => {
@@ -249,6 +250,16 @@ describe('cache-first normalized state reads', () => {
     } };
     deliver(atv, MessageType.SetState, 'setStateMessage', { nowPlayingInfo: { title: 'Pushed' } });
     await expect(atv.getState()).resolves.toBe(raw);
+  });
+
+  it('accepts a queue-only SetState reply as active-player state', async () => {
+    const atv = device();
+    (atv as any).connection = { sendMRPMessageAndWait: async () => {
+      const response = { type: 4, '.setStateMessage': { playbackQueue: { contentItems: [] } } };
+      (atv as any).handleMRPMessage(response);
+      return response;
+    } };
+    await expect(atv.getNowPlaying()).resolves.toMatchObject({ hasPlayback: false, playbackState: PlaybackState.Unknown });
   });
 
   it('does not report absent playback when a queue reply has no selected-player state', async () => {
