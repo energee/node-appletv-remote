@@ -1,7 +1,7 @@
 /** Shared HTTP compatibility, truncation and response-size guard tests. */
 import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { afterEach, expect, it } from 'vitest';
+import { Socket, type AddressInfo } from 'node:net';
+import { afterEach, expect, it, vi } from 'vitest';
 import { PersistentHttp } from '../http.js';
 let server: Server;
 let client: PersistentHttp;
@@ -36,4 +36,15 @@ it('applies a configurable inactivity timeout, where 0 disables it for long poll
   client.destroy();
   client = new PersistentHttp('127.0.0.1', port, {}, 0);
   expect((await client.request('GET', '/slow')).body.toString()).toBe('late');
+});
+it('bounds the TCP connect phase even when the inactivity timeout is disabled', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    client = new PersistentHttp('192.0.2.1', 3689, {}, 0);
+    // A socket stuck in `connecting` is what a silently dropped SYN looks like; no network needed.
+    (client as unknown as { agent: { createConnection: () => Socket } }).agent.createConnection = () => Object.assign(new Socket(), { connecting: true });
+    const pending = expect(client.request('GET', '/login')).rejects.toThrow(/Connect to 192\.0\.2\.1:3689 timed out/);
+    await vi.advanceTimersByTimeAsync(5000);
+    await pending;
+  } finally { vi.useRealTimers(); }
 });
