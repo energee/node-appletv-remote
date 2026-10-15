@@ -17,6 +17,7 @@ import { MRPConnection } from './mrp/connection.js';
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
 import { HAPSession } from './util/hap-session.js';
+import { CONNECT_TIMEOUT_MS } from './util/http.js';
 import { hkdfSha512, encryptChaCha20, decryptChaCha20, x25519PublicKeyFromRaw, ed25519PublicKeyFromRaw, ed25519PrivateKeyFromSeed } from './util/crypto.js';
 import { TlvTag, tlvEncode, tlvDecode } from './util/tlv.js';
 import { MRPMessage, MessageType } from './mrp/messages.js';
@@ -90,7 +91,7 @@ export function parseHTTPMessage(buf: Buffer, maxBody = 16 * 1024 * 1024): Parse
  * An optional signal cancels TCP setup and destroys the pending socket.
  * @throws (rejects) on cancellation, the first socket error, or the `timeoutMs` deadline (default 5 s).
  */
-export function connectSocket(host: string, port: number, timeoutMs = 5000, signal?: AbortSignal): Promise<Socket> {
+export function connectSocket(host: string, port: number, timeoutMs = CONNECT_TIMEOUT_MS, signal?: AbortSignal): Promise<Socket> {
   return new Promise((resolve, reject) => {
     const sock = new Socket();
     const abort = (): void => { sock.destroy(); reject(new Error('Connection closed during setup')); };

@@ -2,10 +2,10 @@
 import { createServer, type Server } from 'node:http';
 import { Socket, type AddressInfo } from 'node:net';
 import { afterEach, expect, it, vi } from 'vitest';
-import { PersistentHttp } from '../http.js';
+import { CONNECT_TIMEOUT_MS, PersistentHttp } from '../http.js';
 let server: Server;
 let client: PersistentHttp;
-afterEach(async () => { client?.destroy(); if (server) await new Promise<void>((r) => server.close(() => r())); });
+afterEach(async () => { vi.useRealTimers(); client?.destroy(); if (server) await new Promise<void>((r) => server.close(() => r())); });
 async function listen(): Promise<number> { await new Promise<void>((r) => server.listen(0, '127.0.0.1', r)); return (server.address() as AddressInfo).port; }
 it('preserves HAP POST headers and request body on a reusable connection', async () => {
   const received: { hkp?: string; body: string; method?: string }[] = [];
@@ -39,12 +39,10 @@ it('applies a configurable inactivity timeout, where 0 disables it for long poll
 });
 it('bounds the TCP connect phase even when the inactivity timeout is disabled', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-  try {
-    client = new PersistentHttp('192.0.2.1', 3689, {}, 0);
-    // A socket stuck in `connecting` is what a silently dropped SYN looks like; no network needed.
-    (client as unknown as { agent: { createConnection: () => Socket } }).agent.createConnection = () => Object.assign(new Socket(), { connecting: true });
-    const pending = expect(client.request('GET', '/login')).rejects.toThrow(/Connect to 192\.0\.2\.1:3689 timed out/);
-    await vi.advanceTimersByTimeAsync(5000);
-    await pending;
-  } finally { vi.useRealTimers(); }
+  client = new PersistentHttp('192.0.2.1', 3689, {}, 0);
+  // A socket stuck in `connecting` is what a silently dropped SYN looks like; no network needed.
+  (client as unknown as { agent: { createConnection: () => Socket } }).agent.createConnection = () => Object.assign(new Socket(), { connecting: true });
+  const pending = expect(client.request('GET', '/login')).rejects.toThrow(/Connect to 192\.0\.2\.1:3689 timed out/);
+  await vi.advanceTimersByTimeAsync(CONNECT_TIMEOUT_MS);
+  await pending;
 });
