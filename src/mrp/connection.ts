@@ -18,6 +18,23 @@ export interface MRPDiagnostic {
 /** MRP envelope error "Could not find the specified now playing client": nothing is playing (#10). */
 export const MRP_ERROR_NO_NOW_PLAYING_CLIENT = 35;
 
+/**
+ * Non-player-state types the diagnostic reports, mapped to the payload field it reads client and
+ * player tokens from ('' for none): handshake requests, volume capabilities and tvOS 26 client properties.
+ */
+const DIAGNOSTIC_FIELDS: Partial<Record<MessageType, string>> = {
+  [MessageType.PlaybackQueueRequest]: '.playbackQueueRequestMessage',
+  [MessageType.DeviceInfo]: '',
+  [MessageType.ClientUpdatesConfig]: '',
+  [MessageType.GetKeyboardSession]: '',
+  [MessageType.SetConnectionState]: '',
+  [MessageType.GetVolumeControlCapabilities]: '',
+  [MessageType.GetVolumeControlCapabilitiesResult]: '',
+  [MessageType.VolumeControlCapabilitiesDidChange]: '',
+  [MessageType.PlayerClientProperties]: '.playerClientPropertiesMessage',
+  [MessageType.OriginClientProperties]: '',
+};
+
 /** A device error reply to a request: `errorCode` is the ProtocolMessage envelope code. */
 export type MRPReplyError = Error & { errorCode: number };
 
@@ -53,7 +70,8 @@ export abstract class MRPConnection extends EventEmitter {
   abstract sendMRPMessage(data: Buffer): Promise<void>;
   /**
    * MRP handshake on the data channel: DeviceInfo (awaits the reply), SetConnectionState,
-   * ClientUpdatesConfig, GetKeyboardSession, then the optional `settleMs` delay (default 0).
+   * ClientUpdatesConfig, GetKeyboardSession, GetVolumeControlCapabilities, then the optional
+   * `settleMs` delay (default 0).
    * @throws if the DeviceInfo reply does not arrive within 5 s.
    */
   protected async initMRPProtocol(): Promise<void> {
@@ -93,6 +111,12 @@ export abstract class MRPConnection extends EventEmitter {
     const getKeyboard = await MRPMessage.sendCommand(MessageType.GetKeyboardSession);
     await this.diagnoseSend(getKeyboard);
     await this.sendMRPMessage(getKeyboard);
+
+    // 6. GetVolumeControlCapabilities (sent without waiting): tvOS 26 does not always push
+    // VolumeControlAvailability, so ask; the type 63 reply feeds featureAvailability.
+    const getVolumeCapabilities = await MRPMessage.sendCommand(MessageType.GetVolumeControlCapabilities);
+    await this.diagnoseSend(getVolumeCapabilities);
+    await this.sendMRPMessage(getVolumeCapabilities);
 
     // ponytail: fixed settle, 0 by default (was 500 ms). Replace with waiting for the first
     // update message if some Apple TV model turns out to drop the first command.
@@ -182,12 +206,11 @@ export abstract class MRPConnection extends EventEmitter {
     if (this.listenerCount('mrp-diagnostic')) this.emitDiagnostic('send', await MRPMessage.decode(protobufData));
   }
 
-  /** Emit only the init/state routing fields needed for #10, and only when observed. Never copy payloads. */
+  /** Emit only the init/state/volume routing fields needed for #10 and #39/#40, and only when observed. Never copy payloads. */
   private emitDiagnostic(direction: MRPDiagnostic['direction'], msg: Record<string, unknown>): void {
     if (!this.listenerCount('mrp-diagnostic') || !Object.prototype.hasOwnProperty.call(msg, 'type')) return;
     const type = msg.type as MessageType;
-    const field = PLAYER_STATE_FIELDS[type] ?? (type === MessageType.PlaybackQueueRequest ? '.playbackQueueRequestMessage' :
-      [MessageType.DeviceInfo, MessageType.ClientUpdatesConfig, MessageType.GetKeyboardSession, MessageType.SetConnectionState].includes(type) ? '' : undefined);
+    const field = PLAYER_STATE_FIELDS[type] ?? DIAGNOSTIC_FIELDS[type];
     if (field === undefined) return;
     const diagnostic: MRPDiagnostic = { direction, type };
     const token = (kind: string, value: unknown): string | undefined => {
