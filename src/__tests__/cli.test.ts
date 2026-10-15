@@ -64,6 +64,11 @@ describe('CLI operations', () => {
     expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('Absent'));
     expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
   });
+  it('prints the nothing-playing line for an idle TV snapshot', async () => {
+    vi.spyOn(AppleTV.prototype, 'getNowPlaying').mockResolvedValue(new NowPlayingInfo({ hasPlayback: false }, {}));
+    await run(['state']);
+    expect(console.log).toHaveBeenCalledWith('Nothing playing. [Absent]');
+  });
   it.each([['state', 'getNowPlaying', new NowPlayingInfo({ hasPlayback: false }, {}), 'Requesting state...'],
     ['queue', 'requestPlaybackQueue', {}, 'Requesting playback queue...'], ['artwork', 'requestArtwork', null, 'Requesting artwork...']] as const)(
     'prints %s progress to stderr, keeping stdout for results', async (cmd, method, result, progress) => {

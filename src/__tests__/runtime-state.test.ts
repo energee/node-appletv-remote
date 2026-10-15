@@ -193,6 +193,15 @@ describe('cache-first normalized state reads', () => {
     expect(getState).toHaveBeenCalledOnce();
   });
 
+  it('resolves nothing playing for an idle TV that selects the empty now-playing client', async () => {
+    const atv = device();
+    (atv as any).connection = {};
+    const getState = vi.spyOn(atv, 'getState').mockResolvedValue({ type: 4, '.setStateMessage': {} });
+    deliver(atv, MessageType.SetNowPlayingClient, 'setNowPlayingClientMessage', {});
+    await expect(atv.getNowPlaying()).resolves.toMatchObject({ hasPlayback: false, playbackState: PlaybackState.Unknown });
+    expect(getState).not.toHaveBeenCalled();
+  });
+
   it('does not bypass the queue for the first pushed player before any active routing selection', async () => {
     const atv = device();
     (atv as any).connection = {};

@@ -649,6 +649,7 @@ export class AppleTV extends EventEmitter {
 
   /**
    * Return the received active-player snapshot used by nowPlaying events after device routing selection.
+   * A selected empty client (idle TV) resolves as nothing playing without a queue request.
    * Without selected state evidence, request a queue reply; its timeout/error still rejects.
    * A reply without active-player state rejects rather than inventing absent playback.
    * Requires an open connection and does not extrapolate position or force a refresh.
