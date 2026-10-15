@@ -53,8 +53,8 @@ Numeric values must be finite decimal numbers in the documented range. Required 
 
 Two CLI timing knobs guard HID keys, which the Apple TV never acknowledges. Set either to `0` for faster one-shot commands:
 
-- `ATV_SETTLE_MS` (default 500): pause after the MRP handshake before sending anything. The library defaults to `0`; opt in with `atv.connect(credentials, { settleMs: 500 })`.
-- `ATV_POST_SEND_MS` (default 1000): pause after a one-shot key/playback/text/Companion operation, before disconnecting.
+- `ATV_SETTLE_MS` (default 500): pause after the MRP handshake before sending anything, for every MRP command (a request sent before the device is ready may be dropped; for a query that would mean waiting out its 10 s timeout). Companion-only commands do not use it. The library defaults to `0`; opt in with `atv.connect(credentials, { settleMs: 500 })`.
+- `ATV_POST_SEND_MS` (default 1000): pause after a one-shot key/playback/text/volume/Companion-button/app-launch/account-switch operation, before disconnecting. Read-only queries (`power`, `app list`, `account list`, `state`, `queue`, `artwork`) disconnect as soon as their reply arrives.
 
 ```
 $ atv state

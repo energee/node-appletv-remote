@@ -29,6 +29,7 @@ function envMs(name: string, fallback: number): number {
   return process.env[name]?.trim() && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 // HID keys get no device acknowledgment, so the CLI waits before trusting a send (old fixed values).
+// Settle applies to every MRP connect: any first request may be lost before the device is ready.
 const settleMs = (): number => envMs('ATV_SETTLE_MS', 500);
 const postSendMs = (): number => envMs('ATV_POST_SEND_MS', 1000);
 
@@ -485,6 +486,8 @@ export async function main(argv: string[]): Promise<void> {
   const [cmd, ...args] = argv;
   if (!cmd || ['help', '--help', '-h'].includes(cmd)) { help(); return; }
   let companion = false;
+  // Read-only queries get a reply, so they skip the post-send wait that unacknowledged sends need.
+  let readOnly = false;
   let device: string | undefined;
   let operation: (atv: AppleTV) => Promise<void | PowerState | App[] | UserAccount[]>;
   switch (cmd) {
@@ -493,7 +496,7 @@ export async function main(argv: string[]): Promise<void> {
       return cmdCommand(args[0], args[1]);
     case 'stop': case 'power':
       argumentsFor(args, 0, `${cmd} [device]`);
-      device = args[0]; companion = cmd === 'power';
+      device = args[0]; companion = cmd === 'power'; readOnly = cmd === 'power';
       operation = cmd === 'stop' ? (atv) => atv.stop() : (atv) => atv.fetchPowerState();
       break;
     case 'seek': case 'skip-forward': case 'skip-backward': case 'volume': {
@@ -531,7 +534,7 @@ export async function main(argv: string[]): Promise<void> {
       companion = true;
       if (action === 'list') {
         argumentsFor(values, 0, `${cmd} list [device]`);
-        device = values[0];
+        device = values[0]; readOnly = true;
         operation = (atv) => cmd === 'app' ? atv.appList() : atv.accountList();
       } else if (action === (cmd === 'app' ? 'launch' : 'switch')) {
         argumentsFor(values, 1, `${cmd} ${action} <id> [device]`);
@@ -565,7 +568,7 @@ export async function main(argv: string[]): Promise<void> {
     if (Array.isArray(result)) {
       for (const item of result) console.log(`${'bundleId' in item ? item.bundleId : item.id}\t${item.name}`);
     } else if (result !== undefined) console.log(result);
-    await delay(postSendMs());
+    if (!readOnly) await delay(postSendMs());
   } finally {
     await atv.close();
   }
