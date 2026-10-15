@@ -33,7 +33,7 @@ vi.mock('../packets.js', async importOriginal => {
   return { ...actual, sealAudioPacket: (packet: Buffer, key: Buffer, counter: bigint) => { sealed.key = key; sealed.calls++; return actual.sealAudioPacket(packet, key, counter); } };
 });
 
-const { RaopStream } = await import('../stream.js');
+const { RaopStream, RtspClient } = await import('../stream.js');
 const txt = { features: '0x4A7FDFD5,0x3C155FDE', flags: '0x244', md: '0,1,2' };
 const receivers: { close(): Promise<void> }[] = [];
 afterEach(async () => { controlledClock.now = undefined; sealed.key = undefined; sealed.calls = 0; vi.useRealTimers(); vi.restoreAllMocks(); for (const receiver of receivers.splice(0)) await receiver.close(); });
@@ -118,10 +118,18 @@ describe('RaopStream AirPlay 2 realtime profile', () => {
     const cancellation = new AbortController();
     const settled = stream.stream(endless(), { credentials: receiver.credentials, signal: cancellation.signal }).catch(error => error);
     const feedback = () => receiver.requests.filter(request => request.uri === '/feedback').length;
+    const request = vi.spyOn(RtspClient.prototype, 'request');
+    // The sender's last feedback promise: once it settles (and its finally ran), the in-flight guard is clear.
+    const answered = async () => {
+      const calls = request.mock.calls.map((call, index) => [call[5], request.mock.results[index].value] as const);
+      await calls.filter(([uri]) => uri === '/feedback').at(-1)![1];
+      await turn();
+    };
     try {
       await until(() => receiver.audioPackets.length > 0);
       await until(() => feedback() === 1);
       for (const expected of [2, 3]) {
+        await answered();
         await vi.advanceTimersByTimeAsync(1999); await delay(20);
         expect(feedback()).toBe(expected - 1);
         await vi.advanceTimersByTimeAsync(1);
