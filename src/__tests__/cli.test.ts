@@ -48,6 +48,18 @@ describe('CLI timing defaults', () => {
       expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
       await done;
     });
+  it.each([[['text', 'set', 'hi'], 'setText', 'hi'], [['text', 'append', 'hi'], 'insertText', 'hi'], [['text', 'clear'], 'clearText', '']] as const)(
+    'waits before disconnecting after the unacknowledged _tiC edit of %j', async (args, method, result) => {
+      vi.unstubAllEnvs();
+      vi.useFakeTimers();
+      vi.spyOn(AppleTV.prototype, method).mockResolvedValue(result);
+      const done = run([...args]);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(AppleTV.prototype.close).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await done;
+      expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
+    });
   it('honors explicit zero for both waits', async () => {
     vi.spyOn(AppleTV.prototype, 'sendKeyCommand').mockResolvedValue(undefined);
     await run(['command', 'select']);
