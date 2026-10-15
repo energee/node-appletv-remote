@@ -1,0 +1,6 @@
+# pnpm 10+ skips dependency build scripts unless approved here. Without this file,
+# every fresh checkout or worktree fails `pnpm install`/`pnpm exec` with
+# ERR_PNPM_IGNORED_BUILDS and leaves an untracked stub of this file behind.
+allowBuilds:
+  esbuild: true
+  protobufjs: true
