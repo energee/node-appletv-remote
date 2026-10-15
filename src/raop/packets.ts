@@ -51,10 +51,11 @@ export class PacketHistory {
   constructor(private capacity = 1000) {
     if (!Number.isInteger(capacity) || capacity < 1 || capacity > 1000) throw new Error('Invalid packet history capacity');
   }
+  /** Stores `packet` by reference (no copy); the caller must not mutate it afterwards. */
   add(packet: Buffer): void {
     const sequence = packet.readUInt16BE(2);
     this.packets.delete(sequence);
-    this.packets.set(sequence, Buffer.from(packet));
+    this.packets.set(sequence, packet);
     if (this.packets.size > this.capacity) this.packets.delete(this.packets.keys().next().value!);
   }
   /** Check the caller's remaining packet budget before copying any retransmissions. */
