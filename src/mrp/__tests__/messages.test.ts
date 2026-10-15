@@ -53,6 +53,15 @@ describe('MRP Messages', () => {
     expect(decoded).toBeDefined();
   });
 
+  it('decodes only fields present on the wire (no proto defaults or empty repeated fields)', async () => {
+    // type=4 with an empty SetStateMessage extension (field 9).
+    const setState = await MRPMessage.decode(Buffer.from('08044a00', 'hex'));
+    expect(setState['.setStateMessage']).toEqual({});
+    const info = (await MRPMessage.decode(await MRPMessage.deviceInfo({ uniqueIdentifier: 'u', name: 'n' })))['.deviceInfoMessage'] as Record<string, unknown>;
+    expect(Object.hasOwn(info, 'groupedDevices')).toBe(false);
+    expect(info.uniqueIdentifier).toBe('u');
+  });
+
   it('creates a SendButtonEventMessage', async () => {
     const msg = await MRPMessage.sendButtonEvent(1, 0x8C, true);
     expect(msg).toBeInstanceOf(Buffer);

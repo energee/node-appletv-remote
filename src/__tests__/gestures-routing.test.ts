@@ -255,6 +255,13 @@ describe('review regression guards', () => {
     (atv as any).handleMRPMessage({ type: 37, '.deviceInfoMessage': { deviceUID: 'tv' } });
     expect(atv.outputDevices).toEqual([{ name: 'S', identifier: 's' }]);
   });
+  it('keeps outputs for a decoded volume-only DeviceInfoUpdate (no materialized empty groupedDevices)', async () => {
+    const atv = device();
+    (atv as any).handleMRPMessage({ type: 15, '.deviceInfoMessage': { groupedDevices: [{ name: 'S', deviceUID: 's' }] } });
+    // Type 37, extension 20 carrying only name="TV".
+    (atv as any).handleMRPMessage(await MRPMessage.decode(Buffer.from('0825a2010412025456', 'hex')));
+    expect(atv.outputDevices).toEqual([{ name: 'S', identifier: 's' }]);
+  });
   it('stopTouch waits for startup before stopping the new registration', async () => {
     const atv = device(); const { sent } = companion(atv);
     const start = atv.touchAction(1, 1, 1);

@@ -723,9 +723,8 @@ export class AppleTV extends EventEmitter {
       throw new Error(`Media command ${command} rejected: errorCode=${response.errorCode} ${response.errorDescription ?? ''}`);
     }
     const result = response['.sendCommandResultMessage'] as Record<string, unknown> | undefined;
-    if (!result || (!Object.prototype.hasOwnProperty.call(result, 'sendError') && !Object.prototype.hasOwnProperty.call(result, 'handlerReturnStatus'))) {
-      throw new Error('Malformed media-command acknowledgment');
-    }
+    // pyatv checks only sendError; an omitted proto2 field is its default (NoError).
+    if (!result) throw new Error('Malformed media-command acknowledgment');
     const sendError = result.sendError ?? 0;
     const status = result.handlerReturnStatus ?? 0;
     if (sendError !== 0) throw new Error(`Media command ${command} rejected: sendError=${sendError}, handlerReturnStatus=${status}`);
