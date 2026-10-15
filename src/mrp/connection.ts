@@ -126,9 +126,7 @@ export abstract class MRPConnection extends EventEmitter {
       this.emit('mrp-message', msg);
     } finally {
       if (!this.closed && generation === this.mrpGeneration) {
-        const idx = this.pendingMRPResolvers.findIndex(
-          (r) => (r.type === undefined || r.type === msg.type) && (r.identifier === undefined || r.identifier === msg.identifier),
-        );
+        const idx = this.pendingMRPResolvers.findIndex(entry => this.matchesWaiter(entry, msg));
         if (idx >= 0) this.pendingMRPResolvers.splice(idx, 1)[0].resolve(msg);
       }
     }
@@ -185,11 +183,14 @@ export abstract class MRPConnection extends EventEmitter {
     const player = token('player', payload?.playerPath?.player?.identifier);
     if (client) diagnostic.client = client;
     if (player) diagnostic.player = player;
-    if (direction === 'receive') diagnostic.matchedRequest = this.pendingMRPResolvers.some(
-      entry => (entry.type === undefined || entry.type === type) && (entry.identifier === undefined || entry.identifier === msg.identifier),
-    );
+    if (direction === 'receive') diagnostic.matchedRequest = this.pendingMRPResolvers.some(entry => this.matchesWaiter(entry, msg));
     try { this.emit('mrp-diagnostic', diagnostic); }
     catch { this.log('MRP diagnostic observer failed'); }
+  }
+
+  /** A waiter matches when its type (if set) and identifier (if set) equal the message's. */
+  protected matchesWaiter(entry: { type?: number; identifier?: string }, msg: Record<string, unknown>): boolean {
+    return (entry.type === undefined || entry.type === msg.type) && (entry.identifier === undefined || entry.identifier === msg.identifier);
   }
 
   /** Reject all waiters and release their timers on transport loss. */

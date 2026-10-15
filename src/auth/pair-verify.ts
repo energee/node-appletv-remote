@@ -10,46 +10,13 @@ import {
   diffieHellman,
   sign,
   verify as cryptoVerify,
-  createPublicKey,
-  createPrivateKey,
   type KeyObject,
 } from 'node:crypto';
 import { TlvTag, tlvEncode, tlvDecode } from '../util/tlv.js';
-import { hkdfSha512, encryptChaCha20, decryptChaCha20 } from '../util/crypto.js';
+import { hkdfSha512, encryptChaCha20, decryptChaCha20, x25519PublicKeyFromRaw, ed25519PublicKeyFromRaw, ed25519PrivateKeyFromSeed } from '../util/crypto.js';
 import { PersistentHttp } from '../util/http.js';
 import type { HAPCredentials } from './types.js';
 
-/** DER prefixes that wrap a raw 32-byte key so node:crypto can import it. */
-const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
-const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
-const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
-
-/** Import a raw 32-byte X25519 public key. */
-function x25519PublicKeyFromRaw(raw: Buffer): KeyObject {
-  return createPublicKey({
-    key: Buffer.concat([X25519_SPKI_PREFIX, raw]),
-    format: 'der',
-    type: 'spki',
-  });
-}
-
-/** Import a raw 32-byte Ed25519 public key. */
-function ed25519PublicKeyFromRaw(raw: Buffer): KeyObject {
-  return createPublicKey({
-    key: Buffer.concat([ED25519_SPKI_PREFIX, raw]),
-    format: 'der',
-    type: 'spki',
-  });
-}
-
-/** Import an Ed25519 private key from its raw 32-byte seed (the stored clientLTSK). */
-function ed25519PrivateKeyFromSeed(seed: Buffer): KeyObject {
-  return createPrivateKey({
-    key: Buffer.concat([ED25519_PKCS8_PREFIX, seed]),
-    format: 'der',
-    type: 'pkcs8',
-  });
-}
 
 /** One pair-verify attempt using previously stored HAP credentials. */
 export class PairVerify {

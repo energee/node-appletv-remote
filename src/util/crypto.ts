@@ -4,10 +4,31 @@
  * when available and falling back to @noble/ciphers otherwise.
  */
 
-import { hkdf, createCipheriv, createDecipheriv, randomBytes, getCiphers } from 'node:crypto';
+import { hkdf, createCipheriv, createDecipheriv, randomBytes, getCiphers, createPublicKey, createPrivateKey, type KeyObject } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const hkdfAsync = promisify(hkdf);
+
+/** DER prefixes that wrap a raw 32-byte key for node:crypto import (key bytes are appended). */
+export const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
+export const X25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b656e04220420', 'hex');
+const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+export const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
+
+/** Import a raw 32-byte X25519 public key. */
+export function x25519PublicKeyFromRaw(raw: Buffer): KeyObject {
+  return createPublicKey({ key: Buffer.concat([X25519_SPKI_PREFIX, raw]), format: 'der', type: 'spki' });
+}
+
+/** Import a raw 32-byte Ed25519 public key. */
+export function ed25519PublicKeyFromRaw(raw: Buffer): KeyObject {
+  return createPublicKey({ key: Buffer.concat([ED25519_SPKI_PREFIX, raw]), format: 'der', type: 'spki' });
+}
+
+/** Import an Ed25519 private key from its raw 32-byte seed (e.g. the stored clientLTSK). */
+export function ed25519PrivateKeyFromSeed(seed: Buffer): KeyObject {
+  return createPrivateKey({ key: Buffer.concat([ED25519_PKCS8_PREFIX, seed]), format: 'der', type: 'pkcs8' });
+}
 
 /** Whether this Node/OpenSSL build exposes `chacha20-poly1305` natively. */
 const hasNativeChacha = getCiphers().includes('chacha20-poly1305');
