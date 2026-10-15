@@ -50,7 +50,7 @@ export abstract class MRPConnection extends EventEmitter {
     });
     // DeviceInfo can be unsolicited/identifierless; install its type waiter before writing.
     const response = this.waitForMRPMessage(MessageType.DeviceInfo, 5000);
-    if (this.listenerCount('mrp-diagnostic')) this.emitDiagnostic('send', await MRPMessage.decode(deviceInfo));
+    await this.diagnoseSend(deviceInfo);
     void this.sendMRPMessage(deviceInfo).catch(err => this.rejectMRPRequests(err));
     await response;
     await this.authenticateMRP();
@@ -60,7 +60,7 @@ export abstract class MRPConnection extends EventEmitter {
 
     // 3. SetConnectionState (fire and forget, pyatv uses send() not send_and_receive())
     const connState = await MRPMessage.setConnectionState(2);
-    if (this.listenerCount('mrp-diagnostic')) this.emitDiagnostic('send', await MRPMessage.decode(connState));
+    await this.diagnoseSend(connState);
     await this.sendMRPMessage(connState);
 
     // 4. ClientUpdatesConfig (pyatv waits for a reply; we only send)
@@ -70,12 +70,12 @@ export abstract class MRPConnection extends EventEmitter {
       volumeUpdates: true,
       keyboardUpdates: true,
     });
-    if (this.listenerCount('mrp-diagnostic')) this.emitDiagnostic('send', await MRPMessage.decode(updatesConfig));
+    await this.diagnoseSend(updatesConfig);
     await this.sendMRPMessage(updatesConfig);
 
     // 5. GetKeyboardSession (pyatv waits for a reply; we only send)
     const getKeyboard = await MRPMessage.sendCommand(MessageType.GetKeyboardSession);
-    if (this.listenerCount('mrp-diagnostic')) this.emitDiagnostic('send', await MRPMessage.decode(getKeyboard));
+    await this.diagnoseSend(getKeyboard);
     await this.sendMRPMessage(getKeyboard);
 
     // ponytail: fixed settle, 0 by default (was 500 ms). Replace with waiting for the first
@@ -154,6 +154,11 @@ export abstract class MRPConnection extends EventEmitter {
       this.pendingMRPResolvers.find(entry => entry.identifier === identifier)?.reject(err);
     });
     return waitPromise;
+  }
+
+  /** Emit a send diagnostic for an encoded message, decoding it only when observed. */
+  private async diagnoseSend(protobufData: Buffer): Promise<void> {
+    if (this.listenerCount('mrp-diagnostic')) this.emitDiagnostic('send', await MRPMessage.decode(protobufData));
   }
 
   /** Emit only the init/state routing fields needed for #10, and only when observed. Never copy payloads. */
