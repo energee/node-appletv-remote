@@ -6,7 +6,7 @@ import { DmapPairing } from '../dmap/pairing.js';
 import { NowPlayingInfo, PlaybackState } from '../now-playing-info.js';
 
 const raop = vi.hoisted(() => ({ services: [] as object[], created: [] as unknown[][], stream: vi.fn() }));
-vi.mock('node:fs', () => ({ realpathSync: (path: string) => path, existsSync: vi.fn(() => true), readFileSync: vi.fn(() => '{"device":"0x0123456789ABCDEF"}'), writeFileSync: vi.fn(), createReadStream: vi.fn(() => 'pcm-stream') }));
+vi.mock('node:fs', () => ({ realpathSync: (path: string) => path, existsSync: vi.fn(() => true), readFileSync: vi.fn((path: string) => path.endsWith('.atv-dmap.json') ? '{"device":"0x0123456789ABCDEF"}' : '{"device":"modern-credentials"}'), writeFileSync: vi.fn(), createReadStream: vi.fn(() => 'pcm-stream') }));
 vi.mock('node:readline', () => ({ createInterface: () => ({ question: (_q: string, answer: (value: string) => void) => answer('1'), close() {} }) }));
 vi.mock('../credentials.js', () => ({ Credentials: { deserialize: () => ({ companionCredentials: {} }) } }));
 vi.mock('../cli/device-cache.js', () => ({ withCachedDevice: async (_file: string, _id: string, _scan: unknown, connect: (device: object) => Promise<unknown>) => connect({ name: 'TV', deviceId: 'device', address: '127.0.0.1', port: 1, companionPort: 2, dmapPort: 3 }) }));
@@ -55,6 +55,9 @@ describe('button action modes', () => {
     [['cmd', 'select', 'singleTap', 'device'], ['select', 'singleTap']],
     // Without an action the key keeps its existing single-argument call.
     [['command', 'menu', 'device'], ['menu']],
+    // Action words are case-insensitive, so a miscased action never becomes a device selector.
+    [['command', 'up', 'doubletap'], ['up', 'doubleTap']],
+    [['command', 'up', 'HOLD', 'device'], ['up', 'hold']],
   ] as const)('sends %j as an MRP key with its action', async (args, expected) => {
     const send = vi.spyOn(AppleTV.prototype, 'sendKeyCommand').mockResolvedValue(undefined);
     await run([...args]);
@@ -74,10 +77,15 @@ describe('button action modes', () => {
     await expect(run(args)).rejects.toThrow();
     expectNoIo();
   });
+  it.each([['command', 'up', 'hold2', 'device'], ['click', 'bogus', 'device']])(
+    'names an invalid action in the action position of %j', async (...args) => {
+      await expect(run(args)).rejects.toThrow('Invalid action');
+      expectNoIo();
+    });
 });
 
 describe('touch', () => {
-  it.each([[['click'], []], [['click', 'doubleTap', 'device'], ['doubleTap']], [['click', 'device'], []]] as const)(
+  it.each([[['click'], []], [['click', 'doubleTap', 'device'], ['doubleTap']], [['click', 'device'], []], [['click', 'Hold', 'device'], ['hold']]] as const)(
     'clicks %j over Companion only', async (args, expected) => {
       const click = vi.spyOn(AppleTV.prototype, 'click').mockResolvedValue(undefined);
       await run([...args]);
@@ -120,7 +128,14 @@ describe('output routing', () => {
       expect(console.log).toHaveBeenCalledWith('a\tKitchen');
       expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
     });
-  it.each([['output'], ['output', 'bad'], ['output', 'add'], ['output', 'add', 'a,,b'], ['output', 'set', ' '], ['output', 'list', 'device', 'extra']])(
+  it('trims whitespace around comma-separated IDs', async () => {
+    const add = vi.spyOn(AppleTV.prototype, 'addOutputDevices').mockResolvedValue(undefined);
+    vi.spyOn(AppleTV.prototype, 'outputDevices', 'get').mockReturnValue([]);
+    await run(['output', 'add', 'a, b', 'device']);
+    expect(add).toHaveBeenCalledWith(['a', 'b']);
+  });
+  it.each([['output'], ['output', 'bad'], ['output', 'add'], ['output', 'add', 'a,,b'], ['output', 'set', ' '], ['output', 'list', 'device', 'extra'],
+    ['output', 'add', 'a,a'], ['output', 'remove', 'a, a', 'device']])(
     'rejects %j before connecting', async (...args) => {
       await expect(run(args)).rejects.toThrow();
       expectNoIo();
@@ -137,6 +152,8 @@ describe('DMAP', () => {
   ] as const)('sends %s with the stored pairing GUID', async (command, method) => {
     const call = vi.spyOn(DmapClient.prototype, method).mockResolvedValue(undefined);
     await run(['dmap', command, 'device']);
+    expect(readFileSync).toHaveBeenCalledWith(expect.stringMatching(/\.atv-dmap\.json$/), 'utf-8');
+    expect(readFileSync).not.toHaveBeenCalledWith(expect.stringMatching(/\.atv-credentials\.json$/), expect.anything());
     expect(DmapClient.prototype.connect).toHaveBeenCalledWith('0x0123456789ABCDEF');
     expect(call).toHaveBeenCalledOnce();
     expect(DmapClient.prototype.close).toHaveBeenCalledOnce();
@@ -152,17 +169,50 @@ describe('DMAP', () => {
     await expect(run(['dmap', 'play'])).rejects.toThrow('DMAP HTTP 500');
     expect(DmapClient.prototype.close).toHaveBeenCalledOnce();
   });
-  it('pairs by advertising a remote and stores the GUID for the selected device', async () => {
+  /** Mock one legacy TV and capture the options DmapPairing was started with. */
+  function mockPairing(): { options?: { address: string; pin: string } } {
     vi.mocked(scan).mockResolvedValue([{ name: 'Old TV', deviceId: 'dmap:old', address: '192.0.2.5', port: 0, model: 'Legacy DMAP device', dmapPort: 3689 }] as never);
-    const start = vi.spyOn(DmapPairing.prototype, 'start').mockResolvedValue(undefined);
+    const captured: { options?: { address: string; pin: string } } = {};
+    vi.spyOn(DmapPairing.prototype, 'start').mockImplementation(async function (this: DmapPairing) {
+      captured.options = (this as unknown as { options: { address: string; pin: string } }).options;
+    });
+    vi.spyOn(DmapPairing.prototype, 'close').mockResolvedValue(undefined);
+    return captured;
+  }
+  it('pairs by advertising a remote and stores the GUID for the selected device', async () => {
+    const captured = mockPairing();
     vi.spyOn(DmapPairing.prototype, 'finish').mockReturnValue('0xAAAAAAAAAAAAAAAA');
-    const close = vi.spyOn(DmapPairing.prototype, 'close').mockResolvedValue(undefined);
     await run(['dmap-pair', '192.0.2.10']);
-    expect(start).toHaveBeenCalledOnce();
-    expect(close).toHaveBeenCalledOnce();
-    const [, written] = vi.mocked(writeFileSync).mock.calls[0];
-    expect(JSON.parse(written as string)['dmap:old']).toBe('0xAAAAAAAAAAAAAAAA');
-    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/PIN \d{4}/));
+    expect(DmapPairing.prototype.start).toHaveBeenCalledOnce();
+    expect(DmapPairing.prototype.close).toHaveBeenCalledOnce();
+    expect(captured.options?.address).toBe('192.0.2.10');
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining(`PIN ${captured.options?.pin}.`));
+    expect(writeFileSync).toHaveBeenCalledOnce();
+    const [path, written] = vi.mocked(writeFileSync).mock.calls[0];
+    expect(path).toMatch(/\.atv-dmap\.json$/);
+    // Existing DMAP pairings are kept; modern credentials are never read or rewritten.
+    expect(JSON.parse(written as string)).toEqual({ device: '0x0123456789ABCDEF', 'dmap:old': '0xAAAAAAAAAAAAAAAA' });
+    expect(readFileSync).not.toHaveBeenCalledWith(expect.stringMatching(/\.atv-credentials\.json$/), expect.anything());
+  });
+  it('stops polling and reports a locked-out pairing', async () => {
+    mockPairing();
+    vi.spyOn(DmapPairing.prototype, 'finish').mockImplementation(() => { throw new Error('DMAP pairing locked after five wrong PINs'); });
+    await expect(run(['dmap-pair', '192.0.2.10'])).rejects.toThrow('locked');
+    expect(DmapPairing.prototype.finish).toHaveBeenCalledOnce();
+    expect(DmapPairing.prototype.close).toHaveBeenCalledOnce();
+    expect(writeFileSync).not.toHaveBeenCalled();
+  });
+  it('closes the pairing server on Ctrl+C', async () => {
+    mockPairing();
+    vi.spyOn(DmapPairing.prototype, 'finish').mockImplementation(() => { throw new Error('DMAP remote is not paired'); });
+    const listeners = process.listenerCount('SIGINT');
+    const pending = run(['dmap-pair', '192.0.2.10']);
+    await vi.waitFor(() => expect(DmapPairing.prototype.finish).toHaveBeenCalled());
+    process.emit('SIGINT');
+    await expect(pending).rejects.toThrow('DMAP pairing cancelled');
+    expect(DmapPairing.prototype.close).toHaveBeenCalledOnce();
+    expect(process.listenerCount('SIGINT')).toBe(listeners);
+    expect(writeFileSync).not.toHaveBeenCalled();
   });
   it.each([['dmap'], ['dmap', 'bogus'], ['dmap', 'up', 'device', 'extra'], ['dmap-pair'], ['dmap-pair', 'not-an-ip'], ['dmap-pair', 'fe80::1']])(
     'rejects %j before connecting', async (...args) => {

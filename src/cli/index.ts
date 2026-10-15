@@ -105,7 +105,10 @@ async function cmdPair() {
 }
 
 /** Button action modes accepted after a key, Companion button, or `click`. */
-const ACTIONS: readonly string[] = ['singleTap', 'doubleTap', 'hold'] satisfies InputAction[];
+const ACTIONS: readonly InputAction[] = ['singleTap', 'doubleTap', 'hold'];
+/** Canonical action for a case-insensitive action word, or undefined if `word` is not one. */
+const actionFor = (word?: string): InputAction | undefined =>
+  ACTIONS.find((action) => action.toLowerCase() === word?.toLowerCase());
 
 /** Every Key value; these strings are the accepted CLI command names. */
 const COMMAND_NAMES = Object.values(Key);
@@ -152,7 +155,8 @@ async function findDevice(id: string, need: 'mrp' | 'companion' | 'dmap'): Promi
     d.identifiers?.some(alias => alias.toLowerCase() === idLower) ||
     d.name.toLowerCase().includes(idLower) ||
     d.deviceId.toLowerCase().includes(idLower);
-  // Stop as soon as the device (and, if needed, its Companion port) has arrived.
+  // Stop as soon as the device has arrived with the port `need` requires: Companion, DMAP, or an
+  // AirPlay/usable MRP port.
   const devices = await scan({ timeout: 5000, until: (d) => matches(d) && (need === 'companion' ? !!d.companionPort :
     need === 'dmap' ? !!d.dmapPort : !!d.port || !!d.mrpPort && d.mrpEnabled !== false) });
   const device = devices.find(matches);
@@ -470,7 +474,8 @@ const DMAP_COMMANDS = {
 
 /**
  * `atv dmap-pair <local-ipv4>`: advertise this computer as a Remote on the given local IPv4 interface,
- * show a random PIN to enter on the selected legacy Apple TV, and store the resulting pairing GUID.
+ * show a random PIN to enter on the selected legacy Apple TV, and store the resulting pairing GUID
+ * under the selected device's ID. Fails on lockout or expiry; Ctrl+C cancels and closes the server.
  */
 async function cmdDmapPair(localAddress: string) {
   console.log('Scanning for legacy (DMAP) Apple TVs...');
@@ -488,19 +493,23 @@ async function cmdDmapPair(localAddress: string) {
 
   const pin = String(randomInt(10000)).padStart(4, '0');
   const pairing = new DmapPairing({ name: 'atv CLI', address: localAddress, pin });
+  // Ctrl+C must still close the callback server and unpublish the _touch-remote advertisement.
+  const cancellation = new AbortController();
+  const cancel = () => cancellation.abort(new Error('DMAP pairing cancelled'));
+  process.once('SIGINT', cancel);
   let guid: string;
   try {
     await pairing.start();
     console.log(`On ${device.name}, open Settings > General > Remotes, choose "atv CLI" and enter PIN ${pin}.`);
-    // DmapPairing has no completion event; poll until its five-minute pairing window ends.
-    const deadline = Date.now() + 300_000;
+    // DmapPairing has no completion event; poll until it pairs, locks out after five wrong PINs, or expires.
     for (;;) {
       try { guid = pairing.finish(); break; } catch (error) {
-        if (Date.now() > deadline) throw error;
-        await delay(500);
+        if (!(error instanceof Error) || error.message !== 'DMAP remote is not paired') throw error;
       }
+      try { await delay(500, undefined, { signal: cancellation.signal }); } catch { cancellation.signal.throwIfAborted(); }
     }
   } finally {
+    process.removeListener('SIGINT', cancel);
     await pairing.close();
   }
 
@@ -586,6 +595,7 @@ function help(): void {
   atv scan | pair | companion-pair
   atv command <key> [action] [device]  Send an MRP key or Companion button (alias: cmd);
                                        action: singleTap (default), doubleTap, hold
+                                       (case-insensitive)
   atv stop [device]
   atv seek <seconds> [device]          Absolute position, >= 0
   atv skip-forward <seconds> [device]  Positive interval
@@ -648,13 +658,15 @@ export async function main(argv: string[]): Promise<void> {
   let operation: (atv: AppleTV) => Promise<void | string | App[] | UserAccount[] | OutputDevice[]>;
   switch (cmd) {
     case 'command': case 'cmd': {
-      // An optional action precedes the optional device selector.
-      const action = ACTIONS.includes(args[1]) ? args[1] as InputAction : undefined;
+      // An optional action precedes the optional device selector; with both present it must be valid.
+      const action = actionFor(args[1]);
+      if (!action && args.length === 3) throw new Error(`Invalid action: ${args[1]} (expected ${ACTIONS.join(', ')})`);
       argumentsFor(action ? args.filter((_, i) => i !== 1) : args, 1, 'command <key> [action] [device]');
       return cmdCommand(args[0], action, action ? args[2] : args[1]);
     }
     case 'click': {
-      const action = ACTIONS.includes(args[0]) ? args[0] as InputAction : undefined;
+      const action = actionFor(args[0]);
+      if (!action && args.length === 2) throw new Error(`Invalid action: ${args[0]} (expected ${ACTIONS.join(', ')})`);
       argumentsFor(action ? args.slice(1) : args, 0, 'click [action] [device]');
       device = action ? args[1] : args[0]; companion = true;
       operation = (atv) => action ? atv.click(action) : atv.click();
@@ -681,8 +693,10 @@ export async function main(argv: string[]): Promise<void> {
         operation = async (atv) => atv.outputDevices;
       } else if (action === 'add' || action === 'remove' || action === 'set') {
         argumentsFor(values, 1, `output ${action} <id[,id...]> [device]`);
-        const ids = values[0].split(',');
-        if (ids.some((id) => !id.trim())) throw new Error(`Usage: atv output ${action} <id[,id...]> [device]`);
+        const ids = values[0].split(',').map((id) => id.trim());
+        if (ids.some((id) => !id) || new Set(ids).size !== ids.length) {
+          throw new Error(`Usage: atv output ${action} <id[,id...]> [device] (IDs must be unique and nonblank)`);
+        }
         device = values[1];
         const modify = { add: 'addOutputDevices', remove: 'removeOutputDevices', set: 'setOutputDevices' } as const;
         operation = async (atv) => { await atv[modify[action]](ids); return atv.outputDevices; };
