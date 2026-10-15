@@ -11,6 +11,9 @@ export type DmapCapability = 'available' | 'unavailable' | 'unknown' | 'unsuppor
 /** Seconds skipped when skipForward/skipBackward get no interval; DMAP has no native skip. */
 const DEFAULT_SKIP_SECONDS = 10;
 
+/** RepeatState by `dacp.repeatstate`/`carp` wire value (0 off, 1 track, 2 all). */
+const REPEAT_WIRE = [RepeatState.Off, RepeatState.Track, RepeatState.All];
+
 /**
  * DMAP support is deliberately separate from AppleTV's AirPlay/MRP transport.
  *
@@ -72,13 +75,15 @@ export class DmapClient extends EventEmitter {
     this.session = fields.mlid;
   }
 
-  private async request(method: 'GET' | 'POST', command: string, params: Record<string, string> = {}, body: Buffer = Buffer.alloc(0), http = this.http): Promise<Buffer> {
+  /** `cancelled` is checked before each send so a stopped push poller never opens another long poll. */
+  private async request(method: 'GET' | 'POST', command: string, params: Record<string, string> = {}, body: Buffer = Buffer.alloc(0), http = this.http, cancelled = () => false): Promise<Buffer> {
     if (!this.credentials) throw new Error('DMAP client is not connected');
     const generation = this.generation;
     for (let attempt = 0; attempt < 2; attempt++) {
       if (this.generation !== generation) throw new Error('DMAP connection changed');
       if (this.loginPending) await this.loginPending;
       if (this.generation !== generation || !this.session) throw new Error('DMAP client is not connected');
+      if (cancelled()) throw new Error('DMAP request cancelled');
       const query = new URLSearchParams({ 'session-id': String(this.session), ...params });
       const response = await http.request(method, `/ctrl-int/1/${command}?${query}`, body);
       if (this.generation !== generation) throw new Error('DMAP connection changed');
@@ -124,14 +129,14 @@ export class DmapClient extends EventEmitter {
 
   /** DMAP shuffle is on/off only, so Albums and Songs both turn it on. */
   async setShuffle(state: ShuffleState): Promise<void> {
-    if (!Object.values(ShuffleState).includes(state)) throw new Error('Invalid shuffle state');
+    if (![ShuffleState.Off, ShuffleState.Albums, ShuffleState.Songs].includes(state)) throw new Error('Invalid shuffle state');
     await this.request('POST', 'setproperty', { 'dacp.shufflestate': state === ShuffleState.Off ? '0' : '1' });
   }
 
   /** `dacp.repeatstate` is 0 off, 1 track, 2 all. */
   async setRepeat(state: RepeatState): Promise<void> {
-    const wire = { [RepeatState.Off]: 0, [RepeatState.Track]: 1, [RepeatState.All]: 2 }[state];
-    if (wire === undefined) throw new Error('Invalid repeat state');
+    const wire = REPEAT_WIRE.indexOf(state);
+    if (wire < 0) throw new Error('Invalid repeat state');
     await this.request('POST', 'setproperty', { 'dacp.repeatstate': String(wire) });
   }
 
@@ -146,6 +151,7 @@ export class DmapClient extends EventEmitter {
 
   /** Fetch now-playing artwork (usually PNG) at a requested size; 0 lets the device choose. Null when none. */
   async requestArtwork(width = 512, height = 0): Promise<Buffer | null> {
+    if (!Number.isSafeInteger(width) || width < 0 || !Number.isSafeInteger(height) || height < 0) throw new Error('Artwork size must be a non-negative integer');
     const image = await this.request('GET', 'nowplayingartwork', { mw: String(width), mh: String(height) });
     return image.length > 0 ? image : null;
   }
@@ -183,9 +189,11 @@ export class DmapClient extends EventEmitter {
 
   /**
    * Long-poll play status and emit `nowPlaying` for the current state and each new revision.
-   * Uses its own connection. On failure (including a persistent 401/403 that ends the session) polling
-   * stops and `pushError` is emitted; call again to restart. No-op while already running.
-   * close() and a new connect() stop it without an error.
+   * Uses its own connection with no inactivity timeout; a vanished peer is detected only by TCP keepalive.
+   * On failure polling stops and `pushError` is emitted; call again to restart. A persistent 401/403
+   * also ends the session, so connect() must be called before restarting. No-op while already running.
+   * close() and a new connect() stop it without an error. Listener exceptions are rethrown
+   * asynchronously (uncaught) and do not stop polling.
    */
   startPushUpdates(): void {
     if (!this.credentials) throw new Error('DMAP client is not connected');
@@ -198,25 +206,31 @@ export class DmapClient extends EventEmitter {
   stopPushUpdates(): void { this.pushGeneration++; this.pushActive = false; this.pushHttp.destroy(); }
 
   private async pollPlayStatus(generation: number): Promise<void> {
+    const stopped = () => generation !== this.pushGeneration;
     let revision = 0;
     try {
-      while (generation === this.pushGeneration) {
-        const status = await this.playStatus(revision, this.pushHttp);
-        if (generation !== this.pushGeneration) return;
-        this.emit('nowPlaying', status.info);
+      while (!stopped()) {
+        const status = await this.playStatus(revision, this.pushHttp, stopped);
+        if (stopped()) return;
+        this.emitSafely('nowPlaying', status.info);
         if (status.revision === undefined) throw new Error('DMAP play status has no revision');
         revision = status.revision;
       }
     } catch (error) {
-      if (generation !== this.pushGeneration) return;
+      if (stopped()) return;
       this.pushActive = false;
-      this.emit('pushError', error);
+      this.emitSafely('pushError', error);
     }
   }
 
+  /** A throwing listener must not stop polling or reject the detached poll; surface it as uncaught instead. */
+  private emitSafely(event: 'nowPlaying' | 'pushError', value: unknown): void {
+    try { this.emit(event, value); } catch (error) { queueMicrotask(() => { throw error; }); }
+  }
+
   /** Revision 0 answers immediately; the server's `cmsr` revision blocks until the state changes. */
-  private async playStatus(revision: number, http: PersistentHttp): Promise<{ info: NowPlayingInfo; revision?: number }> {
-    const fields = decodeDmap(await this.request('GET', 'playstatusupdate', { 'revision-number': String(revision) }, undefined, http)).cmst as DmapFields | undefined;
+  private async playStatus(revision: number, http: PersistentHttp, cancelled?: () => boolean): Promise<{ info: NowPlayingInfo; revision?: number }> {
+    const fields = decodeDmap(await this.request('GET', 'playstatusupdate', { 'revision-number': String(revision) }, undefined, http, cancelled)).cmst as DmapFields | undefined;
     if (!fields || fields.mstt !== 200) throw new Error('Invalid DMAP play status');
     this.latest = fields;
     const seconds = (value: unknown): number => typeof value === 'number' && value < 0xffffffff ? value / 1000 : 0;
@@ -224,7 +238,13 @@ export class DmapClient extends EventEmitter {
     const elapsed = typeof fields.cant === 'number' && fields.cant < 0xffffffff && duration > 0 ? Math.max(0, duration - seconds(fields.cant)) : 0;
     const states: Record<number, PlaybackState> = { 0: PlaybackState.Stopped, 1: PlaybackState.Unknown, 2: PlaybackState.Stopped, 3: PlaybackState.Paused, 4: PlaybackState.Playing, 5: PlaybackState.Seeking, 6: PlaybackState.Seeking };
     const state = states[Number(fields.caps)] ?? PlaybackState.Unknown;
-    const info = new NowPlayingInfo({ playbackState: state }, { title: fields.cann, artist: fields.cana, album: fields.canl, duration, elapsedTime: elapsed, playbackRate: state === PlaybackState.Playing ? 1 : 0, timestamp: Date.now() / 1000 });
+    // cash is on/off only, so on reads as Songs; absent shuffle/repeat stay unknown (undefined).
+    const shuffleState = typeof fields.cash === 'number' ? (fields.cash === 0 ? ShuffleState.Off : ShuffleState.Songs) : undefined;
+    const repeatState = typeof fields.carp === 'number' ? REPEAT_WIRE[fields.carp] : undefined;
+    const info = new NowPlayingInfo({ playbackState: state }, {
+      title: fields.cann, artist: fields.cana, album: fields.canl, genre: fields.cang, shuffleState, repeatState,
+      duration, elapsedTime: elapsed, playbackRate: state === PlaybackState.Playing ? 1 : 0, timestamp: Date.now() / 1000,
+    });
     return { info, revision: typeof fields.cmsr === 'number' ? fields.cmsr : undefined };
   }
 
@@ -236,7 +256,7 @@ export class DmapClient extends EventEmitter {
     const result: Record<string, DmapCapability> = {};
     for (const key of ['up', 'down', 'left', 'right', 'select', 'menu', 'topMenu', 'pushUpdates']) result[key] = 'available';
     for (const key of ['play', 'pause', 'stop', 'playPause', 'next', 'previous', 'setPosition', 'setShuffle', 'setRepeat', 'skipForward', 'skipBackward', 'requestArtwork']) result[key] = 'unknown';
-    for (const [key, tag] of Object.entries({ title: 'cann', artist: 'cana', album: 'canl', duration: 'cast', elapsedTime: 'cant', playbackState: 'caps' })) result[key] = this.latest && Object.hasOwn(this.latest, tag) ? 'available' : 'unknown';
+    for (const [key, tag] of Object.entries({ title: 'cann', artist: 'cana', album: 'canl', genre: 'cang', duration: 'cast', elapsedTime: 'cant', playbackState: 'caps', shuffleState: 'cash', repeatState: 'carp' })) result[key] = this.latest && Object.hasOwn(this.latest, tag) ? 'available' : 'unknown';
     const volume: DmapCapability = this.latest?.cavc === undefined ? 'unknown' : this.latest.cavc === 1 ? 'available' : 'unavailable';
     result.volumeUp = volume; result.volumeDown = volume;
     for (const key of ['apps', 'accounts', 'power', 'keyboard', 'setVolume']) result[key] = 'unsupported';

@@ -1,7 +1,7 @@
 /** Loopback tests for DMAP volume, seek, skip, shuffle/repeat, artwork and push updates. */
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DmapClient } from '../client.js';
 import { encodeDmap } from '../codec.js';
 import { RepeatState, ShuffleState } from '../../appletv.js';
@@ -18,12 +18,14 @@ const status = (remaining: number, ...extra: Buffer[]) => encodeDmap('cmst', Buf
   encodeDmap('mstt', u32(200)), encodeDmap('caps', u8(4)), encodeDmap('cast', u32(120000)), encodeDmap('cant', u32(remaining)), ...extra,
 ]));
 
-async function peer(handler: (url: URL, body: Buffer) => Reply | Promise<Reply>) {
+/** Loopback DMAP server; `onLogin` can hold a /login request (the initial connect login included). */
+async function peer(handler: (url: URL, body: Buffer) => Reply | Promise<Reply>, onLogin?: () => Promise<void>) {
   const seen: { url: URL; method: string }[] = [];
   const server = createServer(async (req, res) => {
     for await (const _ of req) { /* drain */ }
     const url = new URL(req.url!, 'http://localhost');
     seen.push({ url, method: req.method! });
+    if (url.pathname === '/login') await onLogin?.();
     const reply = url.pathname === '/login' ? { body: login } : await handler(url, Buffer.alloc(0));
     res.writeHead(reply.status ?? 200); res.end(reply.body ?? Buffer.alloc(0));
   });
@@ -62,6 +64,13 @@ describe('DMAP volume, seek, shuffle and repeat', () => {
     for (const value of [-1, Number.NaN, Infinity]) await expect(client.setPosition(value)).rejects.toThrow(/position/i);
     await expect(client.setShuffle(9 as ShuffleState)).rejects.toThrow(/shuffle/i);
     await expect(client.setRepeat(0 as RepeatState)).rejects.toThrow(/repeat/i);
+    // Reverse-mapping names and inherited keys of the numeric enums are not states.
+    for (const name of ['Off', 'Albums', 'Songs']) await expect(client.setShuffle(name as unknown as ShuffleState)).rejects.toThrow(/shuffle/i);
+    for (const name of ['Off', 'constructor', 'toString']) await expect(client.setRepeat(name as unknown as RepeatState)).rejects.toThrow(/repeat/i);
+    for (const size of [Number.NaN, -1, 1.5, Infinity]) {
+      await expect(client.requestArtwork(size)).rejects.toThrow(/artwork/i);
+      await expect(client.requestArtwork(100, size)).rejects.toThrow(/artwork/i);
+    }
     await expect(client.skipForward(-5)).rejects.toThrow(/skip/i);
     expect(commands()).toHaveLength(0);
   });
@@ -98,6 +107,28 @@ describe('DMAP artwork', () => {
   });
 });
 
+describe('DMAP play status', () => {
+  it('reports genre, shuffle and repeat from play status', async () => {
+    let shuffle = 1, repeat = 2;
+    const { client } = await peer(() => ({ body: status(30000, encodeDmap('cang', 'Jazz'), encodeDmap('cash', u8(shuffle)), encodeDmap('carp', u8(repeat))) }));
+    expect(client.capabilities()).toMatchObject({ genre: 'unknown', shuffleState: 'unknown', repeatState: 'unknown' });
+    let info = await client.getState();
+    expect([info.genre, info.shuffleState, info.repeatState]).toEqual(['Jazz', ShuffleState.Songs, RepeatState.All]);
+    expect(client.capabilities()).toMatchObject({ genre: 'available', shuffleState: 'available', repeatState: 'available' });
+    shuffle = 0; repeat = 0;
+    info = await client.getState();
+    expect([info.shuffleState, info.repeatState]).toEqual([ShuffleState.Off, RepeatState.Off]);
+    repeat = 1;
+    expect((await client.getState()).repeatState).toBe(RepeatState.Track);
+  });
+
+  it('leaves genre, shuffle and repeat unknown when the tags are absent', async () => {
+    const { client } = await peer(() => ({ body: status(30000) }));
+    const info = await client.getState();
+    expect([info.genre, info.shuffleState, info.repeatState]).toEqual(['', undefined, undefined]);
+  });
+});
+
 describe('DMAP capabilities', () => {
   it('reports volume from the volume-controllable tag and upstream-supported commands as unknown', async () => {
     let controllable = 1;
@@ -126,7 +157,9 @@ describe('DMAP push updates', () => {
       return { body: status(10000, encodeDmap('cmsr', u32(7)), encodeDmap('cann', 'Late')) };
     });
     const updates: NowPlayingInfo[] = [];
+    const errors: Error[] = [];
     client.on('nowPlaying', (info: NowPlayingInfo) => updates.push(info));
+    client.on('pushError', (error: Error) => errors.push(error));
     client.startPushUpdates();
     client.startPushUpdates(); // already active: no second poller
     await expect.poll(() => commands().length).toBe(3);
@@ -137,6 +170,56 @@ describe('DMAP push updates', () => {
     hold();
     await new Promise((r) => setTimeout(r, 50));
     expect(updates).toHaveLength(2);
+    expect(errors).toHaveLength(0); // an explicit stop is silent
+    client.startPushUpdates(); // restarts on the destroyed (reusable) push connection
+    await expect.poll(() => updates.length).toBe(4);
+    expect(updates.map((u) => u.title).slice(2)).toEqual(['One', 'Two']);
+    expect(errors).toHaveLength(0);
+  });
+
+  it('does not let a poller stopped during relogin issue another long poll', async () => {
+    let releaseLogin: (() => void) | undefined;
+    let loginHeld = false;
+    let polls = 0;
+    const { client, commands } = await peer((url) => {
+      if (!url.pathname.endsWith('playstatusupdate')) return {};
+      if (++polls === 1) return { status: 401 };
+      if (url.searchParams.get('revision-number') === '0') return { body: status(30000, encodeDmap('cmsr', u32(5))) };
+      return new Promise<Reply>(() => {}); // revision 5 blocks until the state changes
+    }, async () => { if (loginHeld) await new Promise<void>((r) => { releaseLogin = r; }); });
+    loginHeld = true;
+    const updates: NowPlayingInfo[] = [];
+    const errors: Error[] = [];
+    client.on('nowPlaying', (info: NowPlayingInfo) => updates.push(info));
+    client.on('pushError', (error: Error) => errors.push(error));
+    client.startPushUpdates();
+    await expect.poll(() => releaseLogin).toBeDefined(); // the 401 started a relogin
+    client.stopPushUpdates();
+    client.startPushUpdates();
+    releaseLogin!();
+    await expect.poll(() => updates.length).toBe(1);
+    await new Promise((r) => setTimeout(r, 50));
+    const revisions = commands().filter((s) => s.url.pathname.endsWith('playstatusupdate')).map((s) => s.url.searchParams.get('revision-number'));
+    expect(revisions).toEqual(['0', '0', '5']); // 401, the new poller's initial poll, its long poll
+    expect(errors).toHaveLength(0);
+  });
+
+  it('keeps polling when listeners throw and never leaks a rejection', async () => {
+    const uncaught: (() => void)[] = [];
+    vi.spyOn(globalThis, 'queueMicrotask').mockImplementation((callback) => { uncaught.push(callback); });
+    try {
+      let revision = 0;
+      const { client } = await peer(() => (++revision <= 2 ? { body: status(30000, encodeDmap('cmsr', u32(revision))) } : { body: status(30000) }));
+      const updates: NowPlayingInfo[] = [];
+      client.on('nowPlaying', (info: NowPlayingInfo) => { updates.push(info); if (updates.length === 1) throw new Error('nowPlaying listener failed'); });
+      client.on('pushError', () => { throw new Error('pushError listener failed'); });
+      client.startPushUpdates();
+      // The third status has no revision, so polling ends with pushError after three updates.
+      await expect.poll(() => uncaught.length).toBe(2);
+      expect(updates).toHaveLength(3);
+      expect(uncaught[0]).toThrow('nowPlaying listener failed');
+      expect(uncaught[1]).toThrow('pushError listener failed');
+    } finally { vi.restoreAllMocks(); }
   });
 
   it('stops and reports an error instead of spinning without a revision', async () => {
@@ -161,7 +244,7 @@ describe('DMAP push updates', () => {
     client.startPushUpdates();
     await expect.poll(() => errors.length).toBe(1);
     expect(errors[0].message).toMatch(/403/);
-    expect(() => client.startPushUpdates()).toThrow(/connect/);
+    expect(() => client.startPushUpdates()).toThrow(/connect/); // auth failure ended the session: connect() first
   });
 
   it('requires a connection and stops on close', async () => {
