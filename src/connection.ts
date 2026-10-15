@@ -12,14 +12,12 @@ import {
   diffieHellman,
   sign,
   verify as cryptoVerify,
-  createPublicKey,
-  createPrivateKey,
 } from 'node:crypto';
 import { MRPConnection } from './mrp/connection.js';
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
 import { HAPSession } from './util/hap-session.js';
-import { hkdfSha512, encryptChaCha20, decryptChaCha20 } from './util/crypto.js';
+import { hkdfSha512, encryptChaCha20, decryptChaCha20, x25519PublicKeyFromRaw, ed25519PublicKeyFromRaw, ed25519PrivateKeyFromSeed } from './util/crypto.js';
 import { TlvTag, tlvEncode, tlvDecode } from './util/tlv.js';
 import { MRPMessage, MessageType } from './mrp/messages.js';
 import { buildDataStreamFrame, buildDataStreamReply, parseDataStreamFrame } from './util/data-stream.js';
@@ -27,10 +25,6 @@ import type { HAPCredentials } from './auth/types.js';
 
 /** `clientTypeUUID` that asks the receiver for an MRP data stream (stream type 130). */
 const DATA_CHANNEL_TYPE_UUID = '1910A70F-DBC0-4242-AF95-115DB30604E1';
-/** DER prefixes that wrap raw 32-byte X25519/Ed25519 keys for Node's `createPublicKey`/`createPrivateKey`. */
-const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
-const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
-const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
 /** An HTTP/RTSP message split out of a byte buffer by `parseHTTPMessage`. */
 export interface ParsedHTTP {
@@ -259,11 +253,7 @@ export class AirPlayConnection extends MRPConnection {
     }
 
     // Compute shared secret
-    const serverEphemeralKeyObj = createPublicKey({
-      key: Buffer.concat([X25519_SPKI_PREFIX, serverEphemeralPub]),
-      format: 'der',
-      type: 'spki',
-    });
+    const serverEphemeralKeyObj = x25519PublicKeyFromRaw(serverEphemeralPub);
     const sharedSecret = diffieHellman({ privateKey, publicKey: serverEphemeralKeyObj });
 
     // Derive session key
@@ -290,11 +280,7 @@ export class AirPlayConnection extends MRPConnection {
 
     // Verify server signature
     const serverSignedData = Buffer.concat([serverEphemeralPub, serverIdentifier, ephemeralPublicKeyRaw]);
-    const serverLTPKObj = createPublicKey({
-      key: Buffer.concat([ED25519_SPKI_PREFIX, this.credentials.serverLTPK]),
-      format: 'der',
-      type: 'spki',
-    });
+    const serverLTPKObj = ed25519PublicKeyFromRaw(this.credentials.serverLTPK);
     const valid = cryptoVerify(null, serverSignedData, serverLTPKObj, serverSignature);
     if (!valid) throw new Error('Server signature verification failed');
 
@@ -304,11 +290,7 @@ export class AirPlayConnection extends MRPConnection {
       Buffer.from(this.credentials.clientId),
       serverEphemeralPub,
     ]);
-    const clientPrivKey = createPrivateKey({
-      key: Buffer.concat([ED25519_PKCS8_PREFIX, this.credentials.clientLTSK]),
-      format: 'der',
-      type: 'pkcs8',
-    });
+    const clientPrivKey = ed25519PrivateKeyFromSeed(this.credentials.clientLTSK);
     const clientSignature = sign(null, clientSignedData, clientPrivKey);
 
     // Encrypt M3
