@@ -105,6 +105,7 @@ async function receiver(mode = 'normal') {
         if (mode.startsWith('legacy') && !authenticated) { socket.write(`RTSP/1.0 401 Unauthorized\r\nCSeq: ${headers.cseq}\r\nContent-Length: 0\r\n\r\n`); continue; }
         if (uri === '/feedback' && requests.filter(r => r.uri === '/feedback').length > 1) {
           if (mode === 'hold-feedback') continue;
+          if (mode === 'timeout-feedback' && requests.filter(r => r.uri === '/feedback').length === 2) continue;
           if (mode === 'disconnect-feedback') { socket.destroy(); continue; }
         }
         if (mode === 'max-body' && method === 'ANNOUNCE') {
@@ -426,6 +427,26 @@ describe('legacy RAOP streaming', () => {
       } finally { cancellation.abort(); await settled; vi.useRealTimers(); }
     });
   }
+
+  it('logs a timed-out periodic feedback request and keeps streaming', async () => {
+    const module = await load(); const peer = await receiver('timeout-feedback'); const cancellation = new AbortController();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const source = { async *[Symbol.asyncIterator]() { yield Buffer.alloc(1408); await new Promise(() => {}); } };
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const playing = new module.RaopStream('127.0.0.1', peer.port, txt).stream(source, { signal: cancellation.signal });
+    let settled = false; const result = playing.catch(error => error).finally(() => { settled = true; });
+    try {
+      await waitForIo(() => peer.packets.length > 0); await vi.advanceTimersByTimeAsync(25000);
+      await waitForIo(() => peer.requests.filter(r => r.uri === '/feedback').length === 2);
+      // The real 5-second request timeout elapses; the stream must survive it.
+      await delay(5200);
+      expect(settled).toBe(false);
+      expect(logged).toHaveBeenCalledWith(expect.stringMatching(/\[RAOP\].*feedback.*timeout/i));
+      await vi.advanceTimersByTimeAsync(25000);
+      await waitForIo(() => peer.requests.filter(r => r.uri === '/feedback').length === 3);
+      expect(settled).toBe(false);
+    } finally { cancellation.abort(); await result; vi.useRealTimers(); }
+  }, 10000);
 
   it('streams a finite source past the legacy keepalive deadline with bounded pulls', async () => {
     const module = await load(); const peer = await receiver(); let produced = 0;

@@ -333,13 +333,15 @@ export class RaopStream {
       if (options.volume !== undefined) await this.setVolume(options.volume);
       if (options.metadata) await this.setMetadata(options.metadata);
       // pyatv AirPlayV1 probes /feedback, then repeats every 25 seconds only if supported.
+      // Like pyatv, a failed periodic request is logged and playback continues; transport loss
+      // and malformed replies still fail the stream through the client's onFailure path.
       const feedback = () => client.request('POST', {}, undefined, controller.signal, 5000, '/feedback', true);
       if ((await feedback()).code === 200) {
         let pending = false;
         feedbackTimer = setInterval(() => {
           if (pending || controller.signal.aborted) return;
           pending = true;
-          void feedback().catch(error => { if (!controller.signal.aborted) fail(error); }).finally(() => { pending = false; });
+          void feedback().catch(error => { if (!controller.signal.aborted) console.error(`[RAOP] feedback failed: ${(error as Error).message}`); }).finally(() => { pending = false; });
         }, 25000);
       }
       let start = performance.now(); let epoch = ntpMilliseconds(); let sentFrames = 0; let firstSync = true;

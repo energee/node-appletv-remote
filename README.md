@@ -343,8 +343,10 @@ promising a uniform `AbortError` across all APIs.
 
 Legacy keepalive probes `POST /feedback` once before audio. Only a 200 response
 starts 25-second periodic feedback, with no overlapping feedback requests. Unsupported
-feedback responses disable the initial probe or are best-effort during playback;
-transport loss, malformed replies and request timeouts terminate the stream.
+feedback responses disable the initial probe or are best-effort during playback.
+As in pinned pyatv, a periodic request that times out is logged to stderr with a
+`[RAOP]` prefix and playback continues; transport loss and malformed replies still
+terminate the stream.
 Feedback and sync stop on EOF/drain, cancellation or failure. Receivers rejecting
 feedback have no invented fallback keepalive; their long-stream idle-timeout
 behavior remains unverified.
