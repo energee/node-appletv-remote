@@ -1,12 +1,10 @@
 /** Loopback tests for the AirPlay 2 realtime-audio SETUP sequence (pair-verify, encrypted SETUPs, event channel). */
-import { createServer } from 'node:net';
-import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RtspClient } from '../stream.js';
 import { setupAirPlay2Audio } from '../airplay2.js';
 import { connectSocket } from '../../connection.js';
-import { airplay2Receiver } from './airplay2-receiver.js';
+import { airplay2Receiver, closedPort, until } from './airplay2-receiver.js';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -54,7 +52,7 @@ describe('setupAirPlay2Audio', () => {
     expect(result.serverPort).toBeGreaterThan(0);
     expect(result.controlPort).toBeGreaterThan(0);
     // The event channel was connected after the base SETUP and its request acknowledged.
-    for (let i = 0; i < 200 && !receiver.state.eventAcknowledged; i++) await delay(5);
+    await until(() => receiver.state.eventAcknowledged);
     expect(receiver.state.eventAcknowledged).toBe(true);
   });
 
@@ -67,7 +65,7 @@ describe('setupAirPlay2Audio', () => {
   ])('rejects a stream SETUP reply with %s and closes the event channel', async (_name, stream) => {
     const { receiver, client } = await connect({ stream });
     await expect(setupAirPlay2Audio(client, '127.0.0.1', receiver.credentials, 1234567, ports, new AbortController().signal)).rejects.toThrow(/dataPort|controlPort/);
-    for (let i = 0; i < 200 && !receiver.state.eventClosed; i++) await delay(5);
+    await until(() => receiver.state.eventClosed);
     expect(receiver.state.eventClosed).toBe(true);
   });
 
@@ -86,13 +84,10 @@ describe('setupAirPlay2Audio', () => {
 
   it('stops and cleans up when aborted while waiting to retry the event connect', async () => {
     // A port that refuses connections forces the 1 s retry wait.
-    const closed = createServer(); closed.listen(0, '127.0.0.1'); await once(closed, 'listening');
-    const refused = (closed.address() as { port: number }).port;
-    await new Promise<void>(resolve => closed.close(() => resolve()));
-    const { receiver, client } = await connect({ eventPort: refused });
+    const { receiver, client } = await connect({ eventPort: await closedPort() });
     const controller = new AbortController();
     const setup = setupAirPlay2Audio(client, '127.0.0.1', receiver.credentials, 1234567, ports, controller.signal);
-    for (let i = 0; i < 200 && receiver.requests.filter(request => request.method === 'SETUP').length < 1; i++) await delay(5);
+    await until(() => receiver.requests.some(request => request.method === 'SETUP'));
     await delay(50);
     controller.abort();
     await expect(setup).rejects.toThrow();

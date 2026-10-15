@@ -4,6 +4,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { openEventChannel } from '../event-channel.js';
 import { HAPSession } from '../hap-session.js';
 import { hkdfSha512 } from '../crypto.js';
+import { closedPort } from '../../raop/__tests__/airplay2-receiver.js';
 
 const secret = Buffer.alloc(32, 0x5a);
 
@@ -18,13 +19,6 @@ function listen(server: Server, port = 0): Promise<number> {
   return new Promise(resolve => server.listen(port, '127.0.0.1', () => resolve((server.address() as { port: number }).port)));
 }
 
-/** A port that refuses connections right now (bound then released). */
-async function closedPort(): Promise<number> {
-  const server = createServer();
-  const port = await listen(server);
-  await new Promise<void>(resolve => server.close(() => resolve()));
-  return port;
-}
 
 /** Yield real I/O turns until the retry wait has been scheduled on the fake clock. */
 async function retryScheduled(): Promise<void> {
@@ -91,17 +85,15 @@ describe('openEventChannel', () => {
     expect(await failed).toBeInstanceOf(Error);
   });
 
-  it('destroys the connected socket when the signal aborts', async () => {
-    const peerClosed = new Promise<void>(resolve => {
-      const server = createServer(socket => { socket.on('error', () => {}); socket.on('close', () => resolve()); });
-      servers.push(server);
-    });
-    const port = await listen(servers[0]);
+  it('leaves the connected socket to the caller when the signal aborts after connect', async () => {
+    const server = createServer(socket => socket.on('error', () => {}));
+    servers.push(server);
+    const port = await listen(server);
     const controller = new AbortController();
     const socket = await openEventChannel('127.0.0.1', port, secret, () => {}, controller.signal);
     controller.abort();
-    expect(socket.destroyed).toBe(true);
-    await peerClosed;
+    expect(socket.destroyed).toBe(false);
+    socket.destroy();
   });
 
   it('retries a refused connect 1 s later and connects once the receiver listens', async () => {

@@ -7,7 +7,8 @@
 import { createServer, type Socket } from 'node:net';
 import { createSocket } from 'node:dgram';
 import { once } from 'node:events';
-import { generateKeyPairSync, diffieHellman, createPublicKey, sign, verify, type KeyObject } from 'node:crypto';
+import { generateKeyPairSync, diffieHellman, createPublicKey, createDecipheriv, sign, verify, type KeyObject } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
 import { tlvEncode, tlvDecode, TlvTag } from '../../util/tlv.js';
@@ -25,8 +26,8 @@ export interface ReceiverOptions {
   stream?: Record<string, unknown>;
   /** Sent as the `Session` header on the stream SETUP reply. */
   session?: string;
-  /** Leave these RTSP methods (or `/feedback`) unanswered. */
-  hold?: string[];
+  /** Leave `/feedback` requests unanswered. */
+  holdFeedback?: boolean;
 }
 
 const raw = (key: KeyObject) => Buffer.from(key.export({ format: 'der', type: 'spki' }).subarray(-32));
@@ -112,7 +113,7 @@ export async function airplay2Receiver(options: ReceiverOptions = {}) {
           }
           continue;
         }
-        if (options.hold?.includes(uri === '/feedback' ? uri : method)) continue;
+        if (options.holdFeedback && uri === '/feedback') continue;
         if (method === 'SETUP') {
           const plist = parseBuffer(body)[0] as Record<string, unknown>;
           if (!plist.streams) { reply(bplistCreator({ eventPort: options.eventPort ?? (events.address() as { port: number }).port }), 'Content-Type: application/x-apple-binary-plist\r\n'); continue; }
@@ -129,10 +130,10 @@ export async function airplay2Receiver(options: ReceiverOptions = {}) {
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
 
   return {
-    port: (server.address() as { port: number }).port, credentials, requests, audioPackets, controlPackets, state, control,
-    /** Decoded bplist bodies of the base and stream SETUP requests, in order. */
+    port: (server.address() as { port: number }).port, credentials, requests, audioPackets, controlPackets, state,
     /** Close the receiver side of every event connection. */
     closeEvents: () => { for (const socket of eventSockets) socket.destroy(); },
+    /** Decoded bplist bodies of the base and stream SETUP requests, in order. */
     setups: () => requests.filter(request => request.method === 'SETUP').map(request => parseBuffer(request.body)[0] as Record<string, unknown>),
     async close() {
       for (const socket of sockets) socket.destroy();
@@ -140,4 +141,27 @@ export async function airplay2Receiver(options: ReceiverOptions = {}) {
       audio.close(); control.close();
     },
   };
+}
+
+/** Poll real time until `check` holds, or throw. */
+export async function until(check: () => boolean): Promise<void> {
+  for (let i = 0; i < 1000; i++) { if (check()) return; await delay(2); }
+  throw new Error('Loopback condition did not arrive');
+}
+
+/** A TCP port that refuses connections right now (bound then released). */
+export async function closedPort(): Promise<number> {
+  const server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const { port } = server.address() as { port: number };
+  await new Promise<void>(resolve => server.close(() => resolve()));
+  return port;
+}
+
+/** Independently open a sealed AirPlay 2 audio packet: nonce from the trailer counter, AAD = RTP bytes 4..11. */
+export function openSealed(packet: Buffer, key: Buffer): { payload: Buffer; counter: bigint } {
+  const trailer = packet.subarray(-8);
+  const decipher = createDecipheriv('chacha20-poly1305', key, Buffer.concat([Buffer.alloc(4), trailer]), { authTagLength: 16 });
+  decipher.setAAD(packet.subarray(4, 12), { plaintextLength: packet.length - 36 });
+  decipher.setAuthTag(packet.subarray(-24, -8));
+  return { payload: Buffer.concat([decipher.update(packet.subarray(12, -24)), decipher.final()]), counter: trailer.readBigUInt64LE() };
 }

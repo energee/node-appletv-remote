@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import { createPublicKey, generateKeyPairSync, diffieHellman, createHash, createDecipheriv, verify } from 'node:crypto';
 import { setImmediate as turn, setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { closedPort } from './airplay2-receiver.js';
 
 const observed = vi.hoisted(() => ({ sockets: [] as import('node:dgram').Socket[] }));
 const controlledClock = vi.hoisted(() => ({ now: undefined as number | undefined }));
@@ -578,9 +579,7 @@ describe('legacy RAOP streaming', () => {
   it('selects the AirPlay 2 profile for features bit 38 or 48 without applying legacy-only rules', async () => {
     const module = await load();
     // A port nobody listens on: passing every pre-ownership check means reaching the connect.
-    const closed = createServer(); closed.listen(0, '127.0.0.1'); await once(closed, 'listening');
-    const refused = (closed.address() as { port: number }).port;
-    await new Promise<void>(resolve => closed.close(() => resolve()));
+    const refused = await closedPort();
     for (const features of [{ features: '0x0,0x40' }, { features: '0x0,0x10000' }, { ft: '0x0,0x10000' }, appleTvTxt] as Record<string, string>[]) {
       // No cn/et/tp/sr/ss/ch, and flags 0x200 must not demand a legacy seed.
       const sender = new module.RaopStream('127.0.0.1', refused, { flags: '0x244', ...features });

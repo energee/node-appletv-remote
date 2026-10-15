@@ -1,9 +1,8 @@
 /** Loopback tests for RaopStream's AirPlay 2 realtime profile: sealed audio, resends, feedback, Session and teardown. */
 import { Readable } from 'node:stream';
-import { createDecipheriv } from 'node:crypto';
 import { setImmediate as turn, setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { airplay2Receiver } from './airplay2-receiver.js';
+import { airplay2Receiver, openSealed, until } from './airplay2-receiver.js';
 
 const observed = vi.hoisted(() => ({ sockets: [] as import('node:dgram').Socket[] }));
 const controlledClock = vi.hoisted(() => ({ now: undefined as number | undefined }));
@@ -36,20 +35,10 @@ async function start(options: Parameters<typeof airplay2Receiver>[0] = {}) {
   const receiver = await airplay2Receiver(options); receivers.push(receiver);
   return { receiver, firstSocket: observed.sockets.length, stream: new RaopStream('127.0.0.1', receiver.port, txt) };
 }
-async function until(check: () => boolean): Promise<void> {
-  for (let i = 0; i < 1000; i++) { if (check()) return; await delay(2); }
-  throw new Error('Loopback condition did not arrive');
-}
 const closed = (socket: import('node:dgram').Socket) => { try { socket.address(); return false; } catch { return true; } };
 
-/** Open one sealed packet with `key`: returns the plaintext payload and the trailer counter. */
-function open(packet: Buffer, key: Buffer): { payload: Buffer; counter: bigint } {
-  const trailer = packet.subarray(-8);
-  const decipher = createDecipheriv('chacha20-poly1305', key, Buffer.concat([Buffer.alloc(4), trailer]), { authTagLength: 16 });
-  decipher.setAAD(packet.subarray(4, 12), { plaintextLength: packet.length - 36 });
-  decipher.setAuthTag(packet.subarray(-24, -8));
-  return { payload: Buffer.concat([decipher.update(packet.subarray(12, -24)), decipher.final()]), counter: trailer.readBigUInt64LE() };
-}
+/** A source that yields one packet of silence, then never ends. */
+const endless = () => ({ async *[Symbol.asyncIterator]() { yield Buffer.alloc(1408); await new Promise(() => {}); } });
 
 describe('RaopStream AirPlay 2 realtime profile', () => {
   it('seals every packet with shk, reassembles the source plus silence tail, and resends sealed bytes', async () => {
@@ -63,7 +52,7 @@ describe('RaopStream AirPlay 2 realtime profile', () => {
     const key = (receiver.setups()[1].streams as Record<string, Buffer>[])[0].shk;
     const packets = receiver.audioPackets;
     expect(packets).toHaveLength(3 + Math.ceil(66150 / 352));
-    const opened = packets.map(packet => open(packet, key));
+    const opened = packets.map(packet => openSealed(packet, key));
     opened.forEach(({ counter }, index) => expect(counter).toBe(BigInt(index)));
     const payload = Buffer.concat(opened.map(item => item.payload));
     expect(payload.subarray(0, pcm.length)).toEqual(Buffer.from(pcm).swap16());
@@ -103,12 +92,11 @@ describe('RaopStream AirPlay 2 realtime profile', () => {
   });
 
   it('sends best-effort feedback every 2 seconds', async () => {
-    const { receiver, stream } = await start({ hold: ['/feedback'] });
+    const { receiver, stream } = await start({ holdFeedback: true });
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const cancellation = new AbortController();
-    const source = { async *[Symbol.asyncIterator]() { yield Buffer.alloc(1408); await new Promise(() => {}); } };
-    const settled = stream.stream(source, { credentials: receiver.credentials, signal: cancellation.signal }).catch(error => error);
+    const settled = stream.stream(endless(), { credentials: receiver.credentials, signal: cancellation.signal }).catch(error => error);
     const feedback = () => receiver.requests.filter(request => request.uri === '/feedback').length;
     try {
       await until(() => receiver.audioPackets.length > 0);
@@ -144,8 +132,7 @@ describe('RaopStream AirPlay 2 realtime profile', () => {
 
   it('fails the stream when the receiver closes the event channel', async () => {
     const { receiver, stream } = await start();
-    const source = { async *[Symbol.asyncIterator]() { yield Buffer.alloc(1408); await new Promise(() => {}); } };
-    const playing = stream.stream(source, { credentials: receiver.credentials });
+    const playing = stream.stream(endless(), { credentials: receiver.credentials });
     await until(() => receiver.audioPackets.length > 0 && receiver.state.eventConnected);
     receiver.closeEvents();
     await expect(playing).rejects.toThrow(/event connection closed/);

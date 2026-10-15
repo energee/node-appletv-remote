@@ -38,6 +38,19 @@ function dictionary(body: Buffer, request: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** Random sender MAC (`AA:BB:..`) sent as `deviceID`/`macAddress`. */
+export const randomMac = (): string => randomBytes(6).toString('hex').match(/../g)!.join(':').toUpperCase();
+
+/** Base SETUP body: the sender identity (an iPhone, as the reference sends) plus its NTP timing port. Shared with `airplay-playback.ts`. */
+export function senderSetupBody(mac: string, timingPort: number): Buffer {
+  return bplistCreator({
+    deviceID: mac, macAddress: mac, sessionUUID: randomUUID().toUpperCase(), timingPort,
+    timingProtocol: 'NTP', isMultiSelectAirPlay: true, groupContainsGroupLeader: false,
+    model: 'iPhone14,3', name: 'Node ATV', osBuildVersion: '20F66', osName: 'iPhone OS', osVersion: '16.5',
+    senderSupportsRelay: false, sourceVersion: '690.7.1', statsCollectionEnabled: false,
+  });
+}
+
 function port(value: unknown, name: string): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 65535) throw new Error(`Invalid AirPlay 2 ${name}`);
   return value;
@@ -68,21 +81,10 @@ export async function setupAirPlay2Audio(client: RtspClient, host: string, crede
   const closed = () => lost(new Error('AirPlay 2 event connection closed'));
   try {
     client.encryptWith(new HAPSession(keys.outputKey, keys.inputKey));
-    const mac = randomBytes(6).toString('hex').match(/../g)!.join(':').toUpperCase();
-    const base = await client.request('SETUP', PLIST, bplistCreator({
-      deviceID: mac, macAddress: mac, sessionUUID: randomUUID().toUpperCase(), timingPort: localPorts.timing,
-      timingProtocol: 'NTP', isMultiSelectAirPlay: true, groupContainsGroupLeader: false,
-      model: 'iPhone14,3', name: 'Node ATV', osBuildVersion: '20F66', osName: 'iPhone OS', osVersion: '16.5',
-      senderSupportsRelay: false, sourceVersion: '690.7.1', statsCollectionEnabled: false,
-    }), signal);
+    const base = await client.request('SETUP', PLIST, senderSetupBody(randomMac(), localPorts.timing), signal);
     const eventPort = port(dictionary(base.body, 'SETUP').eventPort, 'eventPort');
-    // `signal` cancels only the connect: once open, the caller owns the socket so it can
-    // send TEARDOWN before closing the event channel.
-    const connecting = new AbortController();
-    const stop = () => connecting.abort();
-    signal.addEventListener('abort', stop, { once: true });
-    try { events = await openEventChannel(host, eventPort, keys.sharedSecret, lost, connecting.signal); }
-    finally { signal.removeEventListener('abort', stop); }
+    // `signal` cancels only the connect; once open, the caller sends TEARDOWN before closing it.
+    events = await openEventChannel(host, eventPort, keys.sharedSecret, lost, signal);
     events.on('error', lost); events.on('close', closed);
     const audioKey = randomBytes(32);
     const reply = await client.request('SETUP', PLIST, bplistCreator({ streams: [{

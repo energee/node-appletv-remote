@@ -94,7 +94,6 @@ describe('sealAudioPacket', () => {
 
   it('seals the payload with the counter nonce and keeps the header and counter trailer', async () => {
     const module = await load();
-    expect(module?.sealAudioPacket).toBeTypeOf('function');
     const packet = module.audioPacket(Buffer.from('01000200feff0080', 'hex'), 7, 0x11223344, 0x55667788, true);
     const original = Buffer.from(packet);
     const sealed = module.sealAudioPacket(packet, key, counter);

@@ -11,6 +11,7 @@ import type { HAPCredentials } from './auth/types.js';
 import { HAPSession } from './util/hap-session.js';
 import { hkdfSha512 } from './util/crypto.js';
 import { timingReply } from './raop/packets.js';
+import { randomMac, senderSetupBody } from './raop/airplay2.js';
 
 /** Control/status/event messages are bounded, not media payloads (passed as parseHTTPMessage's body cap). */
 const MAX_REPLY_BYTES = 1024 * 1024;
@@ -74,13 +75,8 @@ export class AirPlayPlaybackSession {
       this.timingPeer = { address: socket.remoteAddress! };
       await this.openTiming(socket.localAddress!);
       if (this.closed) throw new Error('Playback session closed');
-      const mac = randomBytes(6).toString('hex').match(/../g)!.join(':').toUpperCase();
-      const setup = await this.request('SETUP', this.uri, 'RTSP/1.0', bplistCreator({
-        deviceID: mac, macAddress: mac, sessionUUID: randomUUID().toUpperCase(), timingPort: this.timing!.address().port,
-        timingProtocol: 'NTP', isMultiSelectAirPlay: true, groupContainsGroupLeader: false,
-        model: 'iPhone14,3', name: 'Node ATV', osBuildVersion: '20F66', osName: 'iPhone OS', osVersion: '16.5',
-        senderSupportsRelay: false, sourceVersion: '690.7.1', statsCollectionEnabled: false,
-      }));
+      const mac = randomMac();
+      const setup = await this.request('SETUP', this.uri, 'RTSP/1.0', senderSetupBody(mac, this.timing!.address().port));
       const setupInfo = parseBuffer(setup.body)[0] as Record<string, unknown>;
       const eventPort = setupInfo.eventPort;
       const timingPort = setupInfo.timingPort;

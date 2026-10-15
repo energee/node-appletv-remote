@@ -22,16 +22,18 @@ const RETRY_DELAY_MS = 1000;
  * `sharedSecret` is the pair-verify (or transient pairing) shared secret; read/write keys are
  * derived from it with `Events-Salt`. Decryption, framing and unknown-protocol errors are
  * reported through `onError` and destroy the socket; the caller owns the returned socket and
- * its `error`/`close` handling. Aborting `signal` destroys the socket at any time.
+ * its `error`/`close` handling. `signal` cancels only the connect and retry waits; once
+ * connected, the caller decides when to close (for example after sending TEARDOWN).
  *
  * @throws (rejects) when aborted, on any connect error other than `ECONNREFUSED`, or on the
  * fifth refused attempt (attempts are 1 s apart).
  */
 export async function openEventChannel(host: string, port: number, sharedSecret: Buffer,
   onError: (error: Error) => void, signal?: AbortSignal): Promise<Socket> {
-  const cipher = new HAPSession(
-    await hkdfSha512(sharedSecret, 'Events-Salt', 'Events-Read-Encryption-Key', 32),
-    await hkdfSha512(sharedSecret, 'Events-Salt', 'Events-Write-Encryption-Key', 32));
+  const [readKey, writeKey] = await Promise.all([
+    hkdfSha512(sharedSecret, 'Events-Salt', 'Events-Read-Encryption-Key', 32),
+    hkdfSha512(sharedSecret, 'Events-Salt', 'Events-Write-Encryption-Key', 32)]);
+  const cipher = new HAPSession(readKey, writeKey);
   let socket: Socket;
   for (let attempt = 1; ; attempt++) {
     try {
@@ -48,9 +50,6 @@ export async function openEventChannel(host: string, port: number, sharedSecret:
     });
   }
 
-  const destroy = (): void => { socket.destroy(); };
-  signal?.addEventListener('abort', destroy, { once: true });
-  socket.once('close', () => signal?.removeEventListener('abort', destroy));
   let encrypted: Buffer = Buffer.alloc(0), plain: Buffer = Buffer.alloc(0);
   socket.on('data', (data: Buffer) => {
     try {
