@@ -11,8 +11,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-      # npm 10 (bundled with Node 20) crashes resolving vitest 4.1.12's peers; npm 12 needs Node 22+.
-      - run: npm install -g npm@11
+          node-version: latest
+      # npm 10 crashed resolving vitest 4.1.12's peers; track the newest npm, not the bundled one.
+      - run: npm install -g npm@latest
       - run: npm install
       - run: npm test
