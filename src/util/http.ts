@@ -22,7 +22,8 @@ export class PersistentHttp {
   private host: string;
   private port: number;
 
-  constructor(host: string, port: number, private headers: Record<string, string> = DEFAULT_HEADERS) {
+  /** @param timeoutMs Socket inactivity timeout per request; 0 disables it (DMAP long polls). */
+  constructor(host: string, port: number, private headers: Record<string, string> = DEFAULT_HEADERS, private timeoutMs = 10_000) {
     this.host = host;
     this.port = port;
     this.agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
@@ -39,7 +40,7 @@ export class PersistentHttp {
   }
 
   /** Raw GET/POST response for protocols that handle authentication statuses themselves.
-   * Requests time out after 10 seconds of socket inactivity and responses are capped at 8 MiB.
+   * Requests time out after `timeoutMs` (default 10 s) of socket inactivity and responses are capped at 8 MiB.
    */
   async request(method: 'GET' | 'POST', path: string, body: Buffer = Buffer.alloc(0)): Promise<{ status: number; body: Buffer }> {
     return new Promise((resolve, reject) => {
@@ -71,7 +72,7 @@ export class PersistentHttp {
           });
         },
       );
-      req.setTimeout(10_000, () => req.destroy(new Error('HTTP request timeout')));
+      if (this.timeoutMs > 0) req.setTimeout(this.timeoutMs, () => req.destroy(new Error('HTTP request timeout')));
       req.on('error', reject);
       req.write(body);
       req.end();
