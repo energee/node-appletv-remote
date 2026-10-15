@@ -26,7 +26,8 @@ async function receiver(options: { rejectAuth?: boolean; playCode?: number; stat
   let timingPort = 0;
   let controlClosed = false;
   const events = createServer(socket => {
-    eventConnected = true; sockets.add(socket); socket.on('close', () => sockets.delete(socket));
+    // A client close can reset a fake socket (ECONNRESET on Linux); a real peer just drops it.
+    eventConnected = true; sockets.add(socket); socket.on('close', () => sockets.delete(socket)); socket.on('error', () => {});
     let buffer: Buffer = Buffer.alloc(0);
     socket.on('data', (data: Buffer) => { buffer = Buffer.concat([buffer, data]); const decoded = eventCipher.decryptAvailable(buffer); buffer = Buffer.from(decoded.rest); if (decoded.plaintext.length) { expect(decoded.plaintext.toString()).toContain('RTSP/1.0 200 OK'); expect(decoded.plaintext.toString()).toContain('CSeq: 73'); eventAcknowledged = true; } });
     socket.write(eventCipher.encrypt(Buffer.from('POST /event RTSP/1.0\r\nCSeq: 73\r\nContent-Length: 0\r\n\r\n')));
@@ -36,6 +37,7 @@ async function receiver(options: { rejectAuth?: boolean; playCode?: number; stat
   const server = createServer(socket => {
     sockets.add(socket);
     socket.on('close', () => { sockets.delete(socket); controlClosed = true; });
+    socket.on('error', () => {});
     let encrypted = Buffer.alloc(0), plain = Buffer.alloc(0);
     let session: HAPSession | undefined;
     let secret: Buffer, ephemeral: Buffer, clientEphemeral: Buffer;
