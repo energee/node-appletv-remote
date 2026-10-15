@@ -125,6 +125,16 @@ describe('scan until', () => {
     expect((await pending)[0].companionPort).toBe(49153);
   });
 
+  it('coalesces a burst of records into one until() evaluation pass', async () => {
+    const until = vi.fn(() => false);
+    const pending = scan({ timeout: 10, until });
+    for (let i = 0; i < 20; i++) mock.callbacks.get('airplay')!({ name: `TV ${i}`, addresses: [`192.0.2.${i + 1}`], port: 7000, txt: { deviceid: `tv-${i}` } });
+    await vi.advanceTimersByTimeAsync(0);
+    // One pass over 20 devices, not 1 + 2 + ... + 20 = 210 calls.
+    expect(until).toHaveBeenCalledTimes(20);
+    await vi.advanceTimersByTimeAsync(10); await pending;
+  });
+
   it('falls back to the timeout when nothing matches', async () => {
     const pending = scan({ timeout: 10, until: () => false });
     mock.callbacks.get('airplay')!(tv);

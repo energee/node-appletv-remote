@@ -18,7 +18,8 @@ import type { HAPCredentials } from './types.js';
  */
 export class PairSetup {
   private http: Pick<PersistentHttp, 'post' | 'destroy'>;
-  private clientId: string;
+  /** Controller pairing identifier sent in M5 and returned as `clientId` in the credentials. */
+  readonly clientId: string;
   private edPrivateKeyRaw: Buffer;
   private edPublicKeyRaw: Buffer;
   private srp = new SRPClient();

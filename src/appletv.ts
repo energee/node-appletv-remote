@@ -232,6 +232,8 @@ export class AppleTV extends EventEmitter {
   /** Output device for SetVolume, from the Apple TV's DeviceInfo reply (clusterID or deviceUID). */
   private outputDeviceUID?: string;
   private reportedOutputs: OutputDevice[] = [];
+  /** Identifier of the reporting device when it leads the group; not a routable output in `set`. */
+  private reportedLeader?: string;
   private pendingRouting?: { identifier: string; check: () => void; reject: (error: Error) => void };
   private touchSession?: { connection: CompanionConnection; sid: bigint; timestamp: bigint };
   private touchStarting?: Promise<void>;
@@ -278,13 +280,16 @@ export class AppleTV extends EventEmitter {
       ? new AirPlayConnection(this.address, this.port, credentials, options.settleMs)
       : new LegacyMRPConnection(this.mrpAddress, this.mrpPort!, credentials, options.settleMs);
     this.airPlayErrorSource = connection;
+    let ready = false;
     connection.on('close', () => {
       if (this.connection !== connection) return;
       this.connection = undefined;
       this.pendingRouting?.reject(new Error('Connection closed'));
       this.reportedOutputs = [];
+      this.reportedLeader = undefined;
       this.resetRuntimeState();
-      this.emit('close');
+      // A failed setup reports through connect()'s rejection, never as `close`.
+      if (ready) this.emit('close');
     });
     connection.on('error', (err) => { if (this.airPlayErrorSource === connection && this.listenerCount('error')) this.emit('error', err); });
     connection.on('mrp-message', (msg: Record<string, unknown>) => {
@@ -295,6 +300,7 @@ export class AppleTV extends EventEmitter {
     try {
       await connection.connect();
       if (this.connection !== connection) throw new Error('Connection closed during setup');
+      ready = true;
       this.emit('connect');
     } catch (err) {
       connection.close();
@@ -303,12 +309,14 @@ export class AppleTV extends EventEmitter {
     }
   }
 
-  /** Cancel gestures, attempt touch cleanup, then close both transports even if cleanup fails. */
+  /**
+   * Cancel gestures, attempt touch cleanup, then close both transports even if cleanup fails.
+   * A touch startup still in flight is abandoned (closing Companion ends it), not awaited.
+   */
   async close(): Promise<void> {
     this.gestureController?.abort();
     try {
-      if (this.touchStarting) await this.touchStarting;
-      await this.stopTouch();
+      if (!this.touchStarting) await this.stopTouch();
     } finally {
       const companion = this.companionConnection;
       const connection = this.connection;
@@ -323,6 +331,7 @@ export class AppleTV extends EventEmitter {
       companion?.close();
       connection?.close();
       this.reportedOutputs = [];
+      this.reportedLeader = undefined;
       this.resetRuntimeState();
       if (companion) this.emit('companionClose');
       if (connection) this.emit('close');
@@ -354,13 +363,14 @@ export class AppleTV extends EventEmitter {
 
     const connection = this.companionConnection = new CompanionConnection(this.companionAddress, port, credentials);
     this.companionErrorSource = connection;
+    let ready = false;
     connection.on('close', () => {
       if (this.companionConnection !== connection) return;
       this.gestureController?.abort();
       this.touchSession = undefined;
       this.activeTouch = undefined;
       this.companionConnection = undefined;
-      this.emit('companionClose');
+      if (ready) this.emit('companionClose');
     });
     connection.on('error', (err) => { if (this.companionErrorSource === connection) this.emit('companionError', err); });
     connection.on('event', (event: CompanionEvent) => {
@@ -371,6 +381,7 @@ export class AppleTV extends EventEmitter {
     try {
       await connection.connect();
       if (this.companionConnection !== connection) throw new Error('Companion closed during setup');
+      ready = true;
       this.emit('companionConnect');
     } catch (err) {
       connection.close();
@@ -537,13 +548,15 @@ export class AppleTV extends EventEmitter {
         if (error) reject(error); else resolve();
       };
       const timer = setTimeout(() => finish(new Error('Output routing not confirmed within 5000ms')), 5000);
-      this.pendingRouting = { identifier, reject: finish, check: () => {
-        const current = this.reportedOutputs.map(d => d.identifier);
+      const check = (): void => {
+        const current = this.reportedOutputs.map(d => d.identifier).filter(id => id !== this.reportedLeader || ids.includes(id));
         const matches = mode === 'remove' ? ids.every(id => !current.includes(id)) :
           ids.every(id => current.includes(id)) && (mode !== 'set' || current.length === ids.length);
         if (matches) finish();
-      } };
-      conn.sendMRPMessage(buffer).catch(error => finish(error));
+      };
+      this.pendingRouting = { identifier, reject: finish, check };
+      // ponytail: like pyatv, an already-reported match needs no further update; it may never come.
+      conn.sendMRPMessage(buffer).then(check, error => finish(error));
     });
   }
 
@@ -559,8 +572,10 @@ export class AppleTV extends EventEmitter {
     if (!info) return;
     if (msg.type === MessageType.DeviceInfoUpdate && !Object.hasOwn(info, 'groupedDevices') && !Object.hasOwn(info, 'isGroupLeader')) return;
     const devices: OutputDevice[] = [];
+    this.reportedLeader = undefined;
     if (info.isGroupLeader && !info.isProxyGroupPlayer && typeof info.uniqueIdentifier === 'string' && typeof info.name === 'string') {
       devices.push({ name: info.name, identifier: info.uniqueIdentifier });
+      this.reportedLeader = info.uniqueIdentifier;
     }
     if (Array.isArray(info.groupedDevices)) {
       for (const device of info.groupedDevices as Record<string, unknown>[]) {
@@ -723,9 +738,8 @@ export class AppleTV extends EventEmitter {
       throw new Error(`Media command ${command} rejected: errorCode=${response.errorCode} ${response.errorDescription ?? ''}`);
     }
     const result = response['.sendCommandResultMessage'] as Record<string, unknown> | undefined;
-    if (!result || (!Object.prototype.hasOwnProperty.call(result, 'sendError') && !Object.prototype.hasOwnProperty.call(result, 'handlerReturnStatus'))) {
-      throw new Error('Malformed media-command acknowledgment');
-    }
+    // pyatv checks only sendError; an omitted proto2 field is its default (NoError).
+    if (!result) throw new Error('Malformed media-command acknowledgment');
     const sendError = result.sendError ?? 0;
     const status = result.handlerReturnStatus ?? 0;
     if (sendError !== 0) throw new Error(`Media command ${command} rejected: sendError=${sendError}, handlerReturnStatus=${status}`);
@@ -876,7 +890,8 @@ export class AppleTV extends EventEmitter {
   /** Release and stop touch registrations; preserve both errors if session and touch shutdown fail. */
   async stopTouch(): Promise<void> {
     this.gestureController?.abort();
-    if (this.touchStarting) await this.touchStarting;
+    // A failed startup rolls itself back and is reported to its own caller.
+    if (this.touchStarting) await this.touchStarting.catch(() => {});
     const session = this.touchSession;
     if (!session) return;
     const errors: unknown[] = [];

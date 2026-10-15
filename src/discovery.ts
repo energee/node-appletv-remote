@@ -132,6 +132,7 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
     const instance = new Bonjour();
     let done = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let untilQueued = false;
     const browsers: ReturnType<Bonjour['find']>[] = [];
 
     const collect = (): DiscoveredDevice[] => {
@@ -223,8 +224,16 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
           dmap: legacy ? (service.name || service.fqdn || 'unknown').toLowerCase() : undefined,
         };
         records.push({ type, service, addresses, txt, ids, identity });
-        try { if (options.until && collect().some(options.until)) finish(); }
-        catch (error) { fail(error); }
+        // Regrouping is order-independent and O(n log n); evaluate once per burst, not per record.
+        if (options.until && !untilQueued) {
+          untilQueued = true;
+          queueMicrotask(() => {
+            untilQueued = false;
+            if (done) return;
+            try { if (collect().some(options.until!)) finish(); }
+            catch (error) { fail(error); }
+          });
+        }
       }));
     }
     timer = setTimeout(finish, options.timeout ?? 5000);

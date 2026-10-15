@@ -128,6 +128,20 @@ describe('output routing', () => {
     (atv as any).handleMRPMessage({ type: 37, '.deviceInfoMessage': { groupedDevices: mode === 'remove' ? [] : [{ name: 'S', deviceUID: 'speaker' }] } });
     await promise;
   });
+  it('set confirms when the reported group also lists the leading device itself', async () => {
+    const atv = device(); mrp(atv);
+    const pending = atv.setOutputDevices(['speaker']);
+    await new Promise(resolve => setImmediate(resolve));
+    (atv as any).handleMRPMessage({ type: 37, '.deviceInfoMessage': { name: 'TV', uniqueIdentifier: 'tv', isGroupLeader: true,
+      groupedDevices: [{ name: 'Speaker', deviceUID: 'speaker' }] } });
+    await expect(pending).resolves.toBeUndefined();
+  });
+  it.each(['add', 'remove', 'set'])('%s resolves at once when the reported group already matches', async mode => {
+    const atv = device(); const sent = mrp(atv);
+    (atv as any).handleMRPMessage({ type: 15, '.deviceInfoMessage': { groupedDevices: mode === 'remove' ? [] : [{ name: 'S', deviceUID: 's' }] } });
+    await expect((atv as any)[`${mode}OutputDevices`](['s'])).resolves.toBeUndefined();
+    expect(sent[0].type).toBe(48);
+  });
   it('routing timeout rejects and never mutates reported outputs', async () => {
     vi.useFakeTimers(); const atv = device(); mrp(atv);
     const promise = (atv as any).setOutputDevices(['s']);
@@ -254,6 +268,30 @@ describe('review regression guards', () => {
     (atv as any).handleMRPMessage({ type: 15, '.deviceInfoMessage': { groupedDevices: [{ name: 'S', deviceUID: 's' }] } });
     (atv as any).handleMRPMessage({ type: 37, '.deviceInfoMessage': { deviceUID: 'tv' } });
     expect(atv.outputDevices).toEqual([{ name: 'S', identifier: 's' }]);
+  });
+  it('keeps outputs for a decoded volume-only DeviceInfoUpdate (no materialized empty groupedDevices)', async () => {
+    const atv = device();
+    (atv as any).handleMRPMessage({ type: 15, '.deviceInfoMessage': { groupedDevices: [{ name: 'S', deviceUID: 's' }] } });
+    // Type 37, extension 20 carrying only name="TV".
+    (atv as any).handleMRPMessage(await MRPMessage.decode(Buffer.from('0825a2010412025456', 'hex')));
+    expect(atv.outputDevices).toEqual([{ name: 'S', identifier: 's' }]);
+  });
+  it('close does not wait on or rethrow a hung touch startup', async () => {
+    const atv = device(); mrp(atv); const { conn } = companion(atv);
+    conn.sendRequest.mockImplementation(() => new Promise(() => {}));
+    const start = atv.touchAction(1, 1, 1).catch(error => error);
+    await new Promise(resolve => setImmediate(resolve));
+    await expect(atv.close()).resolves.toBeUndefined();
+    expect(conn.close).toHaveBeenCalledOnce();
+    void start;
+  });
+  it('stopTouch does not rethrow a failed touch startup that rolled back', async () => {
+    const atv = device(); const { conn } = companion(atv);
+    conn.sendRequest.mockRejectedValueOnce(new Error('start rejected'));
+    const start = atv.touchAction(1, 1, 1);
+    const stop = atv.stopTouch();
+    await expect(start).rejects.toThrow('start rejected');
+    await expect(stop).resolves.toBeUndefined();
   });
   it('stopTouch waits for startup before stopping the new registration', async () => {
     const atv = device(); const { sent } = companion(atv);

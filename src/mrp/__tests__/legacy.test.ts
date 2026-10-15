@@ -2,7 +2,7 @@
 import { expect, it, vi } from 'vitest';
 import { AppleTV } from '../../appletv.js';
 import { Credentials } from '../../credentials.js';
-import { MRPMessage } from '../messages.js';
+import { MRPMessage, MessageType } from '../messages.js';
 import { AirPlayConnection } from '../../connection.js';
 import { LegacyMRPConnection } from '../legacy-connection.js';
 
@@ -45,4 +45,25 @@ it('uses state 2 only for the initial standalone pairing request', async () => {
   expect(Object.hasOwn(start, 'identifier')).toBe(false);
   const verify = await MRPMessage.decode(await MRPMessage.cryptoPairing(Buffer.from([6, 1, 1])));
   expect((verify['.cryptoPairingMessage'] as { state: number }).state).toBe(0);
+});
+
+it('heartbeat matches any reply type by identifier and retries one miss before failing (pyatv HEARTBEAT_RETRIES=1)', async () => {
+  const conn = new LegacyMRPConnection('fd00::1', 1234, credentials);
+  const errors: Error[] = [];
+  conn.on('error', error => errors.push(error));
+  (conn as any).socket = { destroy: () => {} };
+  // Per attempt: reply type, or undefined for no reply.
+  const replies: Array<number | undefined> = [MessageType.SetState, undefined, MessageType.GenericMessage, undefined, undefined];
+  vi.spyOn(conn, 'sendMRPMessage').mockImplementation(async data => {
+    const type = replies.shift();
+    const identifier = (await MRPMessage.decode(data)).identifier as string;
+    const reply = Buffer.concat([Buffer.from([8, type ?? 0, 0x12, identifier.length]), Buffer.from(identifier)]);
+    if (type !== undefined) setImmediate(() => void (conn as any).handleMRPResponse(reply));
+  });
+  await (conn as any).heartbeatOnce(20);
+  await (conn as any).heartbeatOnce(20);
+  expect(errors).toEqual([]);
+  await (conn as any).heartbeatOnce(20);
+  expect(errors.map(e => e.message).join()).toMatch(/Timeout/);
+  expect(replies).toEqual([]);
 });
