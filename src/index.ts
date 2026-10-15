@@ -61,3 +61,6 @@ export { RaopStream } from './raop/stream.js';
 export type { RaopMetadata, RaopStreamOptions, RaopPcmSource } from './raop/stream.js';
 /** Validate a PCM16 stereo 44.1 kHz WAV Readable and yield its audio payload as a RaopStream source. */
 export { wavPcm } from './raop/wav.js';
+/** Legacy AirPlay PIN pair-setup for RAOP receivers; yields the clientId and secret 32-byte seed used as `legacySeed`. */
+export { LegacyPairSetup } from './auth/legacy-pair-setup.js';
+export type { LegacyAirPlayCredentials } from './auth/legacy-pair-setup.js';

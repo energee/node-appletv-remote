@@ -7,6 +7,8 @@ import { createPublicKey, generateKeyPairSync, diffieHellman, createHash, create
 import { setImmediate as turn, setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { closedPort } from './airplay2-receiver.js';
+import { legacyPairReceiver } from '../../auth/__tests__/legacy-pair-receiver.js';
+import { LegacyPairSetup } from '../../auth/legacy-pair-setup.js';
 
 const observed = vi.hoisted(() => ({ sockets: [] as import('node:dgram').Socket[] }));
 const controlledClock = vi.hoisted(() => ({ now: undefined as number | undefined }));
@@ -526,6 +528,28 @@ describe('legacy RAOP streaming', () => {
       expect(peer.requests[2].headers.cseq).toBe('1');
       expect(peer.requests[2].headers['user-agent']).toBe('AirPlay/550.10');
       expect(peer.clients.size).toBe(1);
+    } finally { cancellation.abort(); await settled; }
+  });
+
+  // The legacy loopback receiver accepts any Ed25519 key it is handed in pair-verify, so this does not
+  // prove the receiver recognizes the paired key; it proves the seed LegacyPairSetup produces is in the
+  // format RaopStream accepts and signs with correctly (the receiver verifies the signature).
+  it('streams with the seed produced by LegacyPairSetup (pair-verify succeeds, then ANNOUNCE)', async () => {
+    const pairingPeer = await legacyPairReceiver({ pin: '2580' });
+    let credentials;
+    try {
+      const pairing = new LegacyPairSetup('127.0.0.1', pairingPeer.port);
+      await pairing.start();
+      credentials = await pairing.finish('2580');
+    } finally { await pairingPeer.close(); }
+    const module = await load(); const peer = await receiver('legacy'); const cancellation = new AbortController();
+    const stream = new module.RaopStream('127.0.0.1', peer.port, { ...txt, sf: '0x200' });
+    const playing = stream.stream(Buffer.alloc(44100 * 4), { signal: cancellation.signal, legacySeed: credentials.seed });
+    const settled = playing.catch(error => error);
+    try {
+      await waitForIo(() => peer.packets.length > 0);
+      expect(peer.requests.slice(0, 3).map(r => [r.method, r.uri])).toEqual([['POST', '/pair-verify'], ['POST', '/pair-verify'], ['ANNOUNCE', peer.requests[2].uri]]);
+      expect(peer.requests[0].body.subarray(36)).toEqual(pairingPeer.clientPublicKey);
     } finally { cancellation.abort(); await settled; }
   });
 

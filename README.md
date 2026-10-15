@@ -441,7 +441,7 @@ HAP-paired receivers (current Apple TVs), described below.
 No hardware verification has been performed for this API; the existing Apple TV
 4K status does not apply. HomePods and other receivers needing transient pairing,
 AirPlay 2 buffered audio, RSA/FairPlay/MFi authentication, password digest auth,
-legacy PIN pair-setup, ALAC, transcoding, multiroom, live sources, artwork,
+ALAC, transcoding, multiroom, live sources, artwork,
 and progress are excluded. `atv raop-stream` wraps this API
 for PIN-less legacy receivers (it supplies neither a `legacySeed` nor HAP credentials).
 
@@ -462,7 +462,7 @@ Legacy receivers need an IPv4 endpoint and their actual `_raop._tcp` TXT record.
 capabilities are `cn` containing `0` (PCM), `et` containing `0` (unencrypted), `tp`
 containing `UDP`, `sr=44100`, `ss=16`, and `ch=2`; `pw` must be absent or `false`.
 `sf`/`flags` are parsed as hexadecimal: PIN/legacy-pairing bits `0x8`/`0x200`
-require caller-supplied `legacySeed`; password bit `0x80` is unsupported. Malformed
+require a caller-supplied `legacySeed` (from `LegacyPairSetup`, below); password bit `0x80` is unsupported. Malformed
 flags and unsupported access control (`pw=true`, `act=2`, `acl=1`) fail closed.
 `ft`/`features` bits 40 or 43 without 38 or 48 fail closed in the constructor.
 Text metadata additionally requires `md` containing `0`.
@@ -633,12 +633,38 @@ remain RTSP/1.0 with CSeq correlation. A canceled authentication request closes 
 connection, so a late anonymous HTTP reply cannot satisfy a later request. Seed-derived X25519 and Ed25519 keys,
 SHA-512-derived AES-CTR key/IV, and receiver ciphertext advancement before the
 client signature. Supply `stream(source, { legacySeed })` only with a 32-byte seed
-from prior **legacy AirPlay PIN pairing**; HAP `Credentials`, HAP `clientLTSK` and
+from prior **legacy AirPlay PIN pairing** (`LegacyPairSetup`); HAP `Credentials`, HAP `clientLTSK` and
 DMAP GUIDs are not interchangeable. No key/credential files are read automatically.
 This legacy exchange proves the client's paired key to the
 receiver, does not verify a receiver identity, and enables no transport encryption;
 use only on a trusted LAN. Tests use synthetic keys, a verifying loopback peer,
 and independent public legacy verification byte vectors.
+
+**Legacy PIN pairing** produces that seed once per receiver. `start()` makes the receiver
+show a PIN; `finish(pin)` runs the three `/pair-setup-pin` steps (SRP-6a, RFC 5054 2048-bit
+group, SHA-1, username = client id, password = PIN; then the client's new Ed25519 public key,
+AES-128-GCM encrypted under the SRP session key) and returns `{ clientId, seed }`:
+
+```typescript
+import { LegacyPairSetup, RaopStream } from 'node-appletv-remote';
+
+const pairing = new LegacyPairSetup(device.raopAddress!, device.raopPort!);
+await pairing.start();                          // the receiver displays a PIN
+const { clientId, seed } = await pairing.finish(pinFromUser);
+// Persist clientId and seed yourself; the seed is a secret, like a password.
+
+await new RaopStream(device.raopAddress!, device.raopPort!, device.raopTxt!)
+  .stream(source, { legacySeed: seed });
+```
+
+A wrong PIN rejects with `Legacy pair-setup failed: wrong PIN or receiver rejected the
+proof (HTTP <status>)`, and a receiver proof that does not match rejects too; the HTTP
+connection is closed when `finish()` settles. The pairing requests go out without
+`X-Apple-HKP` (that header selects HAP pairing instead). Pairing authenticates the PIN
+holder to the receiver, but later legacy pair-verify still authenticates only the client
+and encrypts nothing, so the trusted-LAN caveat above applies. Tests use a loopback
+receiver built on fast-srp-hap's `SrpServer` and fixed SRP vectors with leading-zero `A`
+and `S`; **legacy PIN pairing is unverified on hardware** (hardware check H3).
 
 The RTSP control client also sends `/pair-pin-start` and `/pair-setup` as CSeq-less
 HTTP/1.1 requests; transient pairing for HomePods will use them and is not
@@ -812,7 +838,7 @@ src/
 ├── appletv.ts      # AppleTV class (start here)
 ├── connection.ts   # AirPlay session + MRP data channel
 ├── discovery.ts    # mDNS scanning
-├── auth/           # HAP pair-setup / pair-verify
+├── auth/           # HAP pair-setup / pair-verify, legacy AirPlay PIN pair-setup
 ├── companion/      # Companion Link: OPACK, framing, pairing
 ├── dmap/           # legacy codec, HTTP session, reverse pairing
 ├── raop/           # partial RAOP / AirPlay 2 realtime PCM RTP streaming

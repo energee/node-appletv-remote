@@ -7,3 +7,6 @@ it('exports the standalone legacy RAOP stream', () => {
 it('exports the WAV PCM reader', () => {
   expect('wavPcm' in api && typeof api.wavPcm).toBe('function');
 });
+it('exports legacy PIN pair-setup', () => {
+  expect('LegacyPairSetup' in api && typeof api.LegacyPairSetup).toBe('function');
+});
