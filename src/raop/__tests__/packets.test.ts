@@ -1,4 +1,4 @@
-/** Independent wire fixtures for the legacy PCM RAOP transport. */
+/** Independent wire fixtures for RAOP packets: legacy PCM transport and AirPlay 2 sealed audio. */
 import { describe, expect, it } from 'vitest';
 
 const load = () => import('../packets.js');
@@ -76,4 +76,52 @@ it('rejects large retransmission bursts despite available history', async () => 
   const module = await load(); const history = new module.PacketHistory();
   history.add(Buffer.from('806000000000000000000000', 'hex'));
   expect(history.resend(Buffer.from('80d5000100000065', 'hex'))).toEqual([]);
+});
+
+describe('sealAudioPacket', () => {
+  const key = Buffer.alloc(32, 0x42);
+  const counter = 0x0102030405060708n;
+
+  /** Independent ChaCha20-Poly1305 open with a hand-built nonce and AAD = RTP bytes 4..11. */
+  const open = async (sealed: Buffer, header: Buffer) => {
+    const { createDecipheriv } = await import('node:crypto');
+    const nonce = Buffer.concat([Buffer.alloc(4), sealed.subarray(sealed.length - 8)]);
+    const decipher = createDecipheriv('chacha20-poly1305', key, nonce, { authTagLength: 16 });
+    decipher.setAAD(header.subarray(4, 12), { plaintextLength: sealed.length - 36 });
+    decipher.setAuthTag(sealed.subarray(sealed.length - 24, sealed.length - 8));
+    return Buffer.concat([decipher.update(sealed.subarray(12, sealed.length - 24)), decipher.final()]);
+  };
+
+  it('seals the payload with the counter nonce and keeps the header and counter trailer', async () => {
+    const module = await load();
+    expect(module?.sealAudioPacket).toBeTypeOf('function');
+    const packet = module.audioPacket(Buffer.from('01000200feff0080', 'hex'), 7, 0x11223344, 0x55667788, true);
+    const original = Buffer.from(packet);
+    const sealed = module.sealAudioPacket(packet, key, counter);
+    expect(packet.equals(original)).toBe(true);
+    expect(sealed.length).toBe(packet.length + 16 + 8);
+    expect(sealed.subarray(0, 12).equals(packet.subarray(0, 12))).toBe(true);
+    expect(sealed.subarray(sealed.length - 8).toString('hex')).toBe('0807060504030201');
+    expect(sealed.subarray(12, packet.length).equals(packet.subarray(12))).toBe(false);
+    expect((await open(sealed, sealed)).equals(packet.subarray(12))).toBe(true);
+  });
+
+  it('fails authentication when the timestamp or SSRC is tampered', async () => {
+    const module = await load();
+    const sealed = module.sealAudioPacket(module.audioPacket(Buffer.alloc(8, 1), 1, 100, 200, false), key, 3n);
+    for (const offset of [4, 11]) {
+      const tampered = Buffer.from(sealed);
+      tampered[offset] ^= 1;
+      await expect(open(tampered, tampered)).rejects.toThrow();
+    }
+  });
+
+  it('is what PacketHistory retransmits, byte for byte', async () => {
+    const module = await load();
+    const sealed = module.sealAudioPacket(module.audioPacket(Buffer.alloc(8, 1), 0x1234, 100, 200, false), key, 9n);
+    const history = new module.PacketHistory();
+    history.add(sealed);
+    const [resent] = history.resend(Buffer.from('80d5000112340001', 'hex'));
+    expect(resent.subarray(4).equals(sealed)).toBe(true);
+  });
 });

@@ -1,4 +1,6 @@
-/** Legacy unencrypted RAOP RTP, synchronization, timing, and resend packets. */
+/** RAOP RTP audio, synchronization, timing, and resend packets (legacy plain and AirPlay 2 sealed audio). */
+import { encryptChaCha20, generateNonce } from '../util/crypto.js';
+
 export const FRAMES_PER_PACKET = 352;
 export const SAMPLE_RATE = 44100;
 export const PACKET_BYTES = FRAMES_PER_PACKET * 4;
@@ -15,6 +17,18 @@ export function audioPacket(pcm: Buffer, sequence: number, timestamp: number, ss
   pcm.copy(packet, 12);
   packet.subarray(12, 12 + pcm.length).swap16();
   return packet;
+}
+
+/**
+ * Seal an `audioPacket()` result for AirPlay 2 realtime audio: ChaCha20-Poly1305 with the
+ * stream key, nonce = 4 zero bytes + 64-bit LE `counter`, AAD = RTP timestamp + SSRC
+ * (header bytes 4..11). Returns header + ciphertext + 16-byte tag + 8-byte LE counter;
+ * the input is not modified. Callers must use each counter value only once per key.
+ */
+export function sealAudioPacket(packet: Buffer, key: Buffer, counter: bigint): Buffer {
+  const nonce = generateNonce(counter);
+  const { ciphertext, tag } = encryptChaCha20(key, nonce, packet.subarray(12), packet.subarray(4, 12));
+  return Buffer.concat([packet.subarray(0, 12), ciphertext, tag, nonce.subarray(4)]);
 }
 
 /** Encode Unix milliseconds as an NTP timestamp (including era rollover). */
