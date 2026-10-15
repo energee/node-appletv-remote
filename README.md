@@ -252,7 +252,7 @@ This is actual authenticated media playback, not `launchApp(url)`. The receiver 
 
 Timing replies are restricted to the connected TCP peer address and, when returned by SETUP, its timing port. Only 32-byte RTP timing requests (payload type `0x52`, or `0xd2` with the marker bit) are answered, whatever their first (version) byte; the reply echoes that byte as pyatv does. Other 32-byte packets get no reply. UDP timing-reply send errors are ignored; timing socket failures still close the session.
 
-HTTP errors, connection loss, malformed status, and `/playback-info` media errors reject and close the failed session. Background heartbeat failures close the session and surface on the next `getStatus`. Requests have a five-second timeout (including URL acceptance); receivers taking longer to probe media will fail. Replies are limited to 1 MiB; duplicate Content-Length or CSeq headers and all Transfer-Encoding responses are rejected. Binary and XML playback-info property lists are supported. Unlike pyatv's player, a rejected `/play` is surfaced immediately rather than retrying the whole authenticated SETUP sequence.
+HTTP errors, connection loss, malformed status, and `/playback-info` media errors reject and close the failed session. Background heartbeat failures close the session and surface on the next `getStatus`. Requests have a five-second timeout (including URL acceptance); receivers taking longer to probe media will fail. Replies are limited to 1 MiB; duplicate Content-Length framing headers and all Transfer-Encoding responses are rejected. Binary and XML playback-info property lists are supported. Unlike pyatv's player, a rejected `/play` is surfaced immediately rather than retrying the whole authenticated SETUP sequence.
 
 The implementation follows [pyatv 0.18.0](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600): same-socket HAP verification, NTP/event SETUP, feedback, RECORD, binary-plist `/play`, rate/property requests, and `/playback-info`. Stop closes the dedicated connection, matching `AirPlayStream.stop`; it does not send an invented teardown command. Tests use a synthetic loopback receiver and generated keys. **Media/codec compatibility and URL playback on physical hardware remain unverified.** This session currently requires an IPv4 connection. Legacy AirPlay 1, mirroring, DRM, local-file hosting, and transcoding are not supported.
 
@@ -301,8 +301,8 @@ boundaries are reassembled. Source staging retains one copied chunk plus one
 1,408-byte PCM packet and does not pull another chunk until needed by the paced
 consumer. Wire packets and the separately bounded 1,000-packet resend cache add
 about 1.42 MB; RTSP headers and bodies each have a 64 KiB cap. Replies use the
-shared `parseHTTPMessage` framing (duplicate Content-Length or CSeq and any Transfer-Encoding
-are rejected); the status line and a matching CSeq are validated locally. Producer/Readable
+shared `parseHTTPMessage` framing (duplicate Content-Length and any Transfer-Encoding
+are rejected); the status line and a single matching CSeq are validated locally. Producer/Readable
 internal buffering is additional and remains the producer's responsibility. Slow sources
 or delayed event loops that fall more than 100 ms behind after playback starts are
 resynchronized: pacing re-anchors to the current time and a fresh sync packet is sent,

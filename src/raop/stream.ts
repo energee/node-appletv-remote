@@ -42,13 +42,15 @@ class RtspClient {
       try { this.parse(); } catch (error) { this.pending?.reject(error as Error); onFailure(error as Error); this.socket.destroy(); }
     });
   }
-  /** Shared HTTP framing (64 KiB header and body caps, duplicate CSeq rejected); RTSP status and CSeq correlation are checked here. */
+  /** Shared HTTP framing (64 KiB header and body caps); RTSP status, a single CSeq and CSeq correlation are checked here. */
   private parse(): void {
     while (true) {
       const message = parseHTTPMessage(this.input, 65536);
       if (!message) return;
       const status = /^(RTSP\/1\.0|HTTP\/1\.1) (\d{3})(?: |$)/.exec(message.startLine);
       if (!status) throw new Error('Malformed RAOP RTSP response');
+      // parseHTTPMessage keeps the last duplicate header, so a repeated CSeq is rejected from the raw header block.
+      if ((this.input.subarray(0, message.totalSize - message.body.length).toString().match(/\r\ncseq\s*:/gi)?.length ?? 0) > 1) throw new Error('Duplicate RAOP CSeq header');
       const { headers, body } = message;
       this.input = this.input.subarray(message.totalSize);
       if (status[1] === 'RTSP/1.0' && this.abandoned.delete(Number(headers.cseq))) continue;

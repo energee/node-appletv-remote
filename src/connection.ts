@@ -46,9 +46,9 @@ export function hostForURL(host: string, encodeZone = true): string {
 /**
  * Parse one HTTP or RTSP message (request or response) from the start of a buffer.
  * Header names are lower-cased; startLine preserves the request method or response status. Returns null until the headers
- * and `Content-Length` bytes of body have all arrived. Invalid lengths, duplicate Content-Length, Transfer-Encoding
- * or CSeq headers, any Transfer-Encoding, headers over 64 KiB and bodies over `maxBody` (default 16 MiB) throw a
- * protocol error. Other repeated headers keep the last value.
+ * and `Content-Length` bytes of body have all arrived. Invalid lengths, duplicate Content-Length or Transfer-Encoding
+ * headers, any Transfer-Encoding, headers over 64 KiB and bodies over `maxBody` (default 16 MiB) throw a protocol error.
+ * Other repeated headers (including CSeq) keep the last value.
  */
 export function parseHTTPMessage(buf: Buffer, maxBody = 16 * 1024 * 1024): ParsedHTTP | null {
   const headerEnd = buf.indexOf('\r\n\r\n');
@@ -65,7 +65,7 @@ export function parseHTTPMessage(buf: Buffer, maxBody = 16 * 1024 * 1024): Parse
     const colonIdx = lines[i].indexOf(':');
     if (colonIdx > 0) {
       const name = lines[i].substring(0, colonIdx).trim().toLowerCase();
-      if ((name === 'content-length' || name === 'transfer-encoding' || name === 'cseq') && Object.hasOwn(headers, name)) throw new Error(`Duplicate ${name} header`);
+      if ((name === 'content-length' || name === 'transfer-encoding') && Object.hasOwn(headers, name)) throw new Error('Duplicate framing header');
       if (name === 'transfer-encoding') throw new Error('Unsupported Transfer-Encoding');
       headers[name] = lines[i].substring(colonIdx + 1).trim();
     }

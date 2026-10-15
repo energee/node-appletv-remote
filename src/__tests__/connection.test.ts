@@ -28,7 +28,7 @@ describe('AirPlayConnection', () => {
 });
 
 describe('parseHTTPMessage', () => {
-  it('rejects a duplicate CSeq instead of keeping the last one', () => {
-    expect(() => parseHTTPMessage(Buffer.from('RTSP/1.0 200 OK\r\nCSeq: 1\r\ncseq: 2\r\n\r\n'))).toThrow(/Duplicate/);
+  it('tolerates a duplicate CSeq and keeps the last value', () => {
+    expect(parseHTTPMessage(Buffer.from('RTSP/1.0 200 OK\r\nCSeq: 1\r\ncseq: 2\r\n\r\n'))?.headers.cseq).toBe('2');
   });
 });
