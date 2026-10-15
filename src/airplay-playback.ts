@@ -172,7 +172,6 @@ export class AirPlayPlaybackSession {
     timing.on('message', (data, remote) => {
       const peer = this.timingPeer;
       if (this.closed || !peer || remote.address !== peer.address || (peer.port !== undefined && remote.port !== peer.port)) return;
-      // timingReply answers only 32-byte RTP timing requests (type 0x52/0xd2); other packets get no reply.
       const now = Date.now();
       const reply = timingReply(data, now, now);
       if (reply) timing.send(reply, remote.port, remote.address, () => {});

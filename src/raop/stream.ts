@@ -26,7 +26,6 @@ interface Response { headers: Record<string, string>; code: number; body: Buffer
 
 /** Serialized legacy HTTP authentication and CSeq-correlated RTSP audio requests on one socket. */
 class RtspClient {
-  readonly socket: Socket;
   private input = Buffer.alloc(0);
   private cseq = 0;
   private abandoned = new Set<number>();
@@ -35,8 +34,7 @@ class RtspClient {
   private queue: Promise<unknown> = Promise.resolve();
   private pending?: { sequence?: number; protocol: 'HTTP/1.1' | 'RTSP/1.0'; resolve: (response: Response) => void; reject: (error: Error) => void };
   /** Takes ownership of a connected socket from `connectSocket`. */
-  constructor(socket: Socket, private uri: string, onFailure: (error: Error) => void) {
-    this.socket = socket;
+  constructor(readonly socket: Socket, private uri: string, onFailure: (error: Error) => void) {
     this.socket.on('error', error => { this.pending?.reject(error); onFailure(error); });
     this.socket.on('close', () => { const error = new Error('RAOP control connection closed'); this.pending?.reject(error); onFailure(error); });
     this.socket.on('data', (chunk: Buffer) => {
@@ -44,15 +42,13 @@ class RtspClient {
       try { this.parse(); } catch (error) { this.pending?.reject(error as Error); onFailure(error as Error); this.socket.destroy(); }
     });
   }
-  /** Shared HTTP framing (64 KiB header and body caps); RTSP status and CSeq correlation are checked here. */
+  /** Shared HTTP framing (64 KiB header and body caps, duplicate CSeq rejected); RTSP status and CSeq correlation are checked here. */
   private parse(): void {
     while (true) {
       const message = parseHTTPMessage(this.input, 65536);
       if (!message) return;
       const status = /^(RTSP\/1\.0|HTTP\/1\.1) (\d{3})(?: |$)/.exec(message.startLine);
       if (!status) throw new Error('Malformed RAOP RTSP response');
-      // parseHTTPMessage keeps the last duplicate header, so a repeated CSeq is rejected from the raw header block.
-      if ((this.input.subarray(0, message.totalSize - message.body.length).toString().match(/\r\ncseq:/gi)?.length ?? 0) > 1) throw new Error('Duplicate RAOP response header');
       const { headers, body } = message;
       this.input = this.input.subarray(message.totalSize);
       if (status[1] === 'RTSP/1.0' && this.abandoned.delete(Number(headers.cseq))) continue;

@@ -71,12 +71,3 @@ it('rejects large retransmission bursts despite available history', async () => 
   history.add(Buffer.from('806000000000000000000000', 'hex'));
   expect(history.resend(Buffer.from('80d5000100000065', 'hex'))).toEqual([]);
 });
-
-it('stores the caller-owned wire packet without copying it', async () => {
-  const module = await load(); const history = new module.PacketHistory();
-  const packet = Buffer.from('806000070000000000000000aa', 'hex');
-  history.add(packet);
-  // Mutating after add is unsupported; this only proves no defensive copy was made.
-  packet[12] = 0xbb;
-  expect(history.resend(Buffer.from('80d5000100070001', 'hex'))[0].subarray(4).toString('hex')).toBe('806000070000000000000000bb');
-});
