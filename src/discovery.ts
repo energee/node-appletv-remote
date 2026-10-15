@@ -50,6 +50,8 @@ export interface DiscoveredDeviceInfo {
   dmapPort?: number;
   /** Shared primary-protocol address when joined; caller-supplied endpoints require explicit trust. */
   dmapAddress?: string;
+  /** AirPlay `psi` TXT value: the ID to pass to AppleTV output routing (add/remove/setOutputDevices). */
+  airplayPsi?: string;
 }
 
 /** An Apple TV found by scan(). */
@@ -73,6 +75,8 @@ export class DiscoveredDevice {
   dmapPort?: number;
   /** Shared primary-protocol address when joined; caller-supplied endpoints require explicit trust. */
   dmapAddress?: string;
+  /** AirPlay `psi` TXT value: the ID to pass to AppleTV output routing (add/remove/setOutputDevices). */
+  airplayPsi?: string;
 
   constructor(info: DiscoveredDeviceInfo) {
     this.name = info.name;
@@ -88,6 +92,7 @@ export class DiscoveredDevice {
     this.mrpAddress = info.mrpAddress;
     this.dmapPort = info.dmapPort;
     this.dmapAddress = info.dmapAddress;
+    this.airplayPsi = info.airplayPsi;
   }
 
   /** `name (address:port) [model]`. */
@@ -190,6 +195,7 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
           companionPort: companion?.service.port, companionAddress: sharedAddress(companion),
           mrpPort: mrp?.service.port, mrpAddress: sharedAddress(mrp),
           mrpEnabled: mrp ? !(build >= 19) : undefined,
+          airplayPsi: airplay?.txt.psi,
         });
       });
       return options.filter ? devices.filter(options.filter) : devices;

@@ -569,16 +569,17 @@ await atv.stopTouch(); // close() also releases and stops registrations
 
 console.log(atv.outputDevices); // current selected outputs [{ name, identifier }]
 atv.on('outputDevices', devices => console.log(devices));
-await atv.addOutputDevices(['speaker-uid']);
-await atv.removeOutputDevices(['speaker-uid']);
-await atv.setOutputDevices(['speaker-uid']);
+const [speaker] = await scan({ filter: d => d.name === 'Kitchen' });
+await atv.addOutputDevices([speaker.airplayPsi!]); // the speaker's AirPlay psi
+await atv.removeOutputDevices([speaker.airplayPsi!]);
+await atv.setOutputDevices([speaker.airplayPsi!]);
 ```
 
 Import `TouchAction` from the package; `InputAction` and `OutputDevice` are exported types. HID button methods accept `'singleTap'` (default), `'doubleTap'`, or `'hold'`. MRP taps preserve the existing 50ms press and flush; each double tap repeats that complete sequence, and hold lasts 1000ms. Existing Companion button taps release immediately; touch clicks use 20ms taps or 1000ms holds and phase 5. Media commands, wake/suspend, skip commands, and the fixed `home_hold` alias reject non-default action arguments to `sendKeyCommand`.
 
 Touch coordinates must be integers in 0..1000; swipes require an integer duration of 1..60000ms and interpolate at 16ms intervals. Hold/release require an active press. Overlapping high-level gestures and a second press without release are rejected. Close/stop also cancel held clicks; close both connections before explicitly reconnecting Companion. Abort rejects the swipe and releases its finger while still connected; disconnect invalidates local session state rather than pretending to send cleanup on a dead connection. Gesture completion means events were transmitted, not that a visible Apple TV action was confirmed.
 
-Output listing reflects DeviceInfo/DeviceInfoUpdate selected groups, not discovery of available speakers. IDs must be unique nonempty strings; only `setOutputDevices([])` accepts an empty list. One routing operation may be pending at a time. Routing sends `ModifyOutputContextRequest` (message type 48, protobuf extension 52), with both regular and cluster-aware device IDs. Types 65 (`UpdateOutputDevice`) and 66 (`RemoveOutputDevices`) are not routing acknowledgements; unsolicited messages of these types neither confirm nor reject an operation. A nonzero envelope error rejects routing only when its identifier matches the outgoing UUID, regardless of message type. Routing resolves once the reported group matches the operation (immediately if it already does; for `set`, the reporting group leader is not counted unless requested), and rejects on failed transmission/connection close or lack of confirmation within five seconds. It never optimistically changes the output list. A successful write or non-error envelope alone is not confirmation.
+Output listing reflects DeviceInfo/DeviceInfoUpdate selected groups, not discovery of available speakers. Routing IDs are each receiver's AirPlay `psi` TXT value, exposed by `scan()` as `airplayPsi`; on tvOS 26 its MAC-style `deviceid` and its `pi` are ignored and the operation times out. IDs must be unique nonempty strings; only `setOutputDevices([])` accepts an empty list. One routing operation may be pending at a time. Routing sends `ModifyOutputContextRequest` (message type 48, protobuf extension 52), with both regular and cluster-aware device IDs. Types 65 (`UpdateOutputDevice`) and 66 (`RemoveOutputDevices`) are not routing acknowledgements; unsolicited messages of these types neither confirm nor reject an operation. A nonzero envelope error rejects routing only when its identifier matches the outgoing UUID, regardless of message type. Routing resolves once the reported group matches the operation (immediately if it already does; for `set`, the reporting group leader is not counted unless requested), and rejects on failed transmission/connection close or lack of confirmation within five seconds. It never optimistically changes the output list. A successful write or non-error envelope alone is not confirmation.
 
 Hardware gates: verify tap/double-tap/hold timing and effects on Apple TV, touch clicks/swipes and release on cancellation/disconnect, and grouping/ungrouping real AirPlay speakers including UUID-correlated routing errors. No hardware or stored credentials are accessed by the regression tests.
 
@@ -673,6 +674,8 @@ npm install
 npm run build        # also regenerates src/mrp/schema.ts
 npm test             # or npm run test:watch
 ```
+
+With pnpm, `pnpm install --frozen-lockfile` works as is: `pnpm-workspace.yaml` pre-approves the esbuild and protobufjs build scripts that pnpm 10+ otherwise blocks.
 
 The MRP schema is compiled into `src/mrp/schema.ts`, so no `.proto` files are read at run time and the package bundles cleanly. After editing a `.proto` (or adding one to `PROTO_FILES` in `scripts/gen-proto.mjs`), run `npm run gen:proto` and commit the result.
 

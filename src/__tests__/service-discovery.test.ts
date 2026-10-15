@@ -26,6 +26,18 @@ for (const order of [['airplay', 'companion-link'], ['companion-link', 'airplay'
     expect(await pending).toMatchObject([{ deviceId: 'mac', port: 7000, companionPort: 49153, identifiers: ['mac', 'stable'] }]);
   });
 }
+it('exposes the AirPlay psi as the output-routing identifier', async () => {
+  const pending = scan({ timeout: 10 });
+  callbacks.get('airplay')!({ name: 'Speaker', addresses: ['192.0.2.40'], port: 7000, txt: { deviceid: 'DA:92:F3:26:15:13', pi: 'dea389db-fc26-4277-901c-acff208c0b18', psi: 'DA92F326-1513-45C3-8B1D-25E95F4DC7F2' } });
+  await vi.advanceTimersByTimeAsync(10);
+  expect((await pending)[0]?.airplayPsi).toBe('DA92F326-1513-45C3-8B1D-25E95F4DC7F2');
+});
+it('leaves airplayPsi undefined when it is not advertised', async () => {
+  const pending = scan({ timeout: 10 });
+  callbacks.get('airplay')!({ name: 'TV', addresses: ['192.0.2.41'], port: 7000, txt: { deviceid: 'id' } });
+  await vi.advanceTimersByTimeAsync(10);
+  expect((await pending)[0]).toHaveProperty('airplayPsi', undefined);
+});
 it('discovers legacy MRP and disables standalone transport for tvOS 15+', async () => {
   const pending = scan({ timeout: 10 });
   expect(callbacks.has('mediaremotetv')).toBe(true);
