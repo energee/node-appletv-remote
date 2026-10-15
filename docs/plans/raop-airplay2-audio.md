@@ -334,7 +334,8 @@ from unpadded A, B and S (pinned by `src/auth/__tests__/legacy-srp.test.ts`). H3
   (`start = now = ` first packet RTP time, `end = start + duration * 44100`) and initial
   artwork are sent after SETUP and before `RECORD`. Text metadata keeps its current
   after-`FLUSH` placement; the divergence from the reference is documented as unverified and
-  H4 decides whether text moves too.
+  H4 decides whether text moves too. Evidence so far: on an Apple TV HD (tvOS 26.6) text sent
+  after `FLUSH` was accepted (200) but no title was seen on screen.
 - Test first: additions in `src/raop/__tests__/stream.test.ts` (legacy) and
   `src/raop/__tests__/airplay2-stream.test.ts` (encrypted): request order (progress/artwork
   before RECORD), headers, bodies, gating, non-JPEG rejected, size cap.

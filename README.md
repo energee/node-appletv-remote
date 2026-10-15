@@ -439,7 +439,7 @@ receiver's TXT record: **legacy** receivers accepting unencrypted PCM/L16 over I
 UDP, with optional legacy PIN pair-verification, and **AirPlay 2 realtime** audio to
 HAP-paired receivers (current Apple TVs), described below.
 Hardware status: AirPlay 2 realtime audio is audible on an Apple TV 4K and an Apple TV
-HD (the HD run used RAOP discovery, `wavPcm` and text metadata too); legacy receivers
+HD (the HD run used RAOP discovery and `wavPcm` too); legacy receivers
 and legacy PIN pairing are verified only against loopback tests. HomePods and other receivers needing transient pairing,
 AirPlay 2 buffered audio, RSA/FairPlay/MFi authentication, password digest auth,
 ALAC, transcoding, multiroom, live sources, artwork,
@@ -488,8 +488,8 @@ it; password and access-control bits still fail closed. `stream()` requires
 ownership of the source.
 
 **AirPlay 2 realtime audio** (audible on an Apple TV 4K, AppleTV6,2, and an Apple TV HD,
-AppleTV5,3, both tvOS 26.6, with volume changes; text metadata shown on the Apple TV HD;
-other receivers and the details marked unverified below are untested on hardware). Pass the HAP `Credentials` that `PairSetup` (or `atv pair`) produced for
+AppleTV5,3, both tvOS 26.6, with volume changes; text metadata is accepted but was not
+seen on screen on the Apple TV HD; other receivers and the details marked unverified below are untested on hardware). Pass the HAP `Credentials` that `PairSetup` (or `atv pair`) produced for
 the receiver:
 
 ```typescript
@@ -821,7 +821,7 @@ connect. Typeless messages that carry our identifier are usually replies to our 
 
 Checked on an Apple TV 4K (AppleTV6,2) and an Apple TV HD (AppleTV5,3), both tvOS 26.6, in #30.
 
-**Verified:** button tap/double-tap/hold; touch swipes, and finger release when a swipe is cancelled; Companion apps, accounts and power; app launch by URL; media commands; IPv6 (global, ULA and link-local) for MRP and Companion; output add/remove through a receiver's `psi`; volume capability reporting (#39); MRP message types 104/105 (#40); AirPlay 2 realtime PCM audio and `setVolume` through `RaopStream` on the Apple TV 4K (#22 phase 1); on the Apple TV HD, the full #22 phase 2 library path (`scan()` RAOP fields → `wavPcm` → `RaopStream` with stored HAP credentials): audible tone, `setVolume`, text metadata shown on screen, and a clean return to idle after TEARDOWN.
+**Verified:** button tap/double-tap/hold; touch swipes, and finger release when a swipe is cancelled; Companion apps, accounts and power; app launch by URL; media commands; IPv6 (global, ULA and link-local) for MRP and Companion; output add/remove through a receiver's `psi`; volume capability reporting (#39); MRP message types 104/105 (#40); AirPlay 2 realtime PCM audio and `setVolume` through `RaopStream` on the Apple TV 4K (#22 phase 1); on the Apple TV HD, the full #22 phase 2 library path (`scan()` RAOP fields → `wavPcm` → `RaopStream` with stored HAP credentials): audible tone, `setVolume`, and a clean return to idle after TEARDOWN. The receiver accepted the text metadata request, but no title was seen on screen.
 An Apple TV closes the AirPlay 2 event channel while handling TEARDOWN, so the TEARDOWN reply is not read; teardown is best effort and the stream still completes.
 
 **Not verified** (protocol- or fixture-tested only; reports from real devices welcome):
@@ -831,7 +831,7 @@ An Apple TV closes the AirPlay 2 event channel while handling TEARDOWN, so the T
 - Companion-only devices, legacy Apple TV 2/3 (DMAP) and standalone MRP on tvOS < 15. No such devices were available.
 - Text entry and text-focus events. They need someone watching the screen.
 - Legacy RAOP audio streaming and legacy PIN pairing (`LegacyPairSetup`, H3). No legacy RAOP receiver was available; Apple TVs use HAP pairing instead.
-- HomePods (transient pairing) and AirPlay 2 text metadata on the Apple TV 4K (#22).
+- HomePods (transient pairing) and AirPlay 2 text metadata on screen: the Apple TV HD accepted it but showed nothing, and the Apple TV 4K is untested (#22).
 
 ## How it works
 
