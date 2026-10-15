@@ -1,10 +1,9 @@
-/** Authenticated AirPlay 2 URL playback. */
+/** Authenticated AirPlay 2 URL playback over the tvOS 18+ remote-control queue. */
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { isIPv6, type Socket } from 'node:net';
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
-import plist from 'plist';
 import { connectSocket, hostForURL, parseHTTPMessage, type ParsedHTTP } from './connection.js';
 import { PairVerify } from './auth/pair-verify.js';
 import type { HAPCredentials } from './auth/types.js';
@@ -19,12 +18,23 @@ const MAX_REPLY_BYTES = 1024 * 1024;
 /** bplist-creator exposes Real at runtime, but its bundled declaration omits it. */
 const PlistReal = (bplistCreator as typeof bplistCreator & { Real: new (value: number) => object }).Real;
 
-/** Receiver status; idle means no duration is reported (including startup buffering). */
+/** Receiver playbackInfo; duration/position are seconds and absent until the receiver reports them. */
 export interface AirPlayPlaybackStatus {
-  state: 'playing' | 'paused' | 'idle';
+  /** `loading` covers startup buffering and unreachable media alike; `stopped` follows the end of the item. */
+  state: 'loading' | 'playing' | 'paused' | 'stopped';
   duration?: number;
   position?: number;
   rate?: number;
+}
+
+/**
+ * Seconds from a CMTime dict ({ value, timescale, flags }); undefined unless flags marks it valid.
+ * Nanosecond values pass 2^32 within seconds; bplist-parser >= 0.5 is required to decode them as 64-bit.
+ */
+function cmTime(time: unknown): number | undefined {
+  const { value, timescale, flags } = (time ?? {}) as Record<string, unknown>;
+  if (typeof value !== 'number' || typeof timescale !== 'number' || timescale <= 0 || !(Number(flags) & 1)) return undefined;
+  return value / timescale;
 }
 
 /** One URL playback session. Keep it open while playing; close stops playback and frees all resources. */
@@ -43,19 +53,28 @@ export class AirPlayPlaybackSession {
   private queue: Promise<unknown> = Promise.resolve();
   private started = false;
   private closed = false;
-  private readonly sessionId = randomUUID().toLowerCase();
+  private readonly sessionId = randomUUID().toUpperCase();
+  /** Stream ID from the type-130 SETUP; addresses every /command. */
+  private streamId = '1';
+  /** Last playbackState pushed on the event channel (loading/playing/paused/stopped). */
+  private pushedState?: string;
+  private messageId = 0;
+  /** playbackInfo requests awaiting their event-channel response, by messageID; close() rejects them. */
+  private infoWaiters = new Map<number, { resolve: (info: Record<string, unknown>) => void; reject: (error: Error) => void }>();
   private readonly dacp = randomBytes(8).toString('hex');
   private readonly rtspId = Math.floor(Math.random() * 0xffffffff);
   private failure?: Error;
 
   constructor(private host: string, private port: number, private credentials: HAPCredentials) {}
 
-  /** Start a reachable HTTP(S) media URL. Resolves when accepted, not when media ends; position is seconds. */
+  /** Queue a reachable HTTP(S) media URL from the start. Resolves when accepted, not when media starts or ends; position must be 0. */
   async playUrl(url: string, position = 0): Promise<void> {
     let parsed: URL;
     try { parsed = new URL(url); } catch { throw new Error('Invalid media URL'); }
     if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Media URL must use HTTP or HTTPS');
     if (!Number.isFinite(position) || position < 0) throw new Error('Position must be non-negative seconds');
+    // tvOS 26 starts queued items at 0 regardless of Start-Position-Seconds; fail rather than mislead.
+    if (position !== 0) throw new Error('Nonzero start position is not supported by current receivers');
     if (this.started || this.closed) throw new Error('Playback session already started or closed');
     this.started = true;
     try {
@@ -106,6 +125,7 @@ export class AirPlayPlaybackSession {
             plain = Buffer.from(plain.subarray(message.totalSize));
             const protocol = message.startLine.split(' ')[2];
             if (!['RTSP/1.0', 'HTTP/1.1'].includes(protocol)) throw new Error('Invalid event request');
+            this.handleEvent(message.body);
             events.write(eventCipher.encrypt(Buffer.from(`${protocol} 200 OK\r\nContent-Length: 0\r\nAudio-Latency: 0\r\n${message.headers.cseq ? `CSeq: ${message.headers.cseq}\r\n` : ''}${message.headers.server ? `Server: ${message.headers.server}\r\n` : ''}\r\n`)));
           }
         } catch (error) { this.fail(error as Error); }
@@ -114,36 +134,64 @@ export class AirPlayPlaybackSession {
       events.on('close', () => { if (!this.closed) this.fail(new Error('Playback event connection closed')); });
       await this.request('POST', '/feedback', 'RTSP/1.0');
       await this.request('RECORD', this.uri, 'RTSP/1.0');
-      await this.request('POST', '/play', 'HTTP/1.1', bplistCreator({
-        'Content-Location': parsed.href, 'Start-Position-Seconds': new PlistReal(position), uuid: randomUUID(), streamType: 1,
-        mediaType: 'file', mightSupportStorePastisKeyRequests: true, playbackRestrictions: 0,
-        secureConnectionMs: 22, volume: new PlistReal(1), infoMs: 122, connectMs: 18, authMs: 0, bonjourMs: 0,
-        referenceRestrictions: 3, SenderMACAddress: mac, model: 'iPhone14,3', postAuthMs: 0,
-        clientBundleID: 'dev.node-atv', clientProcName: 'dev.node-atv', osBuildVersion: '20G1116', rate: new PlistReal(1),
-      }), { 'X-Apple-ProtocolVersion': '1', 'X-Apple-Session-ID': this.sessionId, 'X-Apple-Stream-ID': '1' });
-      await this.request('PUT', '/setProperty?isInterestedInDateRange', 'RTSP/1.0', bplistCreator({ value: true }));
-      await this.request('PUT', '/setProperty?actionAtItemEnd', 'RTSP/1.0', bplistCreator({ value: 0 }));
-      await this.request('POST', '/rate?value=1.000000', 'RTSP/1.0');
-      for (const name of ['forwardEndTime', 'reverseEndTime']) await this.request('PUT', `/setProperty?${name}`, 'RTSP/1.0', bplistCreator({ value: { flags: 0, value: 0, epoch: 0, timescale: 0 } }));
+      // tvOS 18+ answers the older /play + /playback-info flow with 500. URL playback now queues an item over a
+      // remote-control stream; state is pushed on the event channel.
+      const stream = parseBuffer((await this.request('SETUP', this.uri, 'RTSP/1.0', bplistCreator({ streams: [{
+        type: 130, controlType: 1, channelID: randomUUID().toUpperCase(), clientUUID: randomUUID().toUpperCase(),
+        clientTypeUUID: 'A6B27562-B43A-4F2D-B75F-82391E250194',
+      }] }))).body)[0] as { streams?: Array<{ streamID?: unknown }> };
+      const streamId = stream?.streams?.[0]?.streamID;
+      if (typeof streamId !== 'number' && typeof streamId !== 'string') throw new Error('SETUP missing remote-control streamID');
+      this.streamId = String(streamId);
+      await this.command({ type: 'insertPlayQueueItem', item: { uuid: randomUUID().toUpperCase(), mediaType: 'file', 'Content-Location': parsed.href } });
+      await this.command({ type: 'setProperty', property: 'actionAtItemEnd', value: 1 });
+      await this.command({ type: 'setRate', rate: new PlistReal(1) });
       this.heartbeat = setInterval(() => {
         if (!this.pending) void this.request('POST', '/feedback', 'RTSP/1.0').catch(error => this.fail(error));
       }, 2000);
     } catch (error) { this.fail(error as Error); throw error; }
   }
 
-  /** Fetch receiver /playback-info; rejects protocol/media errors and closes the failed session. */
+  /** Most recent playbackState the receiver pushed, without a round trip; undefined before the first push. */
+  get state(): string | undefined { return this.pushedState; }
+
+  /** Ask the receiver for playbackInfo over /command; rejects protocol/media errors and closes the failed session. */
   async getStatus(): Promise<AirPlayPlaybackStatus> {
     if (this.failure) throw this.failure;
     if (!this.socket || !this.cipher) throw new Error('Playback session not connected');
+    const messageID = ++this.messageId;
     try {
-      const reply = await this.request('GET', '/playback-info', 'HTTP/1.1');
-      const info = reply.body.length ? (reply.body.subarray(0, 6).toString() === 'bplist'
-        ? parseBuffer(reply.body)[0] : plist.parse(reply.body.toString('utf8'))) as Record<string, unknown> : {};
-      if (!info || typeof info !== 'object' || Array.isArray(info)) throw new Error('Invalid playback status');
+      const reply = new Promise<Record<string, unknown>>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Timeout waiting for playbackInfo')), 5000);
+        this.infoWaiters.set(messageID, { resolve: info => { clearTimeout(timer); resolve(info); }, reject: error => { clearTimeout(timer); reject(error); } });
+      });
+      reply.catch(() => {}); // Observed below; avoids an unhandled rejection if the command itself fails first.
+      await this.command({ type: 'playbackInfo', kind: 'request', messageID });
+      const info = await reply;
       if (info.error) { const error = info.error as Record<string, unknown>; throw new Error(`Playback error ${error.code ?? 'unknown'} (${error.domain ?? 'unknown domain'})`); }
-      for (const field of ['duration', 'position', 'rate']) if (info[field] !== undefined && (typeof info[field] !== 'number' || !Number.isFinite(info[field]))) throw new Error(`Invalid playback ${field}`);
-      return { state: info.duration === undefined ? 'idle' : info.rate === 0 ? 'paused' : 'playing', duration: info.duration as number | undefined, position: info.position as number | undefined, rate: info.rate as number | undefined };
+      // Before the queued item is ready, tvOS replies { readyToPlay: false, item } with no playbackState.
+      const state = info.playbackState ?? 'loading';
+      if (typeof state !== 'string' || !['loading', 'playing', 'paused', 'stopped'].includes(state)) throw new Error('Invalid playback state');
+      if (info.rate !== undefined && (typeof info.rate !== 'number' || !Number.isFinite(info.rate))) throw new Error('Invalid playback rate');
+      return Object.fromEntries(Object.entries({ state, duration: cmTime(info.duration), position: cmTime(info.position), rate: info.rate }).filter(([, v]) => v !== undefined)) as unknown as AirPlayPlaybackStatus;
     } catch (error) { this.fail(error as Error); throw error; }
+    finally { this.infoWaiters.delete(messageID); }
+  }
+
+  /** Decode one event-channel /command: params.data holds a nested bplist (state push or playbackInfo reply). */
+  private handleEvent(body: Buffer): void {
+    if (!body.length) return;
+    const data = (parseBuffer(body)[0] as { params?: { data?: unknown } } | undefined)?.params?.data;
+    if (!Buffer.isBuffer(data)) return; // updateInfo and other receiver notices carry no nested data.
+    const event = parseBuffer(data)[0] as Record<string, unknown>;
+    if (event.kind === 'response' && typeof event.messageID === 'number') this.infoWaiters.get(event.messageID)?.resolve(event.info as Record<string, unknown> ?? {});
+    else if (event.type === 'playbackState' && typeof event.name === 'string') this.pushedState = event.name;
+  }
+
+  /** POST a remote-control command; the receiver expects its plist nested as params.data. */
+  private command(data: Record<string, unknown>): Promise<ParsedHTTP> {
+    return this.request('POST', '/command', 'HTTP/1.1', bplistCreator({ params: { data: bplistCreator(data) } }),
+      { 'X-Apple-ProtocolVersion': '1', 'X-Apple-Session-ID': this.sessionId, 'X-Apple-StreamID': this.streamId });
   }
 
   /** Stop by closing the dedicated connection; idempotent. */
@@ -153,6 +201,8 @@ export class AirPlayPlaybackSession {
     this.heartbeat = undefined;
     this.pending?.reject(this.failure ?? new Error('Playback session closed'));
     this.pending = undefined;
+    for (const waiter of this.infoWaiters.values()) waiter.reject(this.failure ?? new Error('Playback session closed'));
+    this.infoWaiters.clear();
     this.socket?.destroy(); this.events?.destroy();
     this.socket = undefined; this.events = undefined;
     this.cancelTimingBind?.(); this.cancelTimingBind = undefined;

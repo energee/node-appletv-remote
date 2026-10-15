@@ -326,21 +326,22 @@ import { AirPlayPlaybackSession } from 'node-appletv-remote';
 
 const playback = new AirPlayPlaybackSession(device.address, device.port, credentials);
 try {
-  await playback.playUrl('https://media.example/movie.mp4', 12.5); // start seconds
-  const status = await playback.getStatus(); // playing / paused / idle, duration, position, rate
+  await playback.playUrl('https://media.example/movie.mp4'); // starts at 0; nonzero start positions are rejected
+  const status = await playback.getStatus(); // loading / playing / paused / stopped, duration, position, rate
+  console.log(playback.state); // last state the receiver pushed, without a round trip
   // Keep this session open while playing; poll getStatus() as needed.
 } finally {
   playback.close(); // stops playback; releases TCP, event, UDP timing and heartbeat resources
 }
 ```
 
-This is actual authenticated media playback, not `launchApp(url)`. The receiver must be able to fetch the HTTP(S) URL directly; web pages and app deep links are not media URLs. AirPlay HAP credentials are supplied by the caller; this API does not read credential files or pair automatically. Each session starts one URL and cannot be reused after closing. `playUrl` resolves when the receiver accepts the setup/play/rate requests, not when playback completes. `idle` means the receiver reports no duration and can also mean startup buffering, so it is not proof that playback ended.
+This is actual authenticated media playback, not `launchApp(url)`. The receiver must be able to fetch the HTTP(S) URL directly; web pages and app deep links are not media URLs. AirPlay HAP credentials are supplied by the caller; this API does not read credential files or pair automatically. Each session starts one URL and cannot be reused after closing. `playUrl` resolves when the receiver accepts the queue and rate commands, not when playback starts or completes. `loading` covers startup buffering and media the receiver cannot fetch alike: tvOS reports no error for an unreachable URL, it just stays `loading`. `stopped` follows the end of the item. `duration` and `position` (seconds) are omitted until the receiver reports them. A nonzero start position throws, because tvOS 26 ignores it and always starts at 0.
 
 Timing replies are restricted to the connected TCP peer address and, when returned by SETUP, its timing port. Only 32-byte RTP timing requests (payload type `0x52`, or `0xd2` with the marker bit) are answered, whatever their first (version) byte; the reply echoes that byte. Other 32-byte packets get no reply. UDP timing-reply send errors are ignored; timing socket failures still close the session.
 
-HTTP errors, connection loss, malformed status, and `/playback-info` media errors reject and close the failed session. Background heartbeat failures close the session and surface on the next `getStatus`. Requests have a five-second timeout (including URL acceptance); receivers taking longer to probe media will fail. Replies are limited to 1 MiB; duplicate Content-Length framing headers and all Transfer-Encoding responses are rejected. Binary and XML playback-info property lists are supported. A rejected `/play` is surfaced immediately; the authenticated SETUP sequence is not retried.
+HTTP errors, connection loss, malformed status, and media errors reported in `playbackInfo` reject and close the failed session. Background heartbeat failures close the session and surface on the next `getStatus`. Requests, and each `getStatus` reply on the event channel, have a five-second timeout. Replies are limited to 1 MiB; duplicate Content-Length framing headers and all Transfer-Encoding responses are rejected. A rejected command is surfaced immediately rather than retried.
 
-The implementation uses same-socket HAP verification, NTP/event SETUP, feedback, RECORD, binary-plist `/play`, rate/property requests, and `/playback-info`. Stop closes the dedicated connection; it does not send a teardown command. Tests use a synthetic loopback receiver and generated keys. **Media/codec compatibility and URL playback on physical hardware remain unverified.** IPv6 receivers are supported: the timing socket binds the matching family and the Host header and RTSP URI bracket the literal. Legacy AirPlay 1, mirroring, DRM, local-file hosting, and transcoding are not supported.
+Sessions use same-socket HAP verification, NTP/event SETUP, feedback and RECORD. tvOS 18 and later answer the older `/play` + `/playback-info` flow with HTTP 500, so playback uses the remote-control queue: a type-130 stream SETUP, then `POST /command` (`insertPlayQueueItem`, `setProperty`, `setRate`, `playbackInfo`), with state pushed back on the encrypted event channel. Receivers that only support the older flow are not supported. Stop closes the dedicated connection; it does not send a teardown command. Tests use a synthetic loopback receiver and generated keys. Verified on an Apple TV 4K and an Apple TV HD running tvOS 26.6 with an MP4 URL; other media formats and receivers remain unverified. IPv6 receivers are supported: the timing socket binds the matching family and the Host header and RTSP URI bracket the literal. Legacy AirPlay 1, mirroring, DRM, local-file hosting, and transcoding are not supported.
 
 ### Legacy RAOP audio (experimental, partial #22)
 
