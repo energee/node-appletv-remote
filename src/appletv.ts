@@ -564,8 +564,8 @@ export class AppleTV extends EventEmitter {
 
   /** Track DeviceInfo selected groups; reject UUID-correlated envelope errors regardless of discriminator. */
   private handleOutputMessage(msg: Record<string, unknown>): void {
-    if (msg.identifier === this.pendingRouting?.identifier && msg.errorCode) {
-      this.pendingRouting?.reject(new Error(`Output routing rejected: ${msg.errorDescription ?? msg.errorCode}`));
+    if (this.pendingRouting && msg.identifier !== undefined && msg.identifier === this.pendingRouting.identifier && msg.errorCode) {
+      this.pendingRouting.reject(new Error(`Output routing rejected: ${msg.errorDescription ?? msg.errorCode}`));
       return;
     }
     // Types 65/66 update/remove output-device records; neither confirms the selected group.

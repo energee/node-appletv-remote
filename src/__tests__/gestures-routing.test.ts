@@ -325,6 +325,12 @@ describe('gesture cancellation and input lifecycle', () => {
   });
 });
 
+it('does not treat an uncorrelated envelope error as a routing rejection when nothing is pending', () => {
+  const atv = device();
+  (atv as any).handleMRPMessage({ type: 15, errorCode: 1, '.deviceInfoMessage': { groupedDevices: [{ name: 'S', deviceUID: 's' }] } });
+  expect(atv.outputDevices).toEqual([{ name: 'S', identifier: 's' }]);
+});
+
 it('retains both touch teardown errors and clears registrations', async () => {
   const atv = device(); const { conn } = companion(atv);
   await atv.touchAction(0, 0, 1);
