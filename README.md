@@ -661,7 +661,7 @@ Touch coordinates must be integers in 0..1000; swipes require an integer duratio
 
 Output listing reflects DeviceInfo/DeviceInfoUpdate selected groups, not discovery of available speakers. Routing IDs are each receiver's AirPlay `psi` TXT value, exposed by `scan()` as `airplayPsi`; on tvOS 26 its MAC-style `deviceid` and its `pi` are ignored and the operation times out. IDs must be unique nonempty strings; only `setOutputDevices([])` accepts an empty list. One routing operation may be pending at a time. Routing sends `ModifyOutputContextRequest` (message type 48, protobuf extension 52), with both regular and cluster-aware device IDs. Types 65 (`UpdateOutputDevice`) and 66 (`RemoveOutputDevices`) are not routing acknowledgements; unsolicited messages of these types neither confirm nor reject an operation. A nonzero envelope error rejects routing only when its identifier matches the outgoing UUID, regardless of message type. Routing resolves once the reported group matches the operation (immediately if it already does; for `set`, the reporting group leader is not counted unless requested), and rejects on failed transmission/connection close or lack of confirmation within five seconds. It never optimistically changes the output list. A successful write or non-error envelope alone is not confirmation.
 
-Hardware gates still open: Companion button actions, touch clicks, release on cancellation/disconnect, `setOutputDevices`, and UUID-correlated routing errors. No hardware or stored credentials are accessed by the regression tests.
+Button actions, touch clicks and swipes, cancellation release, and output add/remove are hardware-verified; `setOutputDevices` and UUID-correlated routing errors are not (see [Hardware verification status](#hardware-verification-status)). No hardware or stored credentials are accessed by the regression tests.
 
 ### Events
 
@@ -689,6 +689,20 @@ descriptor fields only) and a `uniqueIdentifier` UUID on every envelope (field 8
 A message with no type field, only `identifier` and `uniqueIdentifier`, also arrives on
 connect. Typeless messages that carry our identifier are usually replies to our requests
 (#10), so this is most likely a reply to a handshake request; that is not confirmed.
+
+## Hardware verification status
+
+Checked on an Apple TV 4K (AppleTV6,2) and an Apple TV HD (AppleTV5,3), both tvOS 26.6, in #30.
+
+**Verified:** button tap/double-tap/hold; touch swipes, and finger release when a swipe is cancelled; Companion apps, accounts and power; app launch by URL; media commands; IPv6 (global, ULA and link-local) for MRP and Companion; output add/remove through a receiver's `psi`; volume capability reporting (#39); MRP message types 104/105 (#40).
+
+**Not verified** (protocol- or fixture-tested only; reports from real devices welcome):
+
+- Routing errors matched by UUID, and `setOutputDevices`. tvOS 26.6 silently ignores an unknown output ID, so the only failure signal observed is the five-second timeout (#46).
+- Reading absolute volume. Neither test setup offers it (#39).
+- Companion-only devices, legacy Apple TV 2/3 (DMAP) and standalone MRP on tvOS < 15. No such devices were available.
+- Text entry and text-focus events. They need someone watching the screen.
+- Legacy RAOP audio streaming. No legacy RAOP receiver was available.
 
 ## How it works
 
