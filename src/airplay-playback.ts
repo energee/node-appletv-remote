@@ -54,7 +54,7 @@ export class AirPlayPlaybackSession {
   private closed = false;
   private readonly sessionId = randomUUID().toUpperCase();
   /** Stream ID from the type-130 SETUP; addresses every /command. */
-  private streamId = '1';
+  private streamId = '';
   /** Last playbackState pushed on the event channel (loading/playing/paused/stopped). */
   private pushedState?: string;
   private messageId = 0;
@@ -173,7 +173,7 @@ export class AirPlayPlaybackSession {
       if (typeof received !== 'string' || !['loading', 'playing', 'paused', 'stopped'].includes(received)) throw new Error('Invalid playback state');
       const state = received === 'playing' || received === 'paused' ? received : 'idle';
       if (info.rate !== undefined && (typeof info.rate !== 'number' || !Number.isFinite(info.rate))) throw new Error('Invalid playback rate');
-      return Object.fromEntries(Object.entries({ state, duration: cmTime(info.duration), position: cmTime(info.position), rate: info.rate }).filter(([, v]) => v !== undefined)) as unknown as AirPlayPlaybackStatus;
+      return { state, duration: cmTime(info.duration), position: cmTime(info.position), rate: info.rate as number | undefined };
     } catch (error) { this.fail(error as Error); throw error; }
     finally { this.infoWaiters.delete(messageID); }
   }
@@ -199,9 +199,10 @@ export class AirPlayPlaybackSession {
     this.closed = true;
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = undefined;
-    this.pending?.reject(this.failure ?? new Error('Playback session closed'));
+    const reason = this.failure ?? new Error('Playback session closed');
+    this.pending?.reject(reason);
     this.pending = undefined;
-    for (const waiter of this.infoWaiters.values()) waiter.reject(this.failure ?? new Error('Playback session closed'));
+    for (const waiter of this.infoWaiters.values()) waiter.reject(reason);
     this.infoWaiters.clear();
     this.socket?.destroy(); this.events?.destroy();
     this.socket = undefined; this.events = undefined;

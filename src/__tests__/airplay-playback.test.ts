@@ -187,8 +187,15 @@ describe('AirPlay URL playback', () => {
   }, 10000);
   it('times out an unanswered receiver request and tears down', async () => {
     const fake = await receiver({ holdStatus: true }); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
-    try { await playback.playUrl('https://example.org/movie.mp4'); await expect(playback.getStatus()).rejects.toThrow(/Timeout/); await expect(playback.getStatus()).rejects.toThrow(/Timeout/); }
-    finally { playback.close(); await fake.close(); }
+    try {
+      await playback.playUrl('https://example.org/movie.mp4');
+      // Fake only timeouts after setup so the 5 s playbackInfo wait doesn't run in real time.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const status = expect(playback.getStatus()).rejects.toThrow(/Timeout/);
+      await vi.advanceTimersByTimeAsync(5000);
+      await status;
+      await expect(playback.getStatus()).rejects.toThrow(/Timeout/);
+    } finally { vi.useRealTimers(); playback.close(); await fake.close(); }
   }, 10000);
   it('rejects duplicate Content-Length before parser last-header handling', async () => {
     const fake = await receiver({ duplicateLength: true }); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
@@ -261,16 +268,10 @@ describe('AirPlay URL playback', () => {
       await Promise.all([first, second]);
     } finally { playback.close(); await fake.close(); }
   });
-  it('sends a start position as the item Start-Position CMTime', async () => {
+  // A start position is sent as the item Start-Position CMTime; 0 omits it.
+  it.each([[12.5, { value: 12500, timescale: 1000, flags: 1, epoch: 0 }], [0, undefined]])('sends start position %s as Start-Position', async (position, expected) => {
     const fake = await receiver(); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
-    try {
-      await playback.playUrl('https://example.org/movie.mp4', 12.5);
-      expect(fake.commands[0].item).toMatchObject({ 'Start-Position': { value: 12500, timescale: 1000, flags: 1, epoch: 0 } });
-    } finally { playback.close(); await fake.close(); }
-  });
-  it('omits Start-Position when starting from 0', async () => {
-    const fake = await receiver(); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
-    try { await playback.playUrl('https://example.org/movie.mp4'); expect(fake.commands[0].item).not.toHaveProperty('Start-Position'); }
+    try { await playback.playUrl('https://example.org/movie.mp4', position); expect((fake.commands[0].item as Record<string, unknown>)['Start-Position']).toEqual(expected); }
     finally { playback.close(); await fake.close(); }
   });
   // getStatus keeps its original playing/paused/idle contract; idle covers loading (no duration yet) and stopped.
@@ -289,7 +290,7 @@ describe('AirPlay URL playback', () => {
     try {
       await playback.playUrl('https://example.org/movie.mp4');
       fake.push({ type: 'playbackState', name: 'stopped', reason: 'ended' });
-      await vi.waitFor(() => expect(playback.state).toBe('stopped'));
+      await vi.waitFor(() => expect(playback.state).toBe('stopped'), { interval: 5 });
     } finally { playback.close(); await fake.close(); }
   });
   it.each(['file:///private/movie.mp4', 'not-a-url'])('rejects unsupported URL before connecting: %s', async url => {
