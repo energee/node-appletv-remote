@@ -1558,6 +1558,7 @@ export const MRP_SCHEMA: Record<string, unknown> = {
             "UPDATE_CONTENT_ITEM_MESSAGE": 56,
             "GET_VOLUME_CONTROL_CAPABILITIES_MESSAGE": 62,
             "GET_VOLUME_CONTROL_CAPABILITIES_RESULT_MESSAGE": 63,
+            "VOLUME_CONTROL_CAPABILITIES_DID_CHANGE_MESSAGE": 64,
             "UPDATE_OUTPUT_DEVICE_MESSAGE": 65,
             "REMOVE_OUTPUT_DEVICES_MESSAGE": 66,
             "SET_DEFAULT_SUPPORTED_COMMANDS_MESSAGE": 72,
@@ -2148,6 +2149,29 @@ export const MRP_SCHEMA: Record<string, unknown> = {
         "volumeCapabilities": {
           "type": "int32",
           "id": 2
+        }
+      }
+    },
+    "volumeControlCapabilitiesDidChangeMessage": {
+      "edition": "proto2",
+      "type": "VolumeControlCapabilitiesDidChangeMessage",
+      "id": 68,
+      "extend": "ProtocolMessage"
+    },
+    "VolumeControlCapabilitiesDidChangeMessage": {
+      "edition": "proto2",
+      "fields": {
+        "capabilities": {
+          "type": "VolumeControlAvailabilityMessage",
+          "id": 1
+        },
+        "endpointUID": {
+          "type": "string",
+          "id": 3
+        },
+        "outputDeviceUID": {
+          "type": "string",
+          "id": 4
         }
       }
     },

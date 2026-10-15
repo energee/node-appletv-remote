@@ -234,7 +234,18 @@ describe('sanitized MRP diagnostics', () => {
     await (conn as any).initMRPProtocol();
     expect(observed.map(item => [item.direction, item.type, item.matchedRequest])).toEqual([
       ['send', 15, undefined], ['receive', 15, true], ['send', 38, undefined], ['send', 16, undefined], ['send', 24, undefined],
+      ['send', 62, undefined],
     ]);
+    conn.close();
+  });
+
+  it('reports volume capability replies and tvOS 26 client properties', async () => {
+    const conn = connection();
+    const observed: Record<string, unknown>[] = [];
+    conn.on('mrp-diagnostic', diagnostic => observed.push(diagnostic));
+    for (const type of [MessageType.GetVolumeControlCapabilitiesResult, MessageType.VolumeControlCapabilitiesDidChange,
+      MessageType.PlayerClientProperties, MessageType.OriginClientProperties]) await reply(conn, undefined, type);
+    expect(observed.map(item => item.type)).toEqual([63, 64, 104, 105]);
     conn.close();
   });
 });

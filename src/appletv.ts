@@ -202,6 +202,30 @@ export class AppleTV extends EventEmitter {
   /** Last normalized active-player snapshot; also emitted as nowPlaying. */
   nowPlaying = new NowPlayingInfo({ hasPlayback: false }, {});
 
+  /**
+   * Volume capabilities arrive pushed (type 17), as the reply to our handshake request (type 63),
+   * or as a later change for one output device (type 64, applied only for ours). A pushed type 17
+   * without fields clears them; a type 63 or 64 without capabilities leaves earlier evidence alone.
+   */
+  private handleVolumeCapabilities(msg: Record<string, unknown>): void {
+    let volume: Record<string, unknown> | undefined;
+    if (msg.type === MessageType.VolumeControlAvailability) {
+      volume = msg['.volumeControlAvailabilityMessage'] as Record<string, unknown> | undefined;
+      this.volumeAvailability = volume ? { ...this.volumeAvailability, ...volume } : undefined;
+      this.emit('featureAvailability');
+      return;
+    }
+    if (msg.type === MessageType.GetVolumeControlCapabilitiesResult) {
+      volume = (msg['.getVolumeControlCapabilitiesResultMessage'] as { capabilities?: Record<string, unknown> } | undefined)?.capabilities;
+    } else if (msg.type === MessageType.VolumeControlCapabilitiesDidChange) {
+      const change = msg['.volumeControlCapabilitiesDidChangeMessage'] as { capabilities?: Record<string, unknown>; outputDeviceUID?: string } | undefined;
+      if (change?.outputDeviceUID && change.outputDeviceUID === this.outputDeviceUID) volume = change.capabilities;
+    }
+    if (!volume) return;
+    this.volumeAvailability = { ...this.volumeAvailability, ...volume };
+    this.emit('featureAvailability');
+  }
+
   /** Advertised command: missing = unsupported, disabled = temporarily unavailable. */
   featureAvailability(feature: Feature): FeatureAvailability {
     const commands: Partial<Record<Feature, Command>> = {
@@ -244,7 +268,7 @@ export class AppleTV extends EventEmitter {
   private activeTouch?: { x: number; y: number };
   private gestureController?: AbortController;
   private gestureBusy = false;
-  /** Last absolute volume (0..100) reported by VolumeDidChange; undefined until one arrives, which never happens when `featureAvailability('setVolume')` is not `supported`. */
+  /** Last absolute volume (0..100) reported by VolumeDidChange for our output device; undefined until one arrives. A TV that reports no absolute volume control (`setVolume` unavailable or unsupported) has not been seen to send one. */
   volume?: number;
   /** Last power state from fetchPowerState() or a SystemStatus event. */
   powerState: PowerState = PowerState.Unknown;
@@ -1005,14 +1029,7 @@ export class AppleTV extends EventEmitter {
     const field = PLAYER_STATE_FIELDS[msg.type as MessageType];
     const payload = field ? msg[field] as Record<string, unknown> | undefined : undefined;
     if (payload && this.playerState.update(msg.type as number, payload)) this.publishNowPlaying();
-    // Volume capabilities arrive pushed (type 17) or as the reply to our handshake request (type 63).
-    if (msg.type === MessageType.VolumeControlAvailability || msg.type === MessageType.GetVolumeControlCapabilitiesResult) {
-      const volume = msg.type === MessageType.VolumeControlAvailability
-        ? msg['.volumeControlAvailabilityMessage'] as Record<string, unknown> | undefined
-        : (msg['.getVolumeControlCapabilitiesResultMessage'] as { capabilities?: Record<string, unknown> } | undefined)?.capabilities;
-      this.volumeAvailability = volume ? { ...this.volumeAvailability, ...volume } : undefined;
-      this.emit('featureAvailability');
-    }
+    this.handleVolumeCapabilities(msg);
     this.handleOutputMessage(msg);
 
     // DeviceInfo (type 15): remember the output device for SetVolume (clusterID or deviceUID)

@@ -385,6 +385,29 @@ describe('runtime availability', () => {
     expect(atv.featureAvailability('setVolume')).toBe(setVolume);
     expect(atv.featureAvailability('volumeUp')).toBe(volumeUp);
   });
+  it('keeps pushed volume capabilities when the handshake reply carries none', async () => {
+    const atv = device();
+    deliver(atv, MessageType.DeviceInfo, 'deviceInfoMessage', { deviceUID: 'dev' });
+    deliver(atv, MessageType.VolumeControlAvailability, 'volumeControlAvailabilityMessage', { volumeControlAvailable: true, volumeCapabilities: 3 });
+    // Bare type 63, then an errored type 63 (errorCode 1), both without extension 67.
+    (atv as any).handleMRPMessage(await MRPMessage.decode(Buffer.from('083f1202696d', 'hex')));
+    (atv as any).handleMRPMessage(await MRPMessage.decode(Buffer.from('083f1202696d1801', 'hex')));
+    expect(atv.featureAvailability('setVolume')).toBe('supported');
+  });
+  it('applies VolumeControlCapabilitiesDidChange only for our output device', async () => {
+    const atv = device();
+    deliver(atv, MessageType.DeviceInfo, 'deviceInfoMessage', { deviceUID: 'dev' });
+    deliver(atv, MessageType.VolumeControlAvailability, 'volumeControlAvailabilityMessage', { volumeControlAvailable: true, volumeCapabilities: 1 });
+    // Type 64, extension 68: {capabilities: {available 1, capabilities 3}, outputDeviceUID}.
+    const changed = (uid: string) => {
+      const body = Buffer.concat([Buffer.from('0a0408011003', 'hex'), Buffer.from([0x22, uid.length]), Buffer.from(uid)]);
+      return Buffer.concat([Buffer.from('0840a204', 'hex'), Buffer.from([body.length]), body]);
+    };
+    (atv as any).handleMRPMessage(await MRPMessage.decode(changed('other')));
+    expect(atv.featureAvailability('setVolume')).toBe('unsupported');
+    (atv as any).handleMRPMessage(await MRPMessage.decode(changed('dev')));
+    expect(atv.featureAvailability('setVolume')).toBe('supported');
+  });
 });
 
 it('rejects a wire-encoded envelope error despite inner success', async () => {

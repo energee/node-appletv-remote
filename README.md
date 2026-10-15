@@ -168,17 +168,19 @@ currently disabled), `unsupported` (missing from a received command list), or
 `unknown` (no runtime evidence). Media commands use the active player's command
 list plus client defaults. Volume uses explicit relative/absolute capability
 flags and the known output UID. The flags come from a pushed VolumeControlAvailability
-(type 17) or from the reply (type 63) to the GetVolumeControlCapabilities request the
-handshake sends, since tvOS 26 does not always push type 17. Other public capabilities remain `unknown` rather
+(type 17), from the reply (type 63) to the GetVolumeControlCapabilities request the
+handshake sends (tvOS 26 does not always push type 17), and from
+VolumeControlCapabilitiesDidChange (type 64) pushes for our output device. A type 63 or
+64 without capabilities leaves earlier flags unchanged. Other public capabilities remain `unknown` rather
 than being guessed from model or service presence. Availability is advisory and
 may change at any time; device errors still reject. The event has no payload:
 re-query the capabilities relevant to your application.
 
-**Volume on tvOS 26 (#39):** `volume` stays `undefined` and the `volume` event never
-fires unless the TV offers absolute volume; `setVolume` sends but nothing changes
-otherwise. Check `featureAvailability('setVolume')` first. On tvOS 26.6 an AppleTV6,2
-whose TV volume is not under its control reports volume control unavailable, and an
-AppleTV5,3 reports relative only (`volumeUp`/`volumeDown` supported, `setVolume`
+**Volume on tvOS 26 (#39):** on the tested devices `volume` stayed `undefined` and the
+`volume` event never fired when the TV offered no absolute volume, and `setVolume` sent
+but changed nothing. Check `featureAvailability('setVolume')` first. On tvOS 26.6 an
+AppleTV6,2 reports volume control unavailable (most likely because the TV's volume is not
+under its control over CEC or IR; not confirmed), and an AppleTV5,3 reports relative only (`volumeUp`/`volumeDown` supported, `setVolume`
 unsupported). Both answer a GetVolume request with 0 for every output UID, and their
 UpdateOutputDevice descriptors carry no volume.
 
@@ -203,7 +205,9 @@ error reply also settles them (#10).
 Register `mrpDiagnostic` **before** `connect()` on an existing `AppleTV` instance.
 Import `MRPDiagnostic` as a type from `node-appletv-remote` when annotating listeners.
 Use a bounded capture connection; its in-memory token map keeps the 1024 most recently used identifiers (LRU), so recurring client/player tokens stay stable while request identifiers churn.
-The event emits only relevant init/state message types, direction, opaque
+The event emits only relevant init/state message types (including the
+GetVolumeControlCapabilities request, volume capability replies and changes, and tvOS 26
+types 104/105), direction, opaque
 connection-local request/client/player tokens, and `matchedRequest` on receives
 (type plus identifier match before dispatch). Missing identifiers remain omitted;
 no default route is invented. Tokens allow equality comparisons within a connection,
@@ -593,13 +597,16 @@ atv.on('close', () => {});
 atv.on('error', (err) => {});
 ```
 
-`Message.type` is the numeric discriminator exactly as sent, even when `MessageType`
-does not name it, so `toString()` shows `Unknown(n)` with the real number. tvOS 26
+`Message.type` is the numeric discriminator sent on the wire, even when `MessageType`
+does not name it, so `toString()` shows `Unknown(n)` with the real number. A message
+without a type field also reports type 0 (`Unknown(0)`); test `'type' in msg.payload`
+to tell it from a real type 0. tvOS 26
 also sends `PlayerClientProperties` (104, extension 86), `OriginClientProperties`
 (105, extension 87), `UpdateOutputDevice` (65, extension 69, identity and volume
 descriptor fields only) and a `uniqueIdentifier` UUID on every envelope (field 85).
-A type 0 message with only `identifier` and `uniqueIdentifier` also arrives on
-connect; its meaning is unknown.
+A message with no type field, only `identifier` and `uniqueIdentifier`, also arrives on
+connect. Typeless messages that carry our identifier are usually replies to our requests
+(#10), so this is most likely a reply to a handshake request; that is not confirmed.
 
 ## How it works
 

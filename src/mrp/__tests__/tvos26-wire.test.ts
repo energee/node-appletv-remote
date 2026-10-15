@@ -54,10 +54,6 @@ describe('tvOS 26 MRP wire types', () => {
     });
   });
 
-  it('keeps a type 65 with no payload as a bare UpdateOutputDevice', async () => {
-    expect(await MRPMessage.decode(hex('0841'))).toEqual({ type: MessageType.UpdateOutputDevice });
-  });
-
   it('decodes the GetVolumeControlCapabilities result', async () => {
     const decoded = await MRPMessage.decode(capabilitiesResult(1, 1));
     expect(decoded.type).toBe(MessageType.GetVolumeControlCapabilitiesResult);

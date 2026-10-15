@@ -49,6 +49,7 @@ const PROTO_FILES = [
   'SetVolumeMessage.proto',
   'VolumeDidChangeMessage.proto',
   'GetVolumeControlCapabilitiesResultMessage.proto',
+  'VolumeControlCapabilitiesDidChangeMessage.proto',
   'UpdateOutputDeviceMessage.proto',
   'PlayerClientPropertiesMessage.proto',
   'OriginClientPropertiesMessage.proto',

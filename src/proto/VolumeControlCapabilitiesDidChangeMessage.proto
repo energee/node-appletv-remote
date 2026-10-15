@@ -1,0 +1,15 @@
+// Type 64: the TV pushes this when an output device's volume capabilities change after connect.
+syntax = "proto2";
+
+import "ProtocolMessage.proto";
+import "VolumeControlAvailabilityMessage.proto";
+
+extend ProtocolMessage {
+  optional VolumeControlCapabilitiesDidChangeMessage volumeControlCapabilitiesDidChangeMessage = 68;
+}
+
+message VolumeControlCapabilitiesDidChangeMessage {
+  optional VolumeControlAvailabilityMessage capabilities = 1;
+  optional string endpointUID = 3;
+  optional string outputDeviceUID = 4;
+}

@@ -63,6 +63,7 @@ export enum MessageType {
   UpdateContentItem = 56,
   GetVolumeControlCapabilities = 62,
   GetVolumeControlCapabilitiesResult = 63,
+  VolumeControlCapabilitiesDidChange = 64,
   UpdateOutputDevice = 65,
   RemoveOutputDevices = 66,
   SetDefaultSupportedCommands = 72,
