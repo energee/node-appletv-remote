@@ -28,6 +28,14 @@ it('rejects explicit standalone MRP when disabled and allows it without AirPlay'
   expect(createClient({ ...legacy, port: 0, mrpPort: 49152 }, 'mrp')).toBeInstanceOf(AppleTV);
 });
 
+it('selects AppleTV for a Companion-only device but still rejects explicit AirPlay (#19)', () => {
+  const companionOnly = { name: 'TV', address: '127.0.0.1', port: 0, companionPort: 49153, deviceId: 'tv', model: 'AppleTV11,1' };
+  const tv = createClient(companionOnly);
+  expect(tv).toBeInstanceOf(AppleTV);
+  expect((tv as AppleTV).companionPort).toBe(49153);
+  expect(() => createClient(companionOnly, 'airplay')).toThrow(/AirPlay/);
+});
+
 it('rejects unknown protocol overrides at runtime instead of silently selecting AirPlay', () => {
   expect(() => createClient(legacy, 'typo' as 'airplay')).toThrow(/protocol/i);
 });

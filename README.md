@@ -260,7 +260,7 @@ is identified/typed. Offline fixtures cannot establish that hardware behavior.
 advertised by its primary protocol, never by hostname or a copied instance name.
 The selected DMAP address must be shared, even if another address is listed first.
 `port` remains the AirPlay port (0 if
-none was advertised). `createClient(device)` prefers usable modern AirPlay, then enabled standalone MRP, then DMAP; explicit `'dmap'`, `'mrp'`, or `'airplay'` overrides are supported. An AirPlay
+none was advertised). `createClient(device)` prefers usable modern AirPlay, then enabled standalone MRP, then DMAP; explicit `'dmap'`, `'mrp'`, or `'airplay'` overrides are supported. A Companion-only device (no AirPlay, MRP or DMAP) gets an `AppleTV` for `connectCompanion()`; an explicit `'airplay'` request on it still throws. An AirPlay
 advertisement on an old TV does not imply modern AirPlay 2/MRP support.
 `new AppleTV(device)` handles AirPlay/standalone MRP, not DMAP, and rejects pairing/connect
 on DMAP-only devices instead of contacting port 0. Discovery labels unmatched
@@ -345,7 +345,7 @@ Timing replies are restricted to the connected TCP peer address and, when return
 
 HTTP errors, connection loss, malformed status, and `/playback-info` media errors reject and close the failed session. Background heartbeat failures close the session and surface on the next `getStatus`. Requests have a five-second timeout (including URL acceptance); receivers taking longer to probe media will fail. Replies are limited to 1 MiB; duplicate Content-Length framing headers and all Transfer-Encoding responses are rejected. Binary and XML playback-info property lists are supported. Unlike pyatv's player, a rejected `/play` is surfaced immediately rather than retrying the whole authenticated SETUP sequence.
 
-The implementation follows [pyatv 0.18.0](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600): same-socket HAP verification, NTP/event SETUP, feedback, RECORD, binary-plist `/play`, rate/property requests, and `/playback-info`. Stop closes the dedicated connection, matching `AirPlayStream.stop`; it does not send an invented teardown command. Tests use a synthetic loopback receiver and generated keys. **Media/codec compatibility and URL playback on physical hardware remain unverified.** This session currently requires an IPv4 connection. Legacy AirPlay 1, mirroring, DRM, local-file hosting, and transcoding are not supported.
+The implementation follows [pyatv 0.18.0](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600): same-socket HAP verification, NTP/event SETUP, feedback, RECORD, binary-plist `/play`, rate/property requests, and `/playback-info`. Stop closes the dedicated connection, matching `AirPlayStream.stop`; it does not send an invented teardown command. Tests use a synthetic loopback receiver and generated keys. **Media/codec compatibility and URL playback on physical hardware remain unverified.** IPv6 receivers are supported: the timing socket binds the matching family and the Host header and RTSP URI bracket the literal. Legacy AirPlay 1, mirroring, DRM, local-file hosting, and transcoding are not supported.
 
 ### Legacy RAOP audio (experimental, partial #22)
 

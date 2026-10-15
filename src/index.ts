@@ -34,7 +34,7 @@ import { AppleTV } from './appletv.js';
 import { DmapClient } from './dmap/client.js';
 import type { DiscoveredDeviceInfo } from './discovery.js';
 
-/** Prefer usable modern AirPlay, then enabled standalone MRP, then DMAP; explicit DMAP never converts HAP credentials. */
+/** Prefer usable modern AirPlay, then enabled standalone MRP, then DMAP, then Companion-only; explicit DMAP never converts HAP credentials. */
 export function createClient(info: DiscoveredDeviceInfo, protocol: 'airplay' | 'mrp'): AppleTV;
 export function createClient(info: DiscoveredDeviceInfo, protocol: 'dmap'): DmapClient;
 export function createClient(info: DiscoveredDeviceInfo): AppleTV | DmapClient;
@@ -48,7 +48,8 @@ export function createClient(info: DiscoveredDeviceInfo, protocol?: 'airplay' | 
     if (!info.mrpPort || info.mrpEnabled === false) throw new Error('No enabled standalone MRP port available');
     return new AppleTV({ ...info, port: 0 });
   }
-  if (!info.port) throw new Error('No AirPlay port available');
+  // A Companion-only device still gets an AppleTV for connectCompanion(); its MRP methods fail before any socket opens.
+  if (!info.port && !(protocol === undefined && info.companionPort)) throw new Error('No AirPlay port available');
   return new AppleTV(info);
 }
 
