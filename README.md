@@ -72,7 +72,7 @@ Oh, No! Where is my Mouth? by Pit & Penny Stories [Playing] 0.00% (YouTube)
 npm install node-appletv-remote
 ```
 
-Requires Node.js 18+ (ESM).
+Requires Node.js 20.19+ (ESM). Node 18 is end-of-life and no longer supported.
 
 ### Find and pair
 
