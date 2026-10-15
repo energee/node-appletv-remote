@@ -59,3 +59,5 @@ export type { AirPlayPlaybackStatus } from './airplay-playback.js';
 /** One-shot PCM audio streaming to legacy RAOP receivers or, with HAP `credentials`, AirPlay 2 realtime receivers (experimental, #22). */
 export { RaopStream } from './raop/stream.js';
 export type { RaopMetadata, RaopStreamOptions, RaopPcmSource } from './raop/stream.js';
+/** Validate a PCM16 stereo 44.1 kHz WAV Readable and yield its audio payload as a RaopStream source. */
+export { wavPcm } from './raop/wav.js';

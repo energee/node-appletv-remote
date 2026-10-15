@@ -523,7 +523,8 @@ await sender.stream(createReadStream('track.pcm', { highWaterMark: 65536 }), {
 
 `RaopPcmSource` is a Buffer, Node Readable, or `AsyncIterable<Buffer>` containing
 **finite, non-empty raw signed PCM16 little-endian, stereo, 44.1 kHz, interleaved
-left/right**, with no WAV header. Total length must be divisible by four. Keep
+left/right**, with no WAV header (use `wavPcm`, below, for WAV files). Total length
+must be divisible by four. Keep
 Buffer input unchanged until completion. Async-iterable chunks must be nonempty
 Buffers of at most 65,536 bytes; Node Readables are paused and read in bounded
 pieces even if Node has coalesced larger internal buffers. Arbitrary sample/packet
@@ -542,6 +543,23 @@ big-endian L16 on the wire, in 352-frame packets; the last packet is zero-padded
 negotiates ANNOUNCE/SETUP/RECORD/FLUSH, requires UDP unicast receiver ports, and
 uses a fixed 66,150-frame latency (1.5 seconds). For legacy receivers other returned
 `Audio-Latency` values are rejected rather than silently assumed compatible.
+
+**WAV input.** `wavPcm(readable)` reads a RIFF/WAVE file and yields its `data` payload
+as a `RaopPcmSource` (Buffers of at most 65,536 bytes). Only PCM16 (format 1) stereo
+44.1 kHz WAV is accepted; any other `fmt ` throws
+`Unsupported WAV: requires PCM16 stereo 44100 Hz`, and a malformed header, a `data`
+chunk before `fmt `, or a file that ends before the declared data length throws an
+`Invalid WAV` error. Other chunks (such as `LIST`) are skipped, honoring odd-size pad
+bytes, and nothing after `data` is read. The Readable is destroyed when iteration
+ends. Other formats need converting first (for example with ffmpeg); this library
+does not transcode.
+
+```typescript
+import { createReadStream } from 'node:fs';
+import { RaopStream, wavPcm } from 'node-appletv-remote';
+
+await new RaopStream(address, raopPort, raopTxt).stream(wavPcm(createReadStream('tone.wav')), { volume: 50 });
+```
 
 The TCP route selects the local interface; all three UDP sockets bind only to
 that address. Timing requests are accepted only after SETUP validates the receiver
