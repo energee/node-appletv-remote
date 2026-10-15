@@ -444,11 +444,22 @@ Supply an explicit IPv4 endpoint and its actual `_raop._tcp` TXT record. Require
 capabilities are `cn` containing `0` (PCM), `et` containing `0` (unencrypted), `tp`
 containing `UDP`, `sr=44100`, `ss=16`, and `ch=2`; `pw` must be absent or `false`.
 `sf`/`flags` are parsed as hexadecimal: PIN/legacy-pairing bits `0x8`/`0x200`
-require caller-supplied `legacySeed`; password bit `0x80` is unsupported. Modern
-`ft`/`features` bits 38, 40, 43 or 48, malformed flags, and unsupported access
-control fail closed. Text metadata additionally requires `md` containing `0`.
+require caller-supplied `legacySeed`; password bit `0x80` is unsupported. Malformed
+flags and unsupported access control (`pw=true`, `act=2`, `acl=1`) fail closed.
+`ft`/`features` bits 40 or 43 without 38 or 48 fail closed in the constructor.
+Text metadata additionally requires `md` containing `0`.
 Other negotiation and non-200 responses fail closed (except optional feedback),
 without reading stored credentials.
+
+`ft`/`features` bit 38 or 48 selects the AirPlay 2 profile instead (current Apple
+TVs and HomePods). The legacy-only checks above (`cn`, `et`, `tp`, `sr`/`ss`/`ch`
+and the `0x8`/`0x200` seed rule; Apple TVs advertise `flags=0x244`) do not apply to
+it; password and access-control bits still fail closed. `stream()` requires
+`credentials` (HAP `Credentials` from `PairSetup`) for AirPlay 2 and rejects
+`credentials` on legacy receivers and `legacySeed` on AirPlay 2, all before taking
+ownership of the source. **AirPlay 2 audio setup is not implemented yet**: with
+valid credentials `stream()` still rejects with `AirPlay 2 audio streaming is not
+implemented yet`, before taking the source.
 
 ```typescript
 import { createReadStream } from 'node:fs';

@@ -561,15 +561,63 @@ describe('legacy RAOP streaming', () => {
     });
   }
 
-  it('requires legacy material for PIN flags and refuses modern audio/auth advertisements', async () => {
+  // Real Apple TVs advertise flags=0x244 (includes the legacy PIN bit 0x200) and none of the legacy audio keys.
+  const appleTvTxt = { features: '0x4A7FDFD5,0x3C155FDE', flags: '0x244', md: '0,1,2' };
+  const credentials = { clientId: 'client', clientLTSK: Buffer.alloc(32, 1), clientLTPK: Buffer.alloc(32, 2), serverLTPK: Buffer.alloc(32, 3), serverId: 'server' };
+
+  it('requires a legacy seed for PIN flags 0x8 and 0x200 on legacy receivers', async () => {
     const module = await load();
-    const sender = new module.RaopStream('127.0.0.1', 7000, { ...txt, sf: '0x200' });
-    await expect(sender.stream(Buffer.alloc(4))).rejects.toThrow(/legacy/);
-    await expect(sender.stream(Buffer.alloc(4), { legacySeed: Buffer.alloc(31) })).rejects.toThrow(/32/);
-    for (const properties of [{ ...txt, sf: '0x80' }, { ...txt, sf: 'nonsense' }, { ...txt, ft: '0x0,0x10000' }, { ...txt, ft: '0x0,0x100' }, { ...txt, et: '4' }]) {
-      expect(() => new module.RaopStream('127.0.0.1', 7000, properties)).toThrow(/unsupported/i);
+    for (const flags of [{ sf: '0x200' }, { sf: '0x8' }, { flags: '0x244' }] as Record<string, string>[]) {
+      const sender = new module.RaopStream('127.0.0.1', 7000, { ...txt, ...flags });
+      await expect(sender.stream(Buffer.alloc(4))).rejects.toThrow(/legacy seed/);
     }
+    await expect(new module.RaopStream('127.0.0.1', 7000, { ...txt, sf: '0x200' }).stream(Buffer.alloc(4), { legacySeed: Buffer.alloc(31) })).rejects.toThrow(/32/);
     expect(() => new module.RaopStream('127.0.0.1', 7000, { ...txt, sf: '0x4' })).not.toThrow();
+  });
+
+  it('selects the AirPlay 2 profile for features bit 38 or 48 without applying legacy-only rules', async () => {
+    const module = await load();
+    for (const features of [{ features: '0x0,0x40' }, { features: '0x0,0x10000' }, { ft: '0x0,0x10000' }, appleTvTxt] as Record<string, string>[]) {
+      // No cn/et/tp/sr/ss/ch, and flags 0x200 must not demand a legacy seed.
+      const sender = new module.RaopStream('127.0.0.1', 7000, { flags: '0x244', ...features });
+      const source = Readable.from([Buffer.alloc(4)]);
+      await expect(sender.stream(source, { credentials })).rejects.toThrow(/AirPlay 2 audio streaming is not implemented yet/);
+      expect(source.destroyed).toBe(false);
+    }
+    expect(() => new module.RaopStream('127.0.0.1', 7000, { ...appleTvTxt, cn: '1', et: '4', tp: 'TCP', sr: '48000' })).not.toThrow();
+  });
+
+  it('rejects bit 40 or 43 without 38 or 48 in the constructor', async () => {
+    const module = await load();
+    for (const ft of ['0x0,0x100', '0x0,0x800', '0x0,0x900']) {
+      expect(() => new module.RaopStream('127.0.0.1', 7000, { ...txt, ft })).toThrow(/unsupported/i);
+    }
+  });
+
+  it('fails closed on password and access-control advertisements for both profiles', async () => {
+    const module = await load();
+    for (const base of [txt, appleTvTxt] as Record<string, string>[]) {
+      for (const properties of [{ sf: '0x80' }, { flags: '0x284' }, { pw: 'true' }, { act: '2' }, { acl: '1' }, { sf: 'nonsense' }] as Record<string, string>[]) {
+        expect(() => new module.RaopStream('127.0.0.1', 7000, { ...base, ...properties })).toThrow(/unsupported/i);
+      }
+    }
+    expect(() => new module.RaopStream('127.0.0.1', 7000, { ...txt, et: '4' })).toThrow(/unsupported/i);
+  });
+
+  it('checks credential kind against the profile before taking source ownership', async () => {
+    const module = await load(); const peer = await receiver();
+    const cases: [Record<string, string>, object, RegExp][] = [
+      [appleTvTxt, {}, /requires HAP credentials/],
+      [appleTvTxt, { credentials, legacySeed: Buffer.alloc(32, 1) }, /legacy seed is not used/],
+      [txt, { credentials }, /HAP credentials are not used/],
+    ];
+    for (const [properties, options, message] of cases) {
+      const source = Readable.from([Buffer.alloc(4)]);
+      const sender = new module.RaopStream('127.0.0.1', peer.port, properties);
+      await expect(sender.stream(source, options)).rejects.toThrow(message);
+      expect(source.destroyed).toBe(false);
+    }
+    expect(peer.requests).toHaveLength(0);
   });
 
   it('does not start a queued producer read after synchronous cancellation', async () => {
