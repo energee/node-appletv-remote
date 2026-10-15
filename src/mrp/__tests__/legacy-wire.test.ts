@@ -13,6 +13,11 @@ import { decodeVarint, encodeVarint } from '../../util/data-stream.js';
 import { tlvEncode, tlvDecode, TlvTag } from '../../util/tlv.js';
 import { hkdfSha512, encryptChaCha20, decryptChaCha20, generateNonce } from '../../util/crypto.js';
 
+vi.mock('node:crypto', async (importOriginal) => {
+  const crypto = await importOriginal<typeof import('node:crypto')>();
+  return { ...crypto, generateKeyPairSync: vi.fn(crypto.generateKeyPairSync) };
+});
+
 afterEach(() => vi.restoreAllMocks());
 
 it('verifies legacy credentials then sends encrypted MRP over an IPv6 endpoint', async () => {
@@ -84,7 +89,8 @@ it('verifies legacy credentials then sends encrypted MRP over an IPv6 endpoint',
   await atv.close();
 });
 
-it('pairs through DeviceInfo and CryptoPairing M1-M6 using the shared SRP implementation', async () => {
+it('pairs through DeviceInfo and CryptoPairing M1-M6 with one controller keypair', async () => {
+  vi.mocked(generateKeyPairSync).mockClear();
   const salt = Buffer.alloc(16, 7);
   const server = new SrpServer(SRP.params.hap, salt, Buffer.from('Pair-Setup'), Buffer.from('1234'), Buffer.alloc(32, 5));
   const steps: number[] = [];
@@ -136,6 +142,7 @@ it('pairs through DeviceInfo and CryptoPairing M1-M6 using the shared SRP implem
   expect(result.serverId).toBe('peer');
   expect(result.serverLTPK).toEqual(Buffer.alloc(32, 9));
   expect(destroy).toHaveBeenCalledOnce();
+  expect(vi.mocked(generateKeyPairSync).mock.calls.map(([algorithm]) => algorithm)).toEqual(['ed25519']);
 });
 
 it('does not select disabled legacy MRP advertisements', async () => {

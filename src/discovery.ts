@@ -138,9 +138,10 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
       const groups: RecordEntry[][] = [];
       const priority = ['airplay', 'mediaremotetv', 'companion-link', 'touch-able', 'appletv-v2'];
       // Establish primary devices first, independent of callback arrival order.
-      const ordered = [...records].sort((a, b) => priority.indexOf(a.type) - priority.indexOf(b.type) ||
-        JSON.stringify([a.ids, a.service.host, a.service.name, a.addresses, a.service.port]).localeCompare(
-          JSON.stringify([b.ids, b.service.host, b.service.name, b.addresses, b.service.port])));
+      const ordered = records.map(record => ({
+        record, priority: priority.indexOf(record.type),
+        key: JSON.stringify([record.ids, record.service.host, record.service.name, record.addresses, record.service.port]),
+      })).sort((a, b) => a.priority - b.priority || a.key.localeCompare(b.key)).map(({ record }) => record);
       for (const record of ordered) {
         const matching = groups.filter((group) => {
           // A copied identity cannot join disjoint endpoints for the same protocol.

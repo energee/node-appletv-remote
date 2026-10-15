@@ -15,7 +15,7 @@ import { Credentials } from './credentials.js';
 import { MRPMessage, HID_KEY_MAP, MessageType } from './mrp/messages.js';
 import { NowPlayingInfo } from './now-playing-info.js';
 import { PlayerState } from './mrp/player-state.js';
-import { SupportedCommand } from './supported-command.js';
+import { Command, SupportedCommand } from './supported-command.js';
 import { Message } from './message.js';
 import { CompanionConnection } from './companion/connection.js';
 import { CompanionPairSetup } from './companion/pair-setup.js';
@@ -202,7 +202,13 @@ export class AppleTV extends EventEmitter {
 
   /** Advertised command: missing = unsupported, disabled = temporarily unavailable. */
   featureAvailability(feature: Feature): FeatureAvailability {
-    const commands: Partial<Record<Feature, number>> = { play: 1, pause: 2, stop: 4, next: 5, previous: 6, skipForward: 18, skipBackward: 19, setPosition: 45, setRepeat: 46, setShuffle: 47 };
+    const commands: Partial<Record<Feature, Command>> = {
+      play: Command.Play, pause: Command.Pause, stop: Command.Stop,
+      next: Command.NextTrack, previous: Command.PreviousTrack,
+      skipForward: Command.SkipForward, skipBackward: Command.SkipBackward,
+      setPosition: Command.SeekToPlaybackPosition, setRepeat: Command.ChangeRepeatMode,
+      setShuffle: Command.ChangeShuffleMode,
+    };
     const id = commands[feature];
     if (id !== undefined) {
       const advertised = this.playerState.commands;
