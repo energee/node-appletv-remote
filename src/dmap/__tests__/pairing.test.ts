@@ -57,7 +57,16 @@ it('locks pairing after five failed PIN callbacks', async () => {
   await pairing.start(); const url = `http://127.0.0.1:${published.options.port}/pair?servicename=TV&pairingcode=`;
   for (let i = 0; i < 5; i++) await fetch(url + '00000000000000000000000000000000');
   expect((await fetch(url + '690e6ff61e0d7c747654a42aed17047d')).status).toBe(429);
-  expect(() => pairing!.finish()).toThrow(/not paired/i);
+  expect(() => pairing!.finish()).toThrow(/locked after five wrong PINs/);
+});
+
+it('reports expiry after the five-minute pairing window', async () => {
+  pairing = new DmapPairing({ name: 'Remote', address: '127.0.0.1', pin: '1234', guid: '0x0000000000000001' });
+  await pairing.start();
+  expect(() => pairing!.finish()).toThrow('DMAP remote is not paired');
+  vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 300_001);
+  expect(() => pairing!.finish()).toThrow(/expired/);
+  vi.restoreAllMocks();
 });
 
 it('rejects startup promptly when pairing is closed before listening', async () => {

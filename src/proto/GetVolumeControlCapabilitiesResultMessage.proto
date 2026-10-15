@@ -1,0 +1,14 @@
+// Type 63: reply to a bare GetVolumeControlCapabilities (type 62) request. The layout is
+// inferred from tvOS 26.6 replies: field 1 wraps the same fields as VolumeControlAvailability.
+syntax = "proto2";
+
+import "ProtocolMessage.proto";
+import "VolumeControlAvailabilityMessage.proto";
+
+extend ProtocolMessage {
+  optional GetVolumeControlCapabilitiesResultMessage getVolumeControlCapabilitiesResultMessage = 67;
+}
+
+message GetVolumeControlCapabilitiesResultMessage {
+  optional VolumeControlAvailabilityMessage capabilities = 1;
+}

@@ -27,6 +27,11 @@ export function parseAirPlayTxt(txt: Record<string, string>): AirPlayTxtRecord {
   };
 }
 
+/** Lowercase TXT keys and stringify values, as every Bonjour consumer here expects. */
+export function normalizeTxt(txt: Record<string, unknown> | undefined): Record<string, string> {
+  return Object.fromEntries(Object.entries(txt ?? {}).map(([k, v]) => [k.toLowerCase(), String(v)]));
+}
+
 /** Plain connection details for a device; accepted by DiscoveredDevice and AppleTV constructors. */
 export interface DiscoveredDeviceInfo {
   name: string;
@@ -50,6 +55,8 @@ export interface DiscoveredDeviceInfo {
   dmapPort?: number;
   /** Shared primary-protocol address when joined; caller-supplied endpoints require explicit trust. */
   dmapAddress?: string;
+  /** AirPlay `psi` TXT value: the ID to pass to AppleTV output routing (add/remove/setOutputDevices). */
+  airplayPsi?: string;
 }
 
 /** An Apple TV found by scan(). */
@@ -73,6 +80,8 @@ export class DiscoveredDevice {
   dmapPort?: number;
   /** Shared primary-protocol address when joined; caller-supplied endpoints require explicit trust. */
   dmapAddress?: string;
+  /** AirPlay `psi` TXT value: the ID to pass to AppleTV output routing (add/remove/setOutputDevices). */
+  airplayPsi?: string;
 
   constructor(info: DiscoveredDeviceInfo) {
     this.name = info.name;
@@ -88,6 +97,7 @@ export class DiscoveredDevice {
     this.mrpAddress = info.mrpAddress;
     this.dmapPort = info.dmapPort;
     this.dmapAddress = info.dmapAddress;
+    this.airplayPsi = info.airplayPsi;
   }
 
   /** `name (address:port) [model]`. */
@@ -190,6 +200,7 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
           companionPort: companion?.service.port, companionAddress: sharedAddress(companion),
           mrpPort: mrp?.service.port, mrpAddress: sharedAddress(mrp),
           mrpEnabled: mrp ? !(build >= 19) : undefined,
+          airplayPsi: airplay?.txt.psi,
         });
       });
       return options.filter ? devices.filter(options.filter) : devices;
@@ -213,7 +224,7 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
         if (done) return;
         const addresses = usableAddresses(service);
         if (!addresses.length || !service.port) return;
-        const txt = Object.fromEntries(Object.entries(service.txt ?? {}).map(([k, v]) => [k.toLowerCase(), String(v)]));
+        const txt = normalizeTxt(service.txt);
         if (type === 'companion-link' && txt.rpmd && !txt.rpmd.startsWith('AppleTV')) return;
         const legacy = type === 'touch-able' || type === 'appletv-v2';
         const ids = (type === 'airplay' ? [txt.deviceid] : type === 'companion-link' ? [txt.rpmrtid] : type === 'mediaremotetv' ? [txt.uniqueidentifier, txt.macaddress] : [service.name ? `dmap:${service.name}` : undefined]).filter((id): id is string => !!id);

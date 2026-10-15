@@ -5,6 +5,9 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "build": "npm run gen:proto && rm -rf dist && tsc",
     "gen:proto": "node scripts/gen-proto.mjs",

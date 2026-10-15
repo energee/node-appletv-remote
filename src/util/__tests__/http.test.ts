@@ -28,3 +28,12 @@ it('rejects an incomplete response rather than hanging', async () => {
   client = new PersistentHttp('127.0.0.1', await listen());
   await expect(client.request('GET', '/truncated')).rejects.toThrow();
 });
+it('applies a configurable inactivity timeout, where 0 disables it for long polls', async () => {
+  server = createServer((_req, res) => { setTimeout(() => res.end('late'), 150); });
+  const port = await listen();
+  client = new PersistentHttp('127.0.0.1', port, {}, 30);
+  await expect(client.request('GET', '/slow')).rejects.toThrow(/timeout/);
+  client.destroy();
+  client = new PersistentHttp('127.0.0.1', port, {}, 0);
+  expect((await client.request('GET', '/slow')).body.toString()).toBe('late');
+});
