@@ -8,7 +8,7 @@
  */
 import { scan, normalizeTxt, type DiscoveredDeviceInfo } from '../discovery.js';
 import { setTimeout as delay } from 'node:timers/promises';
-import { AppleTV, Key, ShuffleState, RepeatState, contentItems } from '../appletv.js';
+import { AppleTV, Key, ShuffleState, RepeatState, contentItems, INPUT_ACTIONS } from '../appletv.js';
 import { PlaybackState } from '../now-playing-info.js';
 import { MessageType, HID_KEY_MAP } from '../mrp/messages.js';
 import { Credentials } from '../credentials.js';
@@ -24,7 +24,7 @@ import { pathToFileURL } from 'node:url';
 import { withCachedDevice } from './device-cache.js';
 import { createInterface } from 'node:readline';
 import type { Message } from '../message.js';
-import type { KeyboardInfo, TextInputEvent, CompanionEvent, App, UserAccount, InputAction, OutputDevice } from '../appletv.js';
+import type { KeyboardInfo, TextInputEvent, CompanionEvent, App, UserAccount, InputAction } from '../appletv.js';
 
 /** Where paired credentials are stored (falls back to the current directory if HOME is unset). */
 const CREDS_FILE = join(process.env.HOME ?? '.', '.atv-credentials.json');
@@ -54,7 +54,31 @@ function prompt(question: string): Promise<string> {
   });
 }
 
-/** `atv scan`: list Apple TVs found via mDNS within 5 s. */
+/** Number `devices` with `label`, then prompt for one; prints `none` or an invalid-selection notice and returns undefined. */
+async function selectDevice<T>(devices: T[], none: string, label: (device: T) => string): Promise<T | undefined> {
+  if (devices.length === 0) {
+    console.log(none);
+    return undefined;
+  }
+  devices.forEach((d, i) => console.log(`  ${i + 1}. ${label(d)}`));
+  const device = devices[parseInt(await prompt('Select device number: ')) - 1];
+  if (!device) console.log('Invalid selection.');
+  return device;
+}
+
+/** Every stored value in a JSON credential `file` keyed by device ID, or {} if it does not exist. */
+function readStored(file: string): Record<string, string> {
+  return existsSync(file) ? JSON.parse(readFileSync(file, 'utf-8')) : {};
+}
+
+/** Set one device's value in a JSON credential `file`, keeping every other device's entry. */
+function saveStored(file: string, id: string, value: string): void {
+  const stored = readStored(file);
+  stored[id] = value;
+  writeFileSync(file, JSON.stringify(stored, null, 2));
+}
+
+/** `atv scan`: list Apple TVs and AirPlay receivers found via mDNS within 5 s, with each `psi` output ID. */
 async function cmdScan() {
   console.log('Scanning for Apple TVs...');
   const devices = await scan({ timeout: 5000 });
@@ -63,28 +87,15 @@ async function cmdScan() {
     return;
   }
   devices.forEach((d, i) => {
-    console.log(`  ${i + 1}. ${d.name} (${d.address}:${d.port}) [${d.model}]`);
+    console.log(`  ${i + 1}. ${d.name} (${d.address}:${d.port}) [${d.model}]${d.airplayPsi ? ` psi=${d.airplayPsi}` : ''}`);
   });
 }
 
 /** `atv pair`: pick a device, run AirPlay pair-setup with the on-screen PIN, and save the credentials. */
 async function cmdPair() {
   console.log('Scanning for Apple TVs...');
-  const devices = await scan({ timeout: 5000 });
-  if (devices.length === 0) {
-    console.log('No Apple TVs found.');
-    return;
-  }
-
-  devices.forEach((d, i) => {
-    console.log(`  ${i + 1}. ${d}`);
-  });
-  const choice = await prompt('Select device number: ');
-  const device = devices[parseInt(choice) - 1];
-  if (!device) {
-    console.log('Invalid selection.');
-    return;
-  }
+  const device = await selectDevice(await scan({ timeout: 5000 }), 'No Apple TVs found.', String);
+  if (!device) return;
 
   const atv = new AppleTV(device);
   console.log(`Pairing with ${atv.name}...`);
@@ -92,23 +103,20 @@ async function cmdPair() {
 
   const pin = await prompt('Enter PIN shown on Apple TV: ');
   const hapCreds = await pairSetup.finish(pin);
-  const creds = new Credentials(hapCreds);
-
-  // Save credentials
-  let stored: Record<string, string> = {};
-  if (existsSync(CREDS_FILE)) {
-    stored = JSON.parse(readFileSync(CREDS_FILE, 'utf-8'));
-  }
-  stored[device.deviceId] = creds.serialize();
-  writeFileSync(CREDS_FILE, JSON.stringify(stored, null, 2));
+  saveStored(CREDS_FILE, device.deviceId, new Credentials(hapCreds).serialize());
   console.log(`Paired! Credentials saved to ${CREDS_FILE}`);
 }
 
-/** Button action modes accepted after a key, Companion button, or `click`. */
-const ACTIONS: readonly InputAction[] = ['singleTap', 'doubleTap', 'hold'];
-/** Canonical action for a case-insensitive action word, or undefined if `word` is not one. */
-const actionFor = (word?: string): InputAction | undefined =>
-  ACTIONS.find((action) => action.toLowerCase() === word?.toLowerCase());
+/**
+ * Pull an optional case-insensitive action word out of `args[index]`, which precedes an optional
+ * device selector. When both are present (`args.length === index + 2`) the word must be an action.
+ */
+function splitAction(args: string[], index: number): { action?: InputAction; rest: string[] } {
+  const action = INPUT_ACTIONS.find((a) => a.toLowerCase() === args[index]?.toLowerCase());
+  if (action) return { action, rest: args.filter((_, i) => i !== index) };
+  if (args.length === index + 2) throw new Error(`Invalid action: ${args[index]} (expected ${INPUT_ACTIONS.join(', ')})`);
+  return { rest: args };
+}
 
 /** Every Key value; these strings are the accepted CLI command names. */
 const COMMAND_NAMES = Object.values(Key);
@@ -125,8 +133,7 @@ function loadStored(file: string, pairCommand: string, deviceId?: string): { id:
   if (!existsSync(file)) {
     throw new Error(`No credentials found. Run "atv ${pairCommand}" first.`);
   }
-  const stored = JSON.parse(readFileSync(file, 'utf-8'));
-  const entries = Object.entries(stored);
+  const entries = Object.entries(readStored(file));
   if (entries.length === 0) {
     throw new Error('No paired devices.');
   }
@@ -134,7 +141,7 @@ function loadStored(file: string, pairCommand: string, deviceId?: string): { id:
   const entry = deviceId === undefined ? entries[entries.length - 1]
     : entries.find(([k]) => k.toLowerCase().includes(deviceId.toLowerCase()));
   if (!entry) throw new Error(`No paired device matches "${deviceId}"`);
-  return { id: entry[0], value: entry[1] as string };
+  return { id: entry[0], value: entry[1] };
 }
 
 /** Load modern (AirPlay/Companion) credentials; see loadStored for selector rules. */
@@ -230,9 +237,9 @@ async function cmdCommand(command: string, action?: InputAction, deviceId?: stri
   if (action && !button && !HID_KEY_MAP[command]) throw new Error(`Action modes are not supported for ${command}`);
   const atv = await (button ? connectToCompanion(deviceId) : connectToDevice(deviceId));
   try {
-    // Omit an unspecified action so the library default applies unchanged.
-    if (button) await (action ? atv[button](action) : atv[button]());
-    else await (action ? atv.sendKeyCommand(command as Key, action) : atv.sendKeyCommand(command as Key));
+    // An undefined action takes each method's 'singleTap' default.
+    if (button) await atv[button](action);
+    else await atv.sendKeyCommand(command as Key, action);
     console.log(`Sent: ${command}`);
     await delay(postSendMs());
   } finally {
@@ -358,22 +365,9 @@ async function cmdMessages(deviceId?: string) {
 /** `atv companion-pair`: Companion pair-setup; merges the result into the device's existing AirPlay credentials, or stores it standalone. */
 async function cmdCompanionPair() {
   console.log('Scanning for Apple TVs...');
-  const devices = await scan({ timeout: 5000 });
-  const withCompanion = devices.filter((d) => d.companionPort);
-  if (withCompanion.length === 0) {
-    console.log('No Apple TVs with companion-link found.');
-    return;
-  }
-
-  withCompanion.forEach((d, i) => {
-    console.log(`  ${i + 1}. ${d} [companion:${d.companionPort}]`);
-  });
-  const choice = await prompt('Select device number: ');
-  const device = withCompanion[parseInt(choice) - 1];
-  if (!device) {
-    console.log('Invalid selection.');
-    return;
-  }
+  const device = await selectDevice((await scan({ timeout: 5000 })).filter((d) => d.companionPort),
+    'No Apple TVs with companion-link found.', (d) => `${d} [companion:${d.companionPort}]`);
+  if (!device) return;
 
   const atv = new AppleTV(device);
   console.log(`Companion pairing with ${atv.name} on port ${device.companionPort}...`);
@@ -382,25 +376,18 @@ async function cmdCompanionPair() {
   const pin = await prompt('Enter PIN shown on Apple TV: ');
   const companionCreds = await pairSetup.finish(pin);
 
-  // Load existing credentials and add companion creds
-  let stored: Record<string, string> = {};
-  if (existsSync(CREDS_FILE)) {
-    stored = JSON.parse(readFileSync(CREDS_FILE, 'utf-8'));
-  }
-
-  // Update existing credentials with companion data
-  if (stored[device.deviceId]) {
-    const existing = Credentials.deserialize(stored[device.deviceId]);
-    existing.companionCredentials = companionCreds;
-    stored[device.deviceId] = existing.serialize();
+  // Add companion data to the device's existing AirPlay credentials.
+  const existingJson = readStored(CREDS_FILE)[device.deviceId];
+  let creds: Credentials;
+  if (existingJson) {
+    creds = Credentials.deserialize(existingJson);
+    creds.companionCredentials = companionCreds;
   } else {
     console.log('Warning: No AirPlay credentials found. Pair with AirPlay first (atv pair).');
     console.log('Saving companion credentials standalone.');
-    const creds = new Credentials(companionCreds, companionCreds);
-    stored[device.deviceId] = creds.serialize();
+    creds = new Credentials(companionCreds, companionCreds);
   }
-
-  writeFileSync(CREDS_FILE, JSON.stringify(stored, null, 2));
+  saveStored(CREDS_FILE, device.deviceId, creds.serialize());
   console.log(`Companion paired! Credentials saved to ${CREDS_FILE}`);
 }
 
@@ -466,6 +453,9 @@ async function cmdKeyboard(deviceId?: string) {
   });
 }
 
+/** `atv output` verbs mapped to AppleTV routing methods (`list` is handled separately). */
+const OUTPUT_METHODS = { add: 'addOutputDevices', remove: 'removeOutputDevices', set: 'setOutputDevices' } as const;
+
 /** DMAP CLI command names mapped to DmapClient methods (`state` is handled separately). */
 const DMAP_COMMANDS = {
   up: 'up', down: 'down', left: 'left', right: 'right', select: 'select', menu: 'menu', top_menu: 'topMenu',
@@ -479,17 +469,9 @@ const DMAP_COMMANDS = {
  */
 async function cmdDmapPair(localAddress: string) {
   console.log('Scanning for legacy (DMAP) Apple TVs...');
-  const devices = (await scan({ timeout: 5000 })).filter((d) => d.dmapPort);
-  if (devices.length === 0) {
-    console.log('No DMAP devices found.');
-    return;
-  }
-  devices.forEach((d, i) => console.log(`  ${i + 1}. ${d.name} (${d.dmapAddress ?? d.address}:${d.dmapPort}) [${d.deviceId}]`));
-  const device = devices[parseInt(await prompt('Select device number: ')) - 1];
-  if (!device) {
-    console.log('Invalid selection.');
-    return;
-  }
+  const device = await selectDevice((await scan({ timeout: 5000 })).filter((d) => d.dmapPort),
+    'No DMAP devices found.', (d) => `${d.name} (${d.dmapAddress ?? d.address}:${d.dmapPort}) [${d.deviceId}]`);
+  if (!device) return;
 
   const pin = String(randomInt(10000)).padStart(4, '0');
   const pairing = new DmapPairing({ name: 'atv CLI', address: localAddress, pin });
@@ -513,9 +495,7 @@ async function cmdDmapPair(localAddress: string) {
     await pairing.close();
   }
 
-  const stored: Record<string, string> = existsSync(DMAP_FILE) ? JSON.parse(readFileSync(DMAP_FILE, 'utf-8')) : {};
-  stored[device.deviceId] = guid;
-  writeFileSync(DMAP_FILE, JSON.stringify(stored, null, 2));
+  saveStored(DMAP_FILE, device.deviceId, guid);
   console.log(`Paired! Pairing GUID saved to ${DMAP_FILE}`);
 }
 
@@ -525,12 +505,7 @@ async function cmdDmap(command: keyof typeof DMAP_COMMANDS | 'state', deviceId?:
   const client = await connectCached(id, 'dmap', async (device) => {
     console.error(`Connecting DMAP to ${device.name} (${device.dmapAddress ?? device.address}:${device.dmapPort})...`);
     const dmap = new DmapClient(device);
-    try {
-      await dmap.connect(guid);
-    } catch (error) {
-      dmap.close();
-      throw error;
-    }
+    await dmap.connect(guid); // closes itself if login fails
     return dmap;
   });
   try {
@@ -615,8 +590,8 @@ function help(): void {
                                        Companion swipe; integer coordinates 0..1000, 1..60000 ms
   atv output list [device]             Selected outputs (tab-separated ID and name)
   atv output <add|remove|set> <id[,id...]> [device]
-                                       ID = the receiver's AirPlay "psi" UUID from its _airplay._tcp
-                                       TXT record; its deviceid (MAC) or pi will time out
+                                       ID = the receiver's AirPlay "psi" UUID, shown by "atv scan";
+                                       its deviceid (MAC) or pi will time out
   atv dmap-pair <local-ipv4>           Pair a legacy (DMAP) Apple TV; address is THIS computer's
   atv dmap <command|state> [device]    Legacy DMAP control: ${Object.keys(DMAP_COMMANDS).join(', ')}
   atv raop-stream <ipv4> <file.pcm>    Experimental: stream raw PCM16LE stereo 44.1 kHz to a legacy
@@ -655,21 +630,18 @@ export async function main(argv: string[]): Promise<void> {
   // Queries get a reply; every other operation ends with an unacknowledged send (HID key, `_tiC`, ...).
   let acknowledged = false;
   let device: string | undefined;
-  let operation: (atv: AppleTV) => Promise<void | string | App[] | UserAccount[] | OutputDevice[]>;
+  let operation: (atv: AppleTV) => Promise<void | string | App[] | UserAccount[]>;
   switch (cmd) {
     case 'command': case 'cmd': {
-      // An optional action precedes the optional device selector; with both present it must be valid.
-      const action = actionFor(args[1]);
-      if (!action && args.length === 3) throw new Error(`Invalid action: ${args[1]} (expected ${ACTIONS.join(', ')})`);
-      argumentsFor(action ? args.filter((_, i) => i !== 1) : args, 1, 'command <key> [action] [device]');
-      return cmdCommand(args[0], action, action ? args[2] : args[1]);
+      const { action, rest } = splitAction(args, 1);
+      argumentsFor(rest, 1, 'command <key> [action] [device]');
+      return cmdCommand(rest[0], action, rest[1]);
     }
     case 'click': {
-      const action = actionFor(args[0]);
-      if (!action && args.length === 2) throw new Error(`Invalid action: ${args[0]} (expected ${ACTIONS.join(', ')})`);
-      argumentsFor(action ? args.slice(1) : args, 0, 'click [action] [device]');
-      device = action ? args[1] : args[0]; companion = true;
-      operation = (atv) => action ? atv.click(action) : atv.click();
+      const { action, rest } = splitAction(args, 0);
+      argumentsFor(rest, 0, 'click [action] [device]');
+      device = rest[0]; companion = true;
+      operation = (atv) => atv.click(action);
       break;
     }
     case 'swipe': {
@@ -687,19 +659,22 @@ export async function main(argv: string[]): Promise<void> {
       const [action, ...values] = args;
       // Routing resolves only once the TV reports the new group, so no post-send wait is needed.
       acknowledged = true;
+      // Rows reuse the printer's `id\tname` format.
+      const rows = (atv: AppleTV) => atv.outputDevices.map((d) => ({ id: d.identifier, name: d.name }));
       if (action === 'list') {
         argumentsFor(values, 0, 'output list [device]');
         device = values[0];
-        operation = async (atv) => atv.outputDevices;
-      } else if (action === 'add' || action === 'remove' || action === 'set') {
-        argumentsFor(values, 1, `output ${action} <id[,id...]> [device]`);
+        operation = async (atv) => rows(atv);
+      } else if (Object.hasOwn(OUTPUT_METHODS, action ?? '')) {
+        const usage = `output ${action} <id[,id...]> [device]`;
+        argumentsFor(values, 1, usage);
         const ids = values[0].split(',').map((id) => id.trim());
         if (ids.some((id) => !id) || new Set(ids).size !== ids.length) {
-          throw new Error(`Usage: atv output ${action} <id[,id...]> [device] (IDs must be unique and nonblank)`);
+          throw new Error(`Usage: atv ${usage} (IDs must be unique and nonblank)`);
         }
         device = values[1];
-        const modify = { add: 'addOutputDevices', remove: 'removeOutputDevices', set: 'setOutputDevices' } as const;
-        operation = async (atv) => { await atv[modify[action]](ids); return atv.outputDevices; };
+        const method = OUTPUT_METHODS[action as keyof typeof OUTPUT_METHODS];
+        operation = async (atv) => { await atv[method](ids); return rows(atv); };
       } else throw new Error(`Invalid output operation: ${action ?? '(missing)'}`);
       break;
     }
@@ -787,7 +762,7 @@ export async function main(argv: string[]): Promise<void> {
   try {
     const result = await operation(atv);
     if (Array.isArray(result)) {
-      for (const item of result) console.log(`${'bundleId' in item ? item.bundleId : 'identifier' in item ? item.identifier : item.id}\t${item.name}`);
+      for (const item of result) console.log(`${'bundleId' in item ? item.bundleId : item.id}\t${item.name}`);
     } else if (result !== undefined) console.log(result);
     // Give unacknowledged sends time to reach the TV before close() destroys the socket.
     if (!acknowledged) await delay(postSendMs());

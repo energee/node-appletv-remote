@@ -6,7 +6,7 @@ vi.mock('node:fs', () => ({ realpathSync: (path: string) => path, existsSync: ()
 vi.mock('../credentials.js', () => ({ Credentials: { deserialize: () => ({}) } }));
 vi.mock('../cli/device-cache.js', () => ({ withCachedDevice: async (_path: string, _id: string, _scan: unknown, connect: (device: unknown) => Promise<unknown>) => connect({ name: 'offline', address: 'offline', port: 7000 }) }));
 vi.mock('../appletv.js', () => ({
-  Key: { Up: 'up' }, ShuffleState: {}, RepeatState: {}, contentItems: () => [],
+  Key: { Up: 'up' }, ShuffleState: {}, RepeatState: {}, contentItems: () => [], INPUT_ACTIONS: ['singleTap', 'doubleTap', 'hold'],
   AppleTV: class extends EventEmitter {
     constructor() { super(); state.tv = this; }
     async connect() { this.emit('error', new Error('setup transport failure')); }

@@ -105,9 +105,9 @@ describe('CLI operations', () => {
   it.each([
     [['app', 'list'], 'appList', []], [['app', 'launch', 'com.example.app'], 'launchApp', ['com.example.app']],
     [['account', 'list'], 'accountList', []], [['account', 'switch', 'user-id'], 'switchAccount', ['user-id']],
-    [['power'], 'fetchPowerState', []], [['command', 'channel_up'], 'channelUp', []],
-    [['cmd', 'channel_down'], 'channelDown', []], [['command', 'screensaver'], 'screensaver', []],
-    [['command', 'guide'], 'guide', []], [['command', 'page_up'], 'pageUp', []], [['command', 'page_down'], 'pageDown', []],
+    [['power'], 'fetchPowerState', []], [['command', 'channel_up'], 'channelUp', [undefined]],
+    [['cmd', 'channel_down'], 'channelDown', [undefined]], [['command', 'screensaver'], 'screensaver', [undefined]],
+    [['command', 'guide'], 'guide', [undefined]], [['command', 'page_up'], 'pageUp', [undefined]], [['command', 'page_down'], 'pageDown', [undefined]],
     // Modern tvOS ignores the MRP TextInputMessage; text input uses Companion RTI.
     [['text', 'set', ''], 'setText', ['']], [['text', 'append', 'hello world'], 'insertText', ['hello world']], [['text', 'clear'], 'clearText', []],
   ] as const)('dispatches %j over Companion only', async (args, method, values) => {
@@ -161,7 +161,7 @@ describe('CLI operations', () => {
   it('retains MRP key dispatch', async () => {
     const send = vi.spyOn(AppleTV.prototype, 'sendKeyCommand').mockResolvedValue(undefined);
     await run(['command', 'play']);
-    expect(send).toHaveBeenCalledWith('play');
+    expect(send).toHaveBeenCalledWith('play', undefined);
     expect(console.log).toHaveBeenCalledWith('Sent: play');
     expect(AppleTV.prototype.close).toHaveBeenCalledTimes(1);
   });

@@ -53,8 +53,8 @@ describe('button action modes', () => {
     [['command', 'up', 'doubleTap'], ['up', 'doubleTap']],
     [['command', 'home', 'hold', 'device'], ['home', 'hold']],
     [['cmd', 'select', 'singleTap', 'device'], ['select', 'singleTap']],
-    // Without an action the key keeps its existing single-argument call.
-    [['command', 'menu', 'device'], ['menu']],
+    // Without an action the key passes undefined, taking the library's singleTap default.
+    [['command', 'menu', 'device'], ['menu', undefined]],
     // Action words are case-insensitive, so a miscased action never becomes a device selector.
     [['command', 'up', 'doubletap'], ['up', 'doubleTap']],
     [['command', 'up', 'HOLD', 'device'], ['up', 'hold']],
@@ -85,7 +85,7 @@ describe('button action modes', () => {
 });
 
 describe('touch', () => {
-  it.each([[['click'], []], [['click', 'doubleTap', 'device'], ['doubleTap']], [['click', 'device'], []], [['click', 'Hold', 'device'], ['hold']]] as const)(
+  it.each([[['click'], [undefined]], [['click', 'doubleTap', 'device'], ['doubleTap']], [['click', 'device'], [undefined]], [['click', 'Hold', 'device'], ['hold']]] as const)(
     'clicks %j over Companion only', async (args, expected) => {
       const click = vi.spyOn(AppleTV.prototype, 'click').mockResolvedValue(undefined);
       await run([...args]);
@@ -140,6 +140,15 @@ describe('output routing', () => {
       await expect(run(args)).rejects.toThrow();
       expectNoIo();
     });
+  it('scan prints each AirPlay receiver psi for use as an output ID', async () => {
+    vi.mocked(scan).mockResolvedValue([
+      { name: 'Kitchen', address: '192.0.2.8', port: 7000, model: 'AudioAccessory5,1', airplayPsi: 'psi-uuid' },
+      { name: 'Old TV', address: '192.0.2.5', port: 0, model: 'Legacy DMAP device' },
+    ] as never);
+    await run(['scan']);
+    expect(console.log).toHaveBeenCalledWith('  1. Kitchen (192.0.2.8:7000) [AudioAccessory5,1] psi=psi-uuid');
+    expect(console.log).toHaveBeenCalledWith('  2. Old TV (192.0.2.5:0) [Legacy DMAP device]');
+  });
   it('documents the psi UUID requirement in help', async () => {
     await run(['--help']);
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('psi'));

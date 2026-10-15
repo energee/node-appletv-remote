@@ -12,7 +12,7 @@ I built this to learn how the Apple TV handshake works, and because the older No
 ## CLI
 
 ```bash
-atv scan                          # find Apple TVs on the network
+atv scan                          # find Apple TVs (and AirPlay receivers' psi output IDs)
 atv pair                          # AirPlay pairing (enter the PIN shown on the TV)
 atv companion-pair                # Companion pairing, needed for apps/accounts/power
 
@@ -62,7 +62,7 @@ Credentials are saved to `~/.atv-credentials.json`. Leave out `deviceId` to use 
 
 Playback and output commands open only AirPlay/MRP; text/app/account/power/click/swipe commands and extra buttons open only Companion. `command` (alias `cmd`) still accepts `skip_forward` / `skip_backward` for the app's default interval; use the hyphenated commands to specify seconds. Extra Companion buttons are `channel_up`, `channel_down`, `screensaver`, `guide`, `page_up`, and `page_down` (not available in the MRP-only interactive remote). An optional action (`singleTap`, `doubleTap`, `hold`; case-insensitive) may follow navigation/HID keys and Companion buttons; media keys, `wake`, `suspend`, skips and `home_hold` reject it before connecting. When both an action and a device are given, an unrecognized action word is rejected as an invalid action instead of being treated as a device selector.
 
-Output IDs must be the receiver's AirPlay **`psi`** UUID from its `_airplay._tcp` TXT record (for example `dns-sd -L <name> _airplay._tcp`); its `deviceid` (MAC) and `pi` are ignored by the TV and time out after five seconds. Comma-separated IDs are trimmed and must be unique and nonblank (checked before connecting). `output add/remove/set` print the confirmed selected outputs afterward; `atv output set ""` is rejected, so the CLI cannot clear all outputs.
+Output IDs must be the receiver's AirPlay **`psi`** UUID, which `atv scan` prints as `psi=...`; its `deviceid` (MAC) and `pi` are ignored by the TV and time out after five seconds. Comma-separated IDs are trimmed and must be unique and nonblank (checked before connecting). `output add/remove/set` print the confirmed selected outputs afterward; `atv output set ""` is rejected, so the CLI cannot clear all outputs.
 
 `atv dmap-pair` advertises this computer as a Remote on the given local IPv4 interface, prints a random PIN, waits up to five minutes for the TV, and stores the pairing GUID in `~/.atv-dmap.json` (separate from modern credentials, keyed by the device ID shown in the selection list: the AirPlay `deviceid` when the TV also advertises AirPlay on that address, which Apple TV 2/3 normally do, otherwise `dmap:<instance>`). It fails immediately once five wrong PINs lock pairing or the window expires; Ctrl+C cancels, closes the callback server and unpublishes the advertisement. `atv dmap` logs in with that GUID; `[deviceId]` selects among DMAP pairings the same way. Its address is cached like the others. DMAP has no push updates, so `state` is a snapshot.
 
@@ -559,7 +559,7 @@ nothing is playing; only the device's error 35 reply is (#10).
 
 ### Button actions, gestures, and audio routing
 
-These library APIs are protocol-tested; MRP button modes, touch swipes and output add/remove were exercised on an Apple TV 4K (#30). The CLI exposes them as `command <key> [action]`, `click`, `swipe` and `output`; routing IDs must be the receiver's AirPlay `psi` UUID (its `deviceid` and `pi` time out).
+These library APIs are protocol-tested; MRP button modes, touch swipes and output add/remove were exercised on an Apple TV 4K (#30). The CLI exposes them as `command <key> [action]`, `click`, `swipe` and `output`.
 
 ```typescript
 await atv.up('doubleTap');
@@ -588,7 +588,7 @@ Touch coordinates must be integers in 0..1000; swipes require an integer duratio
 
 Output listing reflects DeviceInfo/DeviceInfoUpdate selected groups, not discovery of available speakers. Routing IDs are each receiver's AirPlay `psi` TXT value, exposed by `scan()` as `airplayPsi`; on tvOS 26 its MAC-style `deviceid` and its `pi` are ignored and the operation times out. IDs must be unique nonempty strings; only `setOutputDevices([])` accepts an empty list. One routing operation may be pending at a time. Routing sends `ModifyOutputContextRequest` (message type 48, protobuf extension 52), with both regular and cluster-aware device IDs. Types 65 (`UpdateOutputDevice`) and 66 (`RemoveOutputDevices`) are not routing acknowledgements; unsolicited messages of these types neither confirm nor reject an operation. A nonzero envelope error rejects routing only when its identifier matches the outgoing UUID, regardless of message type. Routing resolves once the reported group matches the operation (immediately if it already does; for `set`, the reporting group leader is not counted unless requested), and rejects on failed transmission/connection close or lack of confirmation within five seconds. It never optimistically changes the output list. A successful write or non-error envelope alone is not confirmation.
 
-Hardware gates: verify tap/double-tap/hold timing and effects on Apple TV, touch clicks/swipes and release on cancellation/disconnect, and grouping/ungrouping real AirPlay speakers including UUID-correlated routing errors. No hardware or stored credentials are accessed by the regression tests.
+Hardware gates still open: Companion button actions, touch clicks, release on cancellation/disconnect, `setOutputDevices`, and UUID-correlated routing errors. No hardware or stored credentials are accessed by the regression tests.
 
 ### Events
 
