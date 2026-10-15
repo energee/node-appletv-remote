@@ -312,13 +312,14 @@ export class AppleTV extends EventEmitter {
   }
 
   /**
-   * Cancel gestures, attempt touch cleanup, then close both transports even if cleanup fails.
-   * A touch startup still in flight is abandoned (closing Companion ends it), not awaited.
+   * Cancel gestures, attempt best-effort touch cleanup, then close both transports; never rejects.
+   * Touch teardown errors are ignored (call stopTouch() first to observe them). A touch startup
+   * still in flight is abandoned (closing Companion ends it), not awaited.
    */
   async close(): Promise<void> {
     this.gestureController?.abort();
     try {
-      if (!this.touchStarting) await this.stopTouch();
+      if (!this.touchStarting) await this.stopTouch().catch(() => {});
     } finally {
       const companion = this.companionConnection;
       const connection = this.connection;

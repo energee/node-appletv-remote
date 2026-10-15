@@ -296,8 +296,9 @@ classes emit `error` only when a listener exists; pending work still rejects and
 still fires without one. There is no automatic reconnect or retry.
 
 `await atv.close()` shuts down local sockets without RTSP TEARDOWN. If touch was started,
-it first cancels the gesture and attempts Companion touch/session cleanup (an unfinished touch startup is abandoned, not awaited); cleanup failure
-still closes both transports and rejects (both teardown failures are retained in an AggregateError). Without touch registrations, socket shutdown is immediate. Explicit close resets runtime availability once and notifies after both transports are cleared.
+it first cancels the gesture and attempts Companion touch/session cleanup (an unfinished touch startup is abandoned, not awaited); that cleanup
+is best-effort: failures are ignored and close still closes both transports and resolves (call `stopTouch()` first to observe
+teardown errors; both are retained there in an AggregateError). Without touch registrations, socket shutdown is immediate. Explicit close resets runtime availability once and notifies after both transports are cleared.
 Repeated close is safe. A second connect on
 an open or connecting connection rejects. Close cancels pending TCP setup as well as
 protocol waiters; await the canceled setup promise before reusing a low-level connection
