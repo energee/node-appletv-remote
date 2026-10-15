@@ -17,5 +17,6 @@ describe('enum exports', () => {
     expect(lib.PowerState.On).toBe('on');
     expect(lib.TouchAction.Press).toBe(1);
     expect(lib.TouchAction.Release).toBe(4);
+    expect(lib.KeyboardFocusState.Focused).toBe('focused');
   });
 });

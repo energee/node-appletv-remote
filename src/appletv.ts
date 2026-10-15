@@ -113,6 +113,13 @@ export enum PowerState {
   On = 'on',
 }
 
+/** Text-field focus from Companion RTI (`_tiStart` reply, `_tiStarted`/`_tiStopped` events). */
+export enum KeyboardFocusState {
+  Unknown = 'unknown',
+  Unfocused = 'unfocused',
+  Focused = 'focused',
+}
+
 /** Button action timing: tap retains existing defaults; hold lasts one second. */
 export type InputAction = 'singleTap' | 'doubleTap' | 'hold';
 /** Companion touch phase values. */
@@ -180,7 +187,7 @@ export interface CompanionEvent {
  * for Companion features; methods throw if their connection is not open.
  *
  * Events: `connect`, `close`, `error`, `message`, `mrpDiagnostic`, `nowPlaying`, `supportedCommands`,
- * `playbackQueue`, `featureAvailability`, `keyboard`, `textInput`, `volume`, `powerState`, `companionConnect`,
+ * `playbackQueue`, `featureAvailability`, `keyboard`, `textInput`, `textFocusState`, `volume`, `powerState`, `companionConnect`,
  * `companionClose`, `companionError`, `companionEvent`, `outputDevices`.
  * `close`/`companionClose` fire only after the matching connect event; failed setup only rejects.
  */
@@ -248,6 +255,8 @@ export class AppleTV extends EventEmitter {
   volume?: number;
   /** Last power state from fetchPowerState() or a SystemStatus event. */
   powerState: PowerState = PowerState.Unknown;
+  /** Last text-field focus from Companion RTI; unknown until a `_tiStart` reply or `_tiStarted`/`_tiStopped` event, and after Companion closes. */
+  textFocusState: KeyboardFocusState = KeyboardFocusState.Unknown;
 
   constructor(info: DiscoveredDeviceInfo) {
     super();
@@ -340,6 +349,7 @@ export class AppleTV extends EventEmitter {
     this.reportedOutputs = [];
     this.reportedLeader = undefined;
     this.resetRuntimeState();
+    this.updateTextFocusState(KeyboardFocusState.Unknown);
     if (companion && this.readyTransports.has(companion)) this.emit('companionClose');
     if (connection && this.readyTransports.has(connection)) this.emit('close');
   }
@@ -375,6 +385,7 @@ export class AppleTV extends EventEmitter {
       this.touchSession = undefined;
       this.activeTouch = undefined;
       this.companionConnection = undefined;
+      this.updateTextFocusState(KeyboardFocusState.Unknown);
       if (this.readyTransports.has(connection)) this.emit('companionClose');
     });
     connection.on('error', (err) => { if (this.companionErrorSource === connection) this.emit('companionError', err); });
@@ -634,20 +645,37 @@ export class AppleTV extends EventEmitter {
   async getText(): Promise<string> { return this.editText('', false); }
 
   /**
+   * Ask whether a text field is focused (Companion RTI) and cache it as `textFocusState`.
+   * The RTI session this starts stays open, so the TV can then send `_tiStarted`/`_tiStopped`
+   * events, which emit `textFocusState` on change.
+   */
+  async fetchTextFocusState(): Promise<KeyboardFocusState> {
+    await this.restartTextSession();
+    return this.textFocusState;
+  }
+
+  /**
    * Restart the RTI session for fresh state, then send `_tiC` edits.
    * Modern tvOS ignores the MRP TextInputMessage, so text input needs connectCompanion().
    * @throws If no text field is focused (the `_tiStart` reply has no `_tiD`).
    */
   private async editText(text: string, clear: boolean): Promise<string> {
     const conn = this.requireCompanion();
-    await conn.sendRequest('_tiStop', new Map());
-    const archive = (await this.companionContent('_tiStart')).get('_tiD');
+    const archive = await this.restartTextSession();
     if (!Buffer.isBuffer(archive)) throw new Error('No text field is focused');
     const { sessionUUID, text: current } = readTextSession(archive);
     const send = (payload: Buffer) => conn.sendMessage('_tiC', new Map<OpackValue, OpackValue>([['_tiV', 1], ['_tiD', payload]]));
     if (clear) send(rtiClearTextPayload(sessionUUID));
     if (text) send(rtiInputTextPayload(sessionUUID, text));
     return (clear ? '' : current) + text;
+  }
+
+  /** `_tiStop` then `_tiStart`; records focus (a `_tiD` archive means focused) and returns the archive. */
+  private async restartTextSession(): Promise<OpackValue | undefined> {
+    await this.requireCompanion().sendRequest('_tiStop', new Map());
+    const archive = (await this.companionContent('_tiStart')).get('_tiD');
+    this.updateTextFocusState(archive === undefined ? KeyboardFocusState.Unfocused : KeyboardFocusState.Focused);
+    return archive;
   }
 
   /** Send a Delete text-input action to the focused text field. */
@@ -964,12 +992,24 @@ export class AppleTV extends EventEmitter {
     this.emit('powerState', state);
   }
 
-  /** Re-emit every Companion event and update power state from SystemStatus/TVSystemStatus. */
+  /** Cache a text-focus state and emit `textFocusState` only when it changes. */
+  private updateTextFocusState(state: KeyboardFocusState): void {
+    if (state === this.textFocusState) return;
+    this.textFocusState = state;
+    this.emit('textFocusState', state);
+  }
+
+  /** Re-emit every Companion event; update power state from SystemStatus/TVSystemStatus and text focus from `_tiStarted`/`_tiStopped`. */
   private handleCompanionEvent(event: CompanionEvent): void {
     this.emit('companionEvent', event);
+    const content = event.data.get('_c');
     if (event.identifier === 'SystemStatus' || event.identifier === 'TVSystemStatus') {
-      const content = event.data.get('_c');
       if (content instanceof Map) this.updatePowerState(powerStateFromStatus(content.get('state')));
+    }
+    if (event.identifier === '_tiStarted' || event.identifier === '_tiStopped') {
+      // Like the _tiStart reply, the event carries `_tiD` only while a text field is focused.
+      const focused = content instanceof Map && content.has('_tiD');
+      this.updateTextFocusState(focused ? KeyboardFocusState.Focused : KeyboardFocusState.Unfocused);
     }
   }
 

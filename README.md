@@ -37,6 +37,7 @@ atv volume 40 [deviceId]          # absolute volume, 0..100
 atv text set "search words" [deviceId]  # prints the new text; fails if no field is focused
 atv text append " more" [deviceId]
 atv text clear [deviceId]
+atv text focus [deviceId]         # focused, unfocused, or unknown
 atv app list [deviceId]           # tab-separated bundle ID and name
 atv app launch com.netflix.Netflix [deviceId] # bundle ID or URL / URL scheme
 atv account list [deviceId]       # tab-separated account ID and name
@@ -54,7 +55,7 @@ Numeric values must be finite decimal numbers in the documented range. Required 
 Two CLI timing knobs guard HID keys, which the Apple TV never acknowledges. Set either to `0` for faster one-shot commands:
 
 - `ATV_SETTLE_MS` (default 500): pause after the MRP handshake before sending anything, for every MRP command (a request sent before the device is ready may be dropped; for a query that would mean waiting out its 10 s timeout). Companion-only commands do not use it. The library defaults to `0`; opt in with `atv.connect(credentials, { settleMs: 500 })`.
-- `ATV_POST_SEND_MS` (default 1000): pause after a one-shot key/playback/text/volume/Companion-button/app-launch/account-switch operation, before disconnecting. Read-only queries (`power`, `app list`, `account list`, `state`, `queue`, `artwork`) disconnect as soon as their reply arrives.
+- `ATV_POST_SEND_MS` (default 1000): pause after a one-shot key/playback/text/volume/Companion-button/app-launch/account-switch operation, before disconnecting. Read-only queries (`power`, `text focus`, `app list`, `account list`, `state`, `queue`, `artwork`) disconnect as soon as their reply arrives.
 
 ```
 $ atv state
@@ -487,9 +488,15 @@ await atv.setText('apple tv');               // 'apple tv'
 await atv.insertText(' remote');             // 'apple tv remote'
 await atv.getText();                         // read without editing
 await atv.clearText();                       // ''
+
+// Is a text field focused? KeyboardFocusState.Focused / Unfocused / Unknown
+await atv.fetchTextFocusState();             // also cached as atv.textFocusState
+atv.on('textFocusState', (state) => {});     // fires when focus changes
 ```
 
 Text input uses Companion RTI: restart the text session (`_tiStop`/`_tiStart`), read the session UUID and current text from the reply, then send `_tiC` edits. A real Apple TV 4K ignored the older MRP `TextInputMessage`, so text input now needs `connectCompanion()`, and it rejects with `No text field is focused` instead of silently succeeding. `deleteText()` still sends the MRP Delete action.
+
+Text focus comes from the same RTI session: a `_tiStart` reply carries `_tiD` only while a text field is focused. Every `_tiStart` this library sends (from `fetchTextFocusState()` or a text edit) updates `textFocusState`; afterwards the TV can push `_tiStarted`/`_tiStopped` events, which update it and emit `textFocusState` only on change. It starts as `unknown` and returns to `unknown` when Companion closes. This is fixture-tested only; whether a given tvOS version pushes these events to this client is not hardware-verified. The MRP `keyboard` event is separate and only fires on devices that still send KeyboardMessage.
 
 `connectCompanion()` sends `_systemInfo` after pair-verify. Without it, a real Apple TV 4K answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on an Apple TV 4K (tvOS, AppleTV6,2).
 
@@ -576,7 +583,8 @@ atv.on('volume', (level) => {});           // 0–100
 atv.on('powerState', (state) => {});       // after subscribePowerState()
 atv.on('supportedCommands', (cmds) => {}); // SupportedCommand[]
 atv.on('playbackQueue', (queue) => {});
-atv.on('keyboard', (kb) => {});            // text field focused/unfocused
+atv.on('keyboard', (kb) => {});            // MRP KeyboardMessage focus (older tvOS)
+atv.on('textFocusState', (state) => {});   // Companion RTI focus; see fetchTextFocusState()
 atv.on('message', (msg) => {});            // every raw MRP message; not sanitized
 atv.on('mrpDiagnostic', (d: MRPDiagnostic) => {}); // opt in before connect; safe routing tokens
 atv.on('close', () => {});
