@@ -19,7 +19,7 @@ export interface MRPDiagnostic {
 export abstract class MRPConnection extends EventEmitter {
   protected closed = false;
   protected mrpGeneration = 0;
-  /** In-memory equality tokens, capped at the 1024 most recent values; discarded with this connection, never persisted. */
+  /** In-memory equality tokens, capped at the 1024 most recently used values (LRU); discarded with this connection, never persisted. */
   private diagnosticIds = new Map<string, string>();
   private diagnosticCount = 0;
   protected pendingMRPResolvers: Array<{
@@ -167,13 +167,11 @@ export abstract class MRPConnection extends EventEmitter {
     const token = (kind: string, value: unknown): string | undefined => {
       if (typeof value !== 'string' || !value) return undefined;
       const key = JSON.stringify([kind, value]);
-      let id = this.diagnosticIds.get(key);
-      if (!id) {
-        id = `${kind}-${++this.diagnosticCount}`;
-        this.diagnosticIds.set(key, id);
-        // ponytail: FIFO cap; an evicted value gets a fresh token if it reappears much later.
-        if (this.diagnosticIds.size > 1024) this.diagnosticIds.delete(this.diagnosticIds.keys().next().value!);
-      }
+      // LRU: re-insert on every use so long-lived client/player tokens outlive churning request ids.
+      const id = this.diagnosticIds.get(key) ?? `${kind}-${++this.diagnosticCount}`;
+      this.diagnosticIds.delete(key);
+      this.diagnosticIds.set(key, id);
+      if (this.diagnosticIds.size > 1024) this.diagnosticIds.delete(this.diagnosticIds.keys().next().value!);
       return id;
     };
     const identifier = token('request', msg.identifier);

@@ -152,6 +152,20 @@ describe('sanitized MRP diagnostics', () => {
     conn.close();
   });
 
+  it('keeps a recurring client token stable while request identifiers churn past the cap (LRU)', async () => {
+    const conn = connection();
+    const clients: unknown[] = [];
+    conn.on('mrp-diagnostic', diagnostic => { if (diagnostic.client) clients.push(diagnostic.client); });
+    const state = { type: MessageType.SetState, '.setStateMessage': { playerPath: { client: { bundleIdentifier: 'app' } } } };
+    for (let i = 0; i < 1500; i++) {
+      (conn as any).emitDiagnostic('receive', state);
+      (conn as any).emitDiagnostic('send', { type: MessageType.SetConnectionState, identifier: `id-${i}` });
+    }
+    expect(new Set(clients).size).toBe(1);
+    expect((conn as any).diagnosticIds.size).toBeLessThanOrEqual(1024);
+    conn.close();
+  });
+
   it('excludes auth and unrelated message types entirely', async () => {
     const conn = connection();
     const observed: unknown[] = [];
