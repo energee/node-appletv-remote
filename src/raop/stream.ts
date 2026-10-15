@@ -5,6 +5,7 @@ import { randomBytes, createPrivateKey, createPublicKey, diffieHellman, createHa
 import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { audioPacket, timingReply, syncPacket, PacketHistory, FRAMES_PER_PACKET, SAMPLE_RATE, PACKET_BYTES } from './packets.js';
+import { X25519_SPKI_PREFIX, X25519_PKCS8_PREFIX, ED25519_PKCS8_PREFIX } from '../util/crypto.js';
 
 /** Finite raw PCM chunks; streamed chunks are Buffers of at most 65,536 bytes. */
 export type RaopPcmSource = Buffer | AsyncIterable<Buffer>;
@@ -260,8 +261,8 @@ export class RaopStream {
       if (legacySeed) {
         // Pinned pyatv LegacySRPAuthHandler uses the seed for BOTH key types.
         // This proves the client key only and does not turn on HAP transport encryption.
-        const curveDer = Buffer.concat([Buffer.from('302e020100300506032b656e04220420', 'hex'), legacySeed]);
-        const signingDer = Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), legacySeed]);
+        const curveDer = Buffer.concat([X25519_PKCS8_PREFIX, legacySeed]);
+        const signingDer = Buffer.concat([ED25519_PKCS8_PREFIX, legacySeed]);
         let curveKey: ReturnType<typeof createPrivateKey>;
         let signingKey: ReturnType<typeof createPrivateKey>;
         try {
@@ -274,7 +275,7 @@ export class RaopStream {
         const response = await client.request('POST', authHeaders, Buffer.concat([Buffer.from([1, 0, 0, 0]), curvePublic, signingPublic]), controller.signal, 5000, '/pair-verify');
         if (response.body.length !== 96) throw new Error('Invalid legacy pair-verify response: expected 96 bytes');
         const receiverPublic = response.body.subarray(0, 32);
-        const shared = diffieHellman({ privateKey: curveKey, publicKey: createPublicKey({ format: 'der', type: 'spki', key: Buffer.concat([Buffer.from('302a300506032b656e032100', 'hex'), receiverPublic]) }) });
+        const shared = diffieHellman({ privateKey: curveKey, publicKey: createPublicKey({ format: 'der', type: 'spki', key: Buffer.concat([X25519_SPKI_PREFIX, receiverPublic]) }) });
         let key: Buffer | undefined;
         let iv: Buffer | undefined;
         let signed: Buffer | undefined;
@@ -340,7 +341,7 @@ export class RaopStream {
           void feedback().catch(error => { if (!controller.signal.aborted) fail(error); }).finally(() => { pending = false; });
         }, 25000);
       }
-      const start = performance.now(); const epoch = ntpMilliseconds(); let sentFrames = 0; let firstSync = true;
+      let start = performance.now(); let epoch = ntpMilliseconds(); let sentFrames = 0; let firstSync = true;
       const sync = () => {
         if (controller.signal.aborted) return;
         control.send(syncPacket(this.timestamp, 66150, epoch + sentFrames / SAMPLE_RATE * 1000, firstSync), controlPort, this.address, error => { if (error) fail(error); });
@@ -352,8 +353,9 @@ export class RaopStream {
         const wait = start + sentFrames / SAMPLE_RATE * 1000 - performance.now();
         if (wait > 0) await delay(wait, undefined, { signal: controller.signal });
         controller.signal.throwIfAborted();
-        // Fail rather than flood a receiver after a long event-loop stall.
-        if (performance.now() - (start + sentFrames / SAMPLE_RATE * 1000) > 100) throw new Error('RAOP sender cannot keep pace');
+        // After a stall (GC, slow source), skip the lost time rather than flood the receiver or abort.
+        const lag = performance.now() - (start + sentFrames / SAMPLE_RATE * 1000);
+        if (lag > 100) { start += lag; epoch += lag; sync(); }
         const packet = audioPacket(payload ?? Buffer.alloc(0), this.sequence, this.timestamp, this.ssrc, sentFrames === 0);
         await new Promise<void>((resolve, reject) => audio.send(packet, serverPort, this.address, error => error ? reject(error) : resolve()));
         history.add(packet); this.sequence = (this.sequence + 1) & 0xffff; this.timestamp = (this.timestamp + FRAMES_PER_PACKET) >>> 0; sentFrames += FRAMES_PER_PACKET;

@@ -342,6 +342,20 @@ describe('legacy RAOP streaming', () => {
     expect(source.destroyed).toBe(true);
   });
 
+  it('re-anchors pacing after a source stall instead of aborting the stream', async () => {
+    const module = await load(); const peer = await receiver();
+    const packet = Buffer.alloc(1408);
+    async function* source() {
+      for (let i = 0; i < 4; i++) yield packet;
+      await new Promise(resolve => setTimeout(resolve, 300));
+      for (let i = 0; i < 4; i++) yield packet;
+    }
+    await expect(new module.RaopStream('127.0.0.1', peer.port, txt).stream(source() as AsyncIterable<Buffer>)).resolves.toBeUndefined();
+    expect(peer.packets.length).toBeGreaterThanOrEqual(8);
+    // The post-stall resync restates the RTP timestamp it resumes from.
+    expect(peer.sync.length).toBeGreaterThanOrEqual(2);
+  }, 10000);
+
   for (const [name, chunks, error] of [
     ['empty', [], /non-empty/], ['partial frame', [Buffer.alloc(3)], /complete/],
     ['non-buffer', ['text'], /Buffer/], ['oversized chunk', [Buffer.alloc(65537)], /65536/],
@@ -525,15 +539,20 @@ describe('legacy RAOP streaming', () => {
     expect(peer.requests).toHaveLength(0);
   });
 
-  it('preserves the production stall guard without flooding after a deterministic clock jump', async () => {
+  it('neither floods nor aborts after a deterministic clock jump', async () => {
     const module = await load(); const peer = await receiver(); const cancellation = new AbortController();
     const playing = new module.RaopStream('127.0.0.1', peer.port, txt).stream(Buffer.alloc(44100 * 4), { signal: cancellation.signal });
-    const rejected = expect(playing).rejects.toThrow(/cannot keep pace/);
+    const settled = playing.catch(error => error);
     await waitForIo(() => peer.packets.length > 0);
-    const before = peer.packets.length; const now = performance.now();
-    vi.spyOn(performance, 'now').mockReturnValue(now + 1000);
-    try { await rejected; await turn(); expect(peer.packets.length).toBeLessThanOrEqual(before + 1); }
-    finally { vi.restoreAllMocks(); cancellation.abort(); }
+    const before = peer.packets.length; const syncs = peer.sync.length; let now = performance.now() + 1000;
+    // A 1 s jump, then the clock advances one packet per read: catch-up would send ~125 packets at once.
+    vi.spyOn(performance, 'now').mockImplementation(() => (now += 0.001));
+    try {
+      await waitForIo(() => peer.sync.length > syncs);
+      await turn();
+      expect(peer.packets.length).toBeLessThanOrEqual(before + 3);
+    } finally { vi.restoreAllMocks(); cancellation.abort(); }
+    expect(await settled).toBeInstanceOf(Error);
     expect(peer.requests.at(-1)!.method).toBe('TEARDOWN');
   });
 

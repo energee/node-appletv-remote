@@ -6,7 +6,7 @@
 
 import { generateKeyPairSync, sign, createPrivateKey, randomUUID } from 'node:crypto';
 import { TlvTag, tlvEncode, tlvDecode } from '../util/tlv.js';
-import { hkdfSha512, encryptChaCha20, decryptChaCha20 } from '../util/crypto.js';
+import { hkdfSha512, encryptChaCha20, decryptChaCha20, ED25519_PKCS8_PREFIX } from '../util/crypto.js';
 import { SRPClient } from './srp.js';
 import { PersistentHttp } from '../util/http.js';
 import type { HAPCredentials } from './types.js';
@@ -144,7 +144,7 @@ export class PairSetup {
     // Sign with Ed25519 (raw 32-byte seed wrapped in a PKCS#8 DER prefix)
     const edKey = createPrivateKey({
       key: Buffer.concat([
-        Buffer.from('302e020100300506032b657004220420', 'hex'),
+        ED25519_PKCS8_PREFIX,
         this.edPrivateKeyRaw,
       ]),
       format: 'der',

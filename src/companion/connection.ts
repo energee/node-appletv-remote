@@ -17,7 +17,7 @@ import {
   type KeyObject,
 } from 'node:crypto';
 import { TlvTag, tlvEncode, tlvDecode } from '../util/tlv.js';
-import { hkdfSha512, encryptChaCha20, decryptChaCha20 } from '../util/crypto.js';
+import { hkdfSha512, encryptChaCha20, decryptChaCha20, X25519_SPKI_PREFIX, ED25519_SPKI_PREFIX, ED25519_PKCS8_PREFIX } from '../util/crypto.js';
 import { FrameType, encodeFrame, parseFrames, type Frame } from './framing.js';
 import { CompanionSession } from './companion-session.js';
 import {
@@ -26,9 +26,6 @@ import {
 import type { HAPCredentials } from '../auth/types.js';
 
 // DER prefixes that turn raw 32-byte keys into SPKI/PKCS#8 for node:crypto import.
-const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
-const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
-const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
 /** Import a raw 32-byte X25519 public key. */
 function x25519PublicKeyFromRaw(raw: Buffer): KeyObject {

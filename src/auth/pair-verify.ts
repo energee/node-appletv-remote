@@ -15,14 +15,11 @@ import {
   type KeyObject,
 } from 'node:crypto';
 import { TlvTag, tlvEncode, tlvDecode } from '../util/tlv.js';
-import { hkdfSha512, encryptChaCha20, decryptChaCha20 } from '../util/crypto.js';
+import { hkdfSha512, encryptChaCha20, decryptChaCha20, X25519_SPKI_PREFIX, ED25519_SPKI_PREFIX, ED25519_PKCS8_PREFIX } from '../util/crypto.js';
 import { PersistentHttp } from '../util/http.js';
 import type { HAPCredentials } from './types.js';
 
 /** DER prefixes that wrap a raw 32-byte key so node:crypto can import it. */
-const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
-const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
-const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
 /** Import a raw 32-byte X25519 public key. */
 function x25519PublicKeyFromRaw(raw: Buffer): KeyObject {

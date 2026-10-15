@@ -9,6 +9,12 @@ import { promisify } from 'node:util';
 
 const hkdfAsync = promisify(hkdf);
 
+/** DER prefixes that wrap a raw 32-byte key for node:crypto import (key bytes are appended). */
+export const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
+export const X25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b656e04220420', 'hex');
+export const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+export const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
+
 /** Whether this Node/OpenSSL build exposes `chacha20-poly1305` natively. */
 const hasNativeChacha = getCiphers().includes('chacha20-poly1305');
 

@@ -19,7 +19,7 @@ import { MRPConnection } from './mrp/connection.js';
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
 import { HAPSession } from './util/hap-session.js';
-import { hkdfSha512, encryptChaCha20, decryptChaCha20 } from './util/crypto.js';
+import { hkdfSha512, encryptChaCha20, decryptChaCha20, X25519_SPKI_PREFIX, ED25519_SPKI_PREFIX, ED25519_PKCS8_PREFIX } from './util/crypto.js';
 import { TlvTag, tlvEncode, tlvDecode } from './util/tlv.js';
 import { MRPMessage, MessageType } from './mrp/messages.js';
 import { buildDataStreamFrame, buildDataStreamReply, parseDataStreamFrame } from './util/data-stream.js';
@@ -28,9 +28,6 @@ import type { HAPCredentials } from './auth/types.js';
 /** `clientTypeUUID` that asks the receiver for an MRP data stream (stream type 130). */
 const DATA_CHANNEL_TYPE_UUID = '1910A70F-DBC0-4242-AF95-115DB30604E1';
 /** DER prefixes that wrap raw 32-byte X25519/Ed25519 keys for Node's `createPublicKey`/`createPrivateKey`. */
-const X25519_SPKI_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
-const ED25519_SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
-const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 
 /** An HTTP/RTSP message split out of a byte buffer by `parseHTTPMessage`. */
 export interface ParsedHTTP {
