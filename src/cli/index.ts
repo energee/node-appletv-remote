@@ -572,7 +572,10 @@ export async function main(argv: string[]): Promise<void> {
 }
 
 // Importing the CLI for tests does not execute commands or touch stored credentials.
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+// realpathSync resolves npm bin symlinks; an unresolvable argv[1] just means "not the script".
+let isScript = false;
+try { isScript = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href; } catch { /* not the script */ }
+if (isScript) {
   main(process.argv.slice(2)).catch((error: unknown) => {
     console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
