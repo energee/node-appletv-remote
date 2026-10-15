@@ -127,7 +127,8 @@ transport's request correlation.
 Queue metadata uses its current `location`; item updates merge by identifier.
 Direct state updates retain omitted fields; a changed `uniqueIdentifier` clears
 old-track metadata. Runtime evidence is discarded on disconnect/reconnect. Inactive players stay separate until
-an active client/player message selects them. `hasPlayback` distinguishes absent
+an active client/player message selects them; an empty `SetNowPlayingClient` selects the
+empty-bundle client (as pyatv does), so an idle TV reports nothing playing. `hasPlayback` distinguishes absent
 metadata from paused/stopped playback; `playbackState` retains the device's explicit
 state (unknown if not reported). `playerIdentifier` and `appBundleIdentifier`
 identify the selected player. Position is a snapshot, not extrapolated. CLI state uses the same summary as

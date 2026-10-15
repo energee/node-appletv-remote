@@ -69,7 +69,8 @@ export class PlayerState {
     const identifier = path.player?.identifier ?? DEFAULT_PLAYER;
     if (type === MessageType.SetNowPlayingClient) {
       this.selected = true;
-      this.activeClient = clientInfo.bundleIdentifier ? bundle : undefined;
+      // pyatv: an empty client is the '' bundle, a normal active client with no players.
+      this.activeClient = bundle;
       return true;
     }
     if (type === MessageType.RemoveClient) {

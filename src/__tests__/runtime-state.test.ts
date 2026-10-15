@@ -123,6 +123,12 @@ describe('unified player state', () => {
     deliver(atv, MessageType.SetNowPlayingClient, 'setNowPlayingClientMessage', {});
     expect((atv as any).nowPlaying.hasPlayback).toBe(false);
   });
+  it('treats an empty now-playing client as the active client (pyatv: bundle id \'\')', () => {
+    const atv = device();
+    deliver(atv, MessageType.SetNowPlayingClient, 'setNowPlayingClientMessage', {});
+    deliver(atv, MessageType.SetState, 'setStateMessage', { playbackState: 3 });
+    expect(atv.nowPlaying).toMatchObject({ hasPlayback: false, playbackState: PlaybackState.Stopped });
+  });
   it('uses the same snapshot for getNowPlaying and events', async () => {
     const atv = device();
     let emitted: unknown;
