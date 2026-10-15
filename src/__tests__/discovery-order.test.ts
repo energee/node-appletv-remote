@@ -29,7 +29,7 @@ describe('mDNS service ordering', () => {
       const devices = await pending;
       expect(devices).toHaveLength(1);
       expect(devices[0].companionPort).toBe(services['companion-link'].port);
-      expect(mock.stopped).toHaveBeenCalledTimes(5);
+      expect(mock.stopped).toHaveBeenCalledTimes(6);
       expect(mock.destroyed).toHaveBeenCalledOnce();
     });
   }
@@ -149,5 +149,5 @@ it.each(['filter', 'until'] as const)('rejects throwing scan %s callbacks and cl
   const assertion = expect(pending).rejects.toThrow('callback failed');
   expect(() => mock.callbacks.get('airplay')!({ name: 'TV', addresses: ['192.0.2.1'], port: 7000, txt: {} })).not.toThrow();
   await assertion;
-  expect(mock.stopped).toHaveBeenCalledTimes(5); expect(mock.destroyed).toHaveBeenCalledOnce();
+  expect(mock.stopped).toHaveBeenCalledTimes(6); expect(mock.destroyed).toHaveBeenCalledOnce();
 });

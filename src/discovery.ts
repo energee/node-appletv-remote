@@ -1,6 +1,7 @@
 /**
- * Bonjour discovery of independent AirPlay, Companion, standalone MRP and legacy DMAP services.
- * Modern services join by compatible protocol identity, hostname, or address overlap.
+ * Bonjour discovery of independent AirPlay, RAOP, Companion, standalone MRP and legacy DMAP services.
+ * Modern services join by compatible protocol identity, hostname, or address overlap; RAOP joins
+ * AirPlay by the MAC in its `<MAC hex>@<name>` instance name.
  * DMAP requires a shared primary-protocol endpoint; mDNS associations are not authenticated.
  */
 
@@ -57,6 +58,12 @@ export interface DiscoveredDeviceInfo {
   dmapAddress?: string;
   /** AirPlay `psi` TXT value: the ID to pass to AppleTV output routing (add/remove/setOutputDevices). */
   airplayPsi?: string;
+  /** `_raop._tcp` audio port; pass with raopAddress and raopTxt to `new RaopStream(...)`. */
+  raopPort?: number;
+  /** RAOP address, preferring one shared with the primary protocol. */
+  raopAddress?: string;
+  /** RAOP TXT record with lower-cased keys, as RaopStream expects. */
+  raopTxt?: Readonly<Record<string, string>>;
 }
 
 /** An Apple TV found by scan(). */
@@ -82,6 +89,12 @@ export class DiscoveredDevice {
   dmapAddress?: string;
   /** AirPlay `psi` TXT value: the ID to pass to AppleTV output routing (add/remove/setOutputDevices). */
   airplayPsi?: string;
+  /** `_raop._tcp` audio port; pass with raopAddress and raopTxt to `new RaopStream(...)`. */
+  raopPort?: number;
+  /** RAOP address, preferring one shared with the primary protocol. */
+  raopAddress?: string;
+  /** RAOP TXT record with lower-cased keys, as RaopStream expects. */
+  raopTxt?: Readonly<Record<string, string>>;
 
   constructor(info: DiscoveredDeviceInfo) {
     this.name = info.name;
@@ -98,6 +111,9 @@ export class DiscoveredDevice {
     this.dmapPort = info.dmapPort;
     this.dmapAddress = info.dmapAddress;
     this.airplayPsi = info.airplayPsi;
+    this.raopPort = info.raopPort;
+    this.raopAddress = info.raopAddress;
+    this.raopTxt = info.raopTxt;
   }
 
   /** `name (address:port) [model]`. */
@@ -117,6 +133,12 @@ export interface ScanOptions {
    * Checked after every mDNS record, once the Companion port has been joined.
    */
   until?: (device: DiscoveredDevice) => boolean;
+}
+
+/** Split a `_raop._tcp` instance name `<12 hex MAC>@<name>`; undefined when malformed. */
+function parseRaopName(instance: string | undefined): { mac: string; name: string } | undefined {
+  const match = instance?.match(/^([0-9a-f]{12})@(.+)$/i);
+  return match ? { mac: match[1].toUpperCase().match(/../g)!.join(':'), name: match[2] } : undefined;
 }
 
 /** Usable unicast addresses, preferring IPv4 for compatibility; scoped IPv6 is preserved. */
@@ -147,7 +169,7 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
 
     const collect = (): DiscoveredDevice[] => {
       const groups: RecordEntry[][] = [];
-      const priority = ['airplay', 'mediaremotetv', 'companion-link', 'touch-able', 'appletv-v2'];
+      const priority = ['airplay', 'raop', 'mediaremotetv', 'companion-link', 'touch-able', 'appletv-v2'];
       // Establish primary devices first, independent of callback arrival order.
       const ordered = records.map(record => ({
         record, priority: priority.indexOf(record.type),
@@ -181,26 +203,29 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
         const companion = group.find((r) => r.type === 'companion-link');
         const mrp = group.find((r) => r.type === 'mediaremotetv');
         const dmap = group.find(r => r.type === 'touch-able') ?? group.find(r => r.type === 'appletv-v2');
-        const primary = airplay ?? mrp ?? dmap ?? companion!;
+        const raop = group.find(r => r.type === 'raop');
+        const primary = airplay ?? mrp ?? dmap ?? companion ?? raop!;
         const primaryAddresses = group.filter(record => record.type === primary.type &&
           record.service.host?.toLowerCase() === primary.service.host?.toLowerCase()).flatMap(record => record.addresses);
         const sharedAddress = (record: RecordEntry | undefined): string | undefined =>
           record?.addresses.find(address => primaryAddresses.includes(address)) ?? record?.addresses[0];
         // Never fall back to an unrelated DMAP address under a modern device identity.
         const dmapAddress = dmap?.addresses.find(address => primaryAddresses.includes(address));
-        const identifiers = [...new Set([airplay, mrp, dmap, companion].flatMap((r) => r?.ids ?? []))];
+        const identifiers = [...new Set([airplay, mrp, dmap, companion, raop].flatMap((r) => r?.ids ?? []))];
         const build = Number(mrp?.txt.systembuildversion?.match(/^(\d+)[A-Z]/)?.[1]);
         return new DiscoveredDevice({
-          name: primary.txt.ctln ?? primary.txt.name ?? primary.service.name ?? 'Unknown',
+          name: primary === raop ? parseRaopName(raop.service.name)!.name :
+            primary.txt.ctln ?? primary.txt.name ?? primary.service.name ?? 'Unknown',
           address: primary.addresses[0], port: airplay?.service.port ?? 0,
           deviceId: identifiers[0] ?? primary.service.host ?? primary.service.fqdn ?? primary.service.name,
           identifiers,
-          model: airplay?.txt.model ?? companion?.txt.rpmd ?? (dmap ? 'Legacy DMAP device' : 'Unknown'),
+          model: airplay?.txt.model ?? companion?.txt.rpmd ?? raop?.txt.am ?? (dmap ? 'Legacy DMAP device' : 'Unknown'),
           dmapPort: dmapAddress ? dmap?.service.port : undefined, dmapAddress,
           companionPort: companion?.service.port, companionAddress: sharedAddress(companion),
           mrpPort: mrp?.service.port, mrpAddress: sharedAddress(mrp),
           mrpEnabled: mrp ? !(build >= 19) : undefined,
           airplayPsi: airplay?.txt.psi,
+          raopPort: raop?.service.port, raopAddress: sharedAddress(raop), raopTxt: raop?.txt,
         });
       });
       return options.filter ? devices.filter(options.filter) : devices;
@@ -219,7 +244,7 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
         cleanup(); resolve(result);
       } catch (error) { fail(error); }
     };
-    for (const type of ['airplay', 'companion-link', 'mediaremotetv', 'touch-able', 'appletv-v2']) {
+    for (const type of ['airplay', 'raop', 'companion-link', 'mediaremotetv', 'touch-able', 'appletv-v2']) {
       browsers.push(instance.find({ type, protocol: 'tcp' }, (service: Service) => {
         if (done) return;
         const addresses = usableAddresses(service);
@@ -227,10 +252,14 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
         const txt = normalizeTxt(service.txt);
         if (type === 'companion-link' && txt.rpmd && !txt.rpmd.startsWith('AppleTV')) return;
         const legacy = type === 'touch-able' || type === 'appletv-v2';
-        const ids = (type === 'airplay' ? [txt.deviceid] : type === 'companion-link' ? [txt.rpmrtid] : type === 'mediaremotetv' ? [txt.uniqueidentifier, txt.macaddress] : [service.name ? `dmap:${service.name}` : undefined]).filter((id): id is string => !!id);
+        const raopName = type === 'raop' ? parseRaopName(service.name) : undefined;
+        if (type === 'raop' && !raopName) return;
+        const ids = (type === 'airplay' ? [txt.deviceid] : type === 'raop' ? [raopName!.mac] : type === 'companion-link' ? [txt.rpmrtid] : type === 'mediaremotetv' ? [txt.uniqueidentifier, txt.macaddress] : [service.name ? `dmap:${service.name}` : undefined]).filter((id): id is string => !!id);
         // Only documented cross-protocol identifiers share a namespace. DMAP instance names do not.
+        // MACs compare case- and colon-insensitively (RAOP instance names omit the colons).
         const identity = {
-          mac: (type === 'airplay' ? txt.deviceid : type === 'mediaremotetv' ? txt.macaddress : undefined)?.toLowerCase(),
+          mac: (type === 'airplay' ? txt.deviceid : type === 'raop' ? raopName!.mac :
+            type === 'mediaremotetv' ? txt.macaddress : undefined)?.toLowerCase().replaceAll(':', ''),
           mrp: (type === 'companion-link' ? txt.rpmrtid : type === 'mediaremotetv' ? txt.uniqueidentifier : undefined)?.toLowerCase(),
           dmap: legacy ? (service.name || service.fqdn || 'unknown').toLowerCase() : undefined,
         };

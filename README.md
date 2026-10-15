@@ -439,10 +439,23 @@ No hardware verification has been performed for this API; the existing Apple TV
 4K status does not apply. HomePods and other receivers needing transient pairing,
 AirPlay 2 buffered audio, RSA/FairPlay/MFi authentication, password digest auth,
 legacy PIN pair-setup, ALAC, transcoding, multiroom, live sources, artwork,
-progress, and automatic RAOP discovery are excluded. `atv raop-stream` wraps this API
+and progress are excluded. `atv raop-stream` wraps this API
 for PIN-less legacy receivers (it supplies neither a `legacySeed` nor HAP credentials).
 
-Supply an explicit IPv4 endpoint and its actual `_raop._tcp` TXT record. Required
+`scan()` browses `_raop._tcp` and fills `raopAddress`, `raopPort` and `raopTxt` (see
+[Discovery](#discovery-and-transport-selection)):
+
+```typescript
+import { scan, RaopStream } from 'node-appletv-remote';
+
+const device = (await scan()).find(d => d.name === 'Living Room' && d.raopPort);
+const sender = new RaopStream(device!.raopAddress!, device!.raopPort!, device!.raopTxt!);
+```
+
+mDNS associations are not authenticated: a spoofed advertisement can supply any
+endpoint and TXT record. You can also supply an explicit endpoint and TXT record.
+
+Legacy receivers need an IPv4 endpoint and their actual `_raop._tcp` TXT record. Required
 capabilities are `cn` containing `0` (PCM), `et` containing `0` (unencrypted), `tp`
 containing `UDP`, `sr=44100`, `ss=16`, and `ch=2`; `pw` must be absent or `false`.
 `sf`/`flags` are parsed as hexadecimal: PIN/legacy-pairing bits `0x8`/`0x200`
@@ -511,7 +524,7 @@ connections close (also on setup failure).
 import { createReadStream } from 'node:fs';
 import { RaopStream } from 'node-appletv-remote';
 
-// address, raopPort and raopTxt come from your receiver's _raop._tcp service.
+// address, raopPort and raopTxt come from scan() (device.raopAddress/raopPort/raopTxt).
 const sender = new RaopStream(address, raopPort, raopTxt);
 const cancellation = new AbortController();
 await sender.stream(createReadStream('track.pcm', { highWaterMark: 65536 }), {
@@ -817,9 +830,11 @@ A standalone MRP connection sends a heartbeat (a GenericMessage) every 30 s, nev
 
 Discovery associates modern services by compatible advertised identity, primary-protocol hostname, or overlapping primary-protocol addresses, never by display name. AirPlay `deviceid` and MRP `macAddress` share a MAC namespace; MRP `UniqueIdentifier` and Companion `rpMRtID` share an MRP namespace. Other cross-protocol ID equality does not establish an association. Conflicting IDs within a namespace keep devices separate. Same-protocol records with disjoint addresses and different SRV hosts remain separate even when their IDs match; duplicate device IDs are ambiguous, not verified identities. Primary endpoint overlap is scoped to the selected protocol host. Records matching multiple groups remain separate instead of bridging them, independent of arrival order; an ambiguous result must not be treated as a verified TV.
 
-DMAP instance names are not universal device IDs: `deviceId`/`identifiers` use `dmap:<instance>` instead of a raw instance name. Migrate stored legacy instance lookups to that prefix. DMAP requires direct address overlap with the primary protocol and never joins by hostname or instance name alone. `identifiers` retains the modern aliases for cached credential lookup, but every alias is unauthenticated mDNS data, not proof of identity. The primary `deviceId` prefers AirPlay, then MRP, then DMAP, then Companion. If no ID is advertised, discovery falls back to hostname/service instance (not IP). Changed advertisements can change the primary ID; match stored IDs against `identifiers` too, as the CLI does. These association checks prevent unrelated endpoint selection, not mDNS spoofing or an attacker advertising the same endpoint.
+`_raop._tcp` instance names have the form `<MAC hex>@<name>` (for example `AABBCCDDEEFF@Living Room`). A RAOP record joins the AirPlay device whose `deviceid` is that MAC, compared case- and colon-insensitively, under the same conflict and ambiguity rules; records whose name lacks `@` or a 12-hex-digit MAC are ignored. RAOP-only receivers (no matching AirPlay advertisement) become their own devices: `name` is the part after `@`, `address`/`raopAddress` the RAOP address, `port` 0 (no AirPlay), `deviceId` the colon-separated upper-case MAC, and `model` the RAOP `am` TXT value when present. `raopTxt` is the TXT record with lower-cased keys, ready for `new RaopStream(device.raopAddress!, device.raopPort!, device.raopTxt!)`. Like every mDNS association, this one is not authenticated.
 
-IPv4 is preferred when advertised; global/ULA IPv6 and explicitly scoped link-local IPv6 (for example `fe80::1234%en0`) are accepted. Unscoped link-local, loopback, unspecified, and multicast addresses are excluded. Use unbracketed addresses for constructors; the RTSP layer brackets IPv6 authorities. `companionAddress`, `mrpAddress`, and `dmapAddress` prefer an address shared with the primary protocol. Modern services joined by compatible identity or hostname can retain disjoint service-specific endpoints; joined DMAP endpoints must be shared. Dual-stack/multihomed advertisements for the same primary identity retain their usable addresses for overlap checks. No automatic connection retry across alternate addresses is added. Exceptions in `scan` filter/until callbacks reject the scan promise after stopping discovery.
+DMAP instance names are not universal device IDs: `deviceId`/`identifiers` use `dmap:<instance>` instead of a raw instance name. Migrate stored legacy instance lookups to that prefix. DMAP requires direct address overlap with the primary protocol and never joins by hostname or instance name alone. `identifiers` retains the modern aliases for cached credential lookup, but every alias is unauthenticated mDNS data, not proof of identity. The primary `deviceId` prefers AirPlay, then MRP, then DMAP, then Companion, then RAOP. If no ID is advertised, discovery falls back to hostname/service instance (not IP). Changed advertisements can change the primary ID; match stored IDs against `identifiers` too, as the CLI does. These association checks prevent unrelated endpoint selection, not mDNS spoofing or an attacker advertising the same endpoint.
+
+IPv4 is preferred when advertised; global/ULA IPv6 and explicitly scoped link-local IPv6 (for example `fe80::1234%en0`) are accepted. Unscoped link-local, loopback, unspecified, and multicast addresses are excluded. Use unbracketed addresses for constructors; the RTSP layer brackets IPv6 authorities. `companionAddress`, `mrpAddress`, `raopAddress`, and `dmapAddress` prefer an address shared with the primary protocol. Modern services joined by compatible identity or hostname can retain disjoint service-specific endpoints; joined DMAP endpoints must be shared. Dual-stack/multihomed advertisements for the same primary identity retain their usable addresses for overlap checks. No automatic connection retry across alternate addresses is added. Exceptions in `scan` filter/until callbacks reject the scan promise after stopping discovery.
 
 Tests use synthetic peers only; IPv6 network discovery and older-tvOS hardware interoperability still require operator validation. An AirPlay advertisement alone does not prove AirPlay 2 MRP or URL-playback compatibility. `createClient` treats known AppleTV1-3 model advertisements as legacy AirPlay; explicit protocol selection remains available.
 
