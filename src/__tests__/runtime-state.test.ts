@@ -383,6 +383,34 @@ it('rejects a wire-encoded envelope error despite inner success', async () => {
 });
 
 
+it('resolves nothing playing when the queue request is answered with error 35 (#10, Apple TV HD)', async () => {
+  const atv = device();
+  const connect = vi.spyOn(AirPlayConnection.prototype, 'connect').mockResolvedValue();
+  const proto = protobuf.Root.fromJSON(MRP_SCHEMA as protobuf.INamespace).lookupType('ProtocolMessage');
+  const send = vi.spyOn(AirPlayConnection.prototype, 'sendMRPMessage').mockImplementation(async function (this: AirPlayConnection, bytes: Buffer) {
+    const request = await MRPMessage.decode(bytes);
+    const reply = proto.encode(proto.create({ identifier: request.identifier, errorCode: 35,
+      errorDescription: 'Could not find the specified now playing client' })).finish();
+    await (this as any).handleMRPResponse(Buffer.from(reply));
+  });
+  vi.useFakeTimers();
+  try {
+    await atv.connect(new Credentials({ clientId: 'test', serverId: 'test', clientLTSK: Buffer.alloc(32), clientLTPK: Buffer.alloc(32), serverLTPK: Buffer.alloc(32) }));
+    const info = atv.getNowPlaying();
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(info).resolves.toMatchObject({ hasPlayback: false, playbackState: PlaybackState.Unknown });
+    // Other queue callers still see the device's rejection.
+    const raw = expect(atv.getState()).rejects.toMatchObject({ errorCode: 35 });
+    await vi.advanceTimersByTimeAsync(0);
+    await raw;
+  } finally {
+    vi.useRealTimers();
+    await atv.close();
+    connect.mockRestore();
+    send.mockRestore();
+  }
+});
+
 it('normalizes through the real transport before getNowPlaying resolves', async () => {
   const atv = device();
   const connect = vi.spyOn(AirPlayConnection.prototype, 'connect').mockResolvedValue();

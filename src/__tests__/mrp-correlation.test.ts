@@ -52,6 +52,21 @@ describe('MRP correlation', () => {
     conn.close();
   });
 
+  it('rejects a typed request on a same-identifier typeless error reply instead of timing out (#10)', async () => {
+    vi.useFakeTimers();
+    const conn = connection();
+    const request = await MRPMessage.playbackQueueRequest();
+    const id = (await MRPMessage.decode(request)).identifier as string;
+    const pending = conn.sendMRPMessageAndWait(request, MessageType.SetState, 10000);
+    const rejection = expect(pending).rejects.toMatchObject({ message: expect.stringContaining('Could not find'), errorCode: 35 });
+    // Apple TV HD trace: an unrelated error envelope, then ours, both without a type.
+    await conn['handleMRPResponse'](Buffer.from(protocol.encode(protocol.create({ identifier: 'unrelated', errorCode: 35 })).finish()));
+    await conn['handleMRPResponse'](Buffer.from(protocol.encode(protocol.create({
+      identifier: id, errorCode: 35, errorDescription: 'Could not find the specified now playing client' })).finish()));
+    await rejection;
+    conn.close();
+  });
+
   it('timeout removes only its own same-type handshake waiter', async () => {
     vi.useFakeTimers();
     const conn = connection();

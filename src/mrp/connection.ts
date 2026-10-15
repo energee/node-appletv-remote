@@ -15,6 +15,22 @@ export interface MRPDiagnostic {
   matchedRequest?: boolean;
 }
 
+/** MRP envelope error "Could not find the specified now playing client": nothing is playing (#10). */
+export const MRP_ERROR_NO_NOW_PLAYING_CLIENT = 35;
+
+/** A device error reply to a request: `errorCode` is the ProtocolMessage envelope code. */
+export type MRPReplyError = Error & { errorCode: number };
+
+/** True for an envelope that reports a nonzero `errorCode`. */
+function isErrorReply(msg: Record<string, unknown>): boolean {
+  return typeof msg.errorCode === 'number' && msg.errorCode !== 0;
+}
+
+function mrpReplyError(msg: Record<string, unknown>): MRPReplyError {
+  const errorCode = msg.errorCode as number;
+  return Object.assign(new Error(`MRP request failed: errorCode=${errorCode} ${(msg.errorDescription as string | undefined) ?? ''}`.trim()), { errorCode });
+}
+
 /** Common protocol state for AirPlay-tunneled and standalone MRP transports. */
 export abstract class MRPConnection extends EventEmitter {
   protected closed = false;
@@ -127,7 +143,12 @@ export abstract class MRPConnection extends EventEmitter {
     } finally {
       if (!this.closed && generation === this.mrpGeneration) {
         const idx = this.pendingMRPResolvers.findIndex(entry => this.matchesWaiter(entry, msg));
-        if (idx >= 0) this.pendingMRPResolvers.splice(idx, 1)[0].resolve(msg);
+        if (idx >= 0) {
+          const entry = this.pendingMRPResolvers.splice(idx, 1)[0];
+          // Untyped waiters (media commands) inspect the envelope themselves; typed ones get a rejection.
+          if (entry.type !== undefined && isErrorReply(msg)) entry.reject(mrpReplyError(msg));
+          else entry.resolve(msg);
+        }
       }
     }
   }
@@ -191,9 +212,14 @@ export abstract class MRPConnection extends EventEmitter {
     catch { this.log('MRP diagnostic observer failed'); }
   }
 
-  /** A waiter matches when its type (if set) and identifier (if set) equal the message's. */
+  /**
+   * A waiter matches when its type (if set) and identifier (if set) equal the message's.
+   * A typed request waiter also matches a same-identifier reply with a nonzero `errorCode`, which
+   * the device sends without a type; `handleMRPResponse` rejects it (#10).
+   */
   protected matchesWaiter(entry: { type?: number; identifier?: string }, msg: Record<string, unknown>): boolean {
-    return (entry.type === undefined || entry.type === msg.type) && (entry.identifier === undefined || entry.identifier === msg.identifier);
+    if (entry.identifier !== undefined && entry.identifier !== msg.identifier) return false;
+    return entry.type === undefined || entry.type === msg.type || (entry.identifier !== undefined && isErrorReply(msg));
   }
 
   /**

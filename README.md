@@ -172,12 +172,16 @@ than being guessed from model or service presence. Availability is advisory and
 may change at any time; device errors still reject. The event has no payload:
 re-query the capabilities relevant to your application.
 
-**Apple TV HD limitation (#10) is not solved:** pairing and remote keys can work
-while queue and artwork requests time out waiting for MRP type 4; `state` still
-has this dependency when no valid pushed snapshot exists. A 500 ms settle delay
-has not resolved the reported AppleTV5,3 case. The cache-first normalized read is
-an offline-tested improvement, not an established HD-specific fix. No firmware
-or model-based workaround is inferred.
+**Idle Apple TV state (#10):** when no app has a loaded item, an Apple TV (seen on
+the HD AppleTV5,3 and the 4K AppleTV6,2) answers the queue request with a typeless
+reply carrying our identifier and `errorCode` 35 ("Could not find the specified now
+playing client"). A typed request now rejects on such a reply instead of waiting out
+its 10 s timeout; the rejection carries `errorCode`. `getNowPlaying()` treats 35 as
+nothing playing (or the pushed state, if it arrived first); `getState()`,
+`requestPlaybackQueue()` and `requestArtwork()` reject. Hardware-checked on the HD
+while playing, paused and after `stop`: queue replies and pushed state both work
+once an app has a loaded item. With nothing loaded, the HD sends no reply at all
+to `play`, so that command still times out after 5 s.
 
 Reference: pyatv [v0.18.0, commit d88abc960e188d3cd2498d19117e75d7711d8600](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600).
 `protocols/mrp/__init__.py:MrpMetadata.playing` reads cached player state;
@@ -185,9 +189,8 @@ Reference: pyatv [v0.18.0, commit d88abc960e188d3cd2498d19117e75d7711d8600](http
 `protocol.py:MrpProtocol.start` awaits ClientUpdatesConfig and GetKeyboardSession
 replies, while this library only sends them. pyatv correlates application replies
 by UUID; this library does too for media commands and the legacy heartbeat, and additionally
-requires the SetState type for queue requests. These are source
-differences, not proof of which causes #10. The handshake and strict correlation
-are unchanged pending device evidence.
+requires the SetState type for queue requests, except that a same-identifier error reply
+also settles them (#10). The handshake is unchanged.
 
 #### Sanitized #10 capture (operator-run only)
 
@@ -547,9 +550,8 @@ Content-Length values, headers over 64 KiB, bodies or DataStream frames over 16 
 rather than hanging or escaping socket callbacks. DataStream sizes smaller than the 32-byte
 header reject instead of leaving a non-progressing receive loop. `close` (or `companionClose`) fires only
 after the matching `connect` (or `companionConnect`); a failed or canceled setup reports only through its rejected promise. Failed setup
-does not leave a command-capable AppleTV connection. Receiver compatibility (including
-Apple TV HD state responses) still requires device evidence; a timeout is not proof that
-nothing is playing.
+does not leave a command-capable AppleTV connection. A queue-request timeout is not proof that
+nothing is playing; only the device's error 35 reply is (#10).
 
 ### Button actions, gestures, and audio routing
 

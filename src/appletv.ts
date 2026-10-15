@@ -10,7 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { PairSetup } from './auth/pair-setup.js';
 import { AirPlayConnection } from './connection.js';
 import { LegacyMRPConnection } from './mrp/legacy-connection.js';
-import type { MRPConnection } from './mrp/connection.js';
+import { MRP_ERROR_NO_NOW_PLAYING_CLIENT, type MRPConnection, type MRPReplyError } from './mrp/connection.js';
 import { Credentials } from './credentials.js';
 import { MRPMessage, HID_KEY_MAP, MessageType, PLAYER_STATE_FIELDS } from './mrp/messages.js';
 import { NowPlayingInfo } from './now-playing-info.js';
@@ -662,7 +662,9 @@ export class AppleTV extends EventEmitter {
   /**
    * Return the received active-player snapshot used by nowPlaying events after device routing selection.
    * A selected empty client (idle TV) with no selected player resolves as nothing playing without a queue request.
-   * Without selected state evidence, request a queue reply; its timeout/error still rejects.
+   * Without selected state evidence, request a queue reply; its timeout/error still rejects, except
+   * error 35 (no now-playing client, sent by an idle Apple TV), which resolves with the current
+   * snapshot: pushed state if any arrived, else nothing playing (#10).
    * After a routing selection, a successful reply resolves with the selected player's snapshot (nothing playing if it has no state).
    * Without one, a reply lacking state for the model's current player rejects rather than inventing absent playback.
    * Requires an open connection and does not extrapolate position or force a refresh.
@@ -671,7 +673,13 @@ export class AppleTV extends EventEmitter {
     this.requireConnection();
     if (!this.playerState.hasSelectedSnapshot) {
       // The transport delivers replies through mrp-message before resolving its waiter.
-      const response = await this.getState();
+      let response: Record<string, unknown>;
+      try {
+        response = await this.getState();
+      } catch (err) {
+        if ((err as MRPReplyError).errorCode === MRP_ERROR_NO_NOW_PLAYING_CLIENT) return this.nowPlaying;
+        throw err;
+      }
       if (this.playerState.routingSelected) return this.nowPlaying;
       const state = response['.setStateMessage'] as Record<string, unknown> | undefined;
       const path = state?.playerPath as { client?: { bundleIdentifier?: string }; player?: { identifier?: string } } | undefined;
@@ -685,10 +693,10 @@ export class AppleTV extends EventEmitter {
     return this.nowPlaying;
   }
 
-  /** Fetch raw SetState via a queue request; some devices may not reply (#10). */
+  /** Fetch raw SetState via a queue request; rejects with `errorCode` 35 when nothing is playing (#10). */
   async getState(): Promise<Record<string, unknown>> {
     // GetState (type=3) is unreliable over AirPlay transport.
-    // PlaybackQueueRequest works on tested devices, but Apple TV HD may time out (#10).
+    // An idle Apple TV answers PlaybackQueueRequest with a typeless error 35 reply (#10).
     return this.requestPlaybackQueue({
       location: 0,
       length: 1,
@@ -700,7 +708,7 @@ export class AppleTV extends EventEmitter {
 
   /**
    * Send a PlaybackQueueRequest and resolve with the SetState reply.
-   * Rejects if no reply arrives within 10 s.
+   * Rejects on a same-identifier error reply (the Error carries `errorCode`) or if no reply arrives within 10 s.
    */
   async requestPlaybackQueue(options?: {
     location?: number;
