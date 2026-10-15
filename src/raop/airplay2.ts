@@ -22,7 +22,7 @@ export interface AirPlay2Audio {
   controlPort: number;
   /** The stream key (`shk`) every audio packet is sealed with; the caller zeroes it after teardown. */
   audioKey: Buffer;
-  /** Encrypted event channel; the caller destroys it after TEARDOWN. */
+  /** Encrypted event channel, owned by the caller (not closed by `signal`); destroy it after TEARDOWN. */
   events: Socket;
   /** First token of the stream SETUP reply's `Session` header, if the receiver sent one (unvalidated). */
   session?: string;
@@ -48,8 +48,10 @@ function port(value: unknown, name: string): number {
  * passed to `client.setLocalUri` (it is sent as `streamConnectionID`); `localPorts` are the
  * sender's bound UDP timing and control ports.
  *
- * Event-channel errors, or the receiver closing it, destroy the RTSP socket so the client's
- * failure callback ends the stream. On any rejection the event channel is closed.
+ * Event-channel errors, or the event socket closing, destroy the RTSP socket so the client's
+ * failure callback ends the stream; destroy the RTSP socket before the event socket to avoid
+ * that. `signal` cancels setup, including the event connect; on any rejection the event
+ * channel is closed.
  *
  * @throws (rejects) when pair-verify fails (for example wrong credentials), a reply is not a
  * valid binary plist, `eventPort`/`dataPort`/`controlPort` is not an integer 1..65535, the
@@ -74,7 +76,13 @@ export async function setupAirPlay2Audio(client: RtspClient, host: string, crede
       senderSupportsRelay: false, sourceVersion: '690.7.1', statsCollectionEnabled: false,
     }), signal);
     const eventPort = port(dictionary(base.body, 'SETUP').eventPort, 'eventPort');
-    events = await openEventChannel(host, eventPort, keys.sharedSecret, lost, signal);
+    // `signal` cancels only the connect: once open, the caller owns the socket so it can
+    // send TEARDOWN before closing the event channel.
+    const connecting = new AbortController();
+    const stop = () => connecting.abort();
+    signal.addEventListener('abort', stop, { once: true });
+    try { events = await openEventChannel(host, eventPort, keys.sharedSecret, lost, connecting.signal); }
+    finally { signal.removeEventListener('abort', stop); }
     events.on('error', lost); events.on('close', closed);
     const audioKey = randomBytes(32);
     const reply = await client.request('SETUP', PLIST, bplistCreator({ streams: [{

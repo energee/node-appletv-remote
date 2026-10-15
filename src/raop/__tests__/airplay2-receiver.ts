@@ -41,14 +41,19 @@ export async function airplay2Receiver(options: ReceiverOptions = {}) {
   const audioPackets: Buffer[] = []; const controlPackets: Buffer[] = [];
   const state = { eventConnected: false, eventAcknowledged: false, eventClosed: false, controlClosed: false, senderControlPort: 0 };
   let eventCipher: HAPSession | undefined;
+  const eventSockets = new Set<Socket>();
 
   const audio = createSocket('udp4'); const control = createSocket('udp4');
   for (const socket of [audio, control]) { socket.bind(0, '127.0.0.1'); await once(socket, 'listening'); }
-  audio.on('message', packet => audioPackets.push(packet));
+  audio.on('message', packet => {
+    audioPackets.push(packet);
+    // Like the legacy receiver, request one retransmission of the first packet immediately.
+    if (audioPackets.length === 1) control.send(Buffer.from([0x80, 0xd5, 0, 1, packet[2], packet[3], 0, 1]), state.senderControlPort, '127.0.0.1');
+  });
   control.on('message', packet => controlPackets.push(packet));
 
   const events = createServer(socket => {
-    state.eventConnected = true; sockets.add(socket); socket.on('error', () => {});
+    state.eventConnected = true; sockets.add(socket); eventSockets.add(socket); socket.on('error', () => {});
     socket.on('close', () => { sockets.delete(socket); state.eventClosed = true; });
     let buffer = Buffer.alloc(0);
     socket.on('data', (data: Buffer) => {
@@ -126,6 +131,8 @@ export async function airplay2Receiver(options: ReceiverOptions = {}) {
   return {
     port: (server.address() as { port: number }).port, credentials, requests, audioPackets, controlPackets, state, control,
     /** Decoded bplist bodies of the base and stream SETUP requests, in order. */
+    /** Close the receiver side of every event connection. */
+    closeEvents: () => { for (const socket of eventSockets) socket.destroy(); },
     setups: () => requests.filter(request => request.method === 'SETUP').map(request => parseBuffer(request.body)[0] as Record<string, unknown>),
     async close() {
       for (const socket of sockets) socket.destroy();

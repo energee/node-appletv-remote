@@ -428,17 +428,19 @@ HTTP errors, connection loss, malformed status, and `/playback-info` media error
 
 The implementation uses same-socket HAP verification, NTP/event SETUP, feedback, RECORD, binary-plist `/play`, rate/property requests, and `/playback-info`. Stop closes the dedicated connection; it does not send a teardown command. Tests use a synthetic loopback receiver and generated keys. **Media/codec compatibility and URL playback on physical hardware remain unverified.** IPv6 receivers are supported: the timing socket binds the matching family and the Host header and RTSP URI bracket the literal. Legacy AirPlay 1, mirroring, DRM, local-file hosting, and transcoding are not supported.
 
-### Legacy RAOP audio (experimental, partial #22)
+### RAOP and AirPlay 2 audio (experimental, partial #22)
 
 `RaopStream` sends actual paced UDP audio, not a playback stub. It is a separate
-one-shot API, not `AppleTV`/MRP playback. Legacy receivers accepting unencrypted
-PCM/L16 over IPv4 UDP are supported, with optional legacy PIN pair-verification.
+one-shot API, not `AppleTV`/MRP playback. Two profiles are supported, chosen from the
+receiver's TXT record: **legacy** receivers accepting unencrypted PCM/L16 over IPv4
+UDP, with optional legacy PIN pair-verification, and **AirPlay 2 realtime** audio to
+HAP-paired receivers (current Apple TVs), described below.
 No hardware verification has been performed for this API; the existing Apple TV
-4K status does not apply. Modern HAP-authenticated Apple TVs, HomePods, AirPlay 2
-buffered/encrypted audio, RSA/FairPlay/MFi authentication, password digest auth,
+4K status does not apply. HomePods and other receivers needing transient pairing,
+AirPlay 2 buffered audio, RSA/FairPlay/MFi authentication, password digest auth,
 legacy PIN pair-setup, ALAC, transcoding, multiroom, live sources, artwork,
 progress, and automatic RAOP discovery are excluded. `atv raop-stream` wraps this API
-for PIN-less receivers (it does not supply a `legacySeed`).
+for PIN-less legacy receivers (it supplies neither a `legacySeed` nor HAP credentials).
 
 Supply an explicit IPv4 endpoint and its actual `_raop._tcp` TXT record. Required
 capabilities are `cn` containing `0` (PCM), `et` containing `0` (unencrypted), `tp`
@@ -457,9 +459,39 @@ and the `0x8`/`0x200` seed rule; Apple TVs advertise `flags=0x244`) do not apply
 it; password and access-control bits still fail closed. `stream()` requires
 `credentials` (HAP `Credentials` from `PairSetup`) for AirPlay 2 and rejects
 `credentials` on legacy receivers and `legacySeed` on AirPlay 2, all before taking
-ownership of the source. **AirPlay 2 audio setup is not implemented yet**: with
-valid credentials `stream()` still rejects with `AirPlay 2 audio streaming is not
-implemented yet`, before taking the source.
+ownership of the source.
+
+**AirPlay 2 realtime audio** (unverified on hardware; checked only against a loopback
+receiver). Pass the HAP `Credentials` that `PairSetup` (or `atv pair`) produced for
+the receiver:
+
+```typescript
+const sender = new RaopStream(address, raopPort, raopTxt); // TXT with features bit 38 or 48
+await sender.stream(createReadStream('track.pcm', { highWaterMark: 65536 }), { credentials, volume: 50 });
+```
+
+On the same RTSP connection the sender runs HAP pair-verify (HTTP/1.1
+`/pair-verify` with `X-Apple-HKP: 3`, no CSeq), then encrypts all RTSP traffic with
+the `Control-Salt` keys. A binary-plist base SETUP (`timingProtocol: NTP`, the
+local timing port) returns `eventPort`; the sender connects the event channel with
+`Events-Salt` keys, answers each of its requests with `200 OK`, and retries a refused
+connect up to five times, one second apart. A second SETUP declares one realtime
+stream (`type: 0x60`, `ct: 1` PCM, `audioFormat: 0x800`, 352 frames per packet,
+44,100 Hz, latency 11,025..88,200, a random 32-byte `shk`, and
+`streamConnectionID` equal to the request-URI session id) and must return integer
+`dataPort` and `controlPort` values in 1..65535. There is no ANNOUNCE or Transport
+header. The `Session` header from that reply is used when present (validated like
+legacy); otherwise `Session: 0` is sent, as receivers of this profile may omit it.
+RECORD and FLUSH (with `RTP-Info`) follow. `POST /feedback` is sent at once and then
+every two seconds, best effort (failures are logged, at most one in flight); a
+receiver-chosen `Audio-Latency` on RECORD is accepted while the fixed 66,150-frame
+send schedule is kept. Every audio packet is sealed with ChaCha20-Poly1305 using
+`shk`, a per-stream 64-bit counter nonce and the RTP timestamp and SSRC as AAD; the
+packet carries the 12-byte RTP header, ciphertext, tag and the counter's 8 bytes.
+Resends repeat the stored sealed packet. Sync, timing, volume, text metadata,
+cancellation and source handling are the same as legacy. Losing the event channel
+fails the stream. Teardown sends TEARDOWN, then closes the RTSP and event
+connections and zeroes `shk`.
 
 ```typescript
 import { createReadStream } from 'node:fs';
@@ -494,7 +526,7 @@ so the lost time is skipped rather than flooded or aborted. This is not a live-s
 jitter buffer; the receiver may hear a gap. Samples become
 big-endian L16 on the wire, in 352-frame packets; the last packet is zero-padded. The sender
 negotiates ANNOUNCE/SETUP/RECORD/FLUSH, requires UDP unicast receiver ports, and
-uses a fixed 66,150-frame latency (1.5 seconds). Other returned
+uses a fixed 66,150-frame latency (1.5 seconds). For legacy receivers other returned
 `Audio-Latency` values are rejected rather than silently assumed compatible.
 
 The TCP route selects the local interface; all three UDP sockets bind only to
@@ -529,7 +561,8 @@ Pre-aborted calls reject with `Error('RAOP aborted')`; cancellation after owners
 preserves the supplied signal's reason (which can be any value), rather than
 promising a uniform `AbortError` across all APIs.
 
-Legacy keepalive probes `POST /feedback` once before audio. Only a 200 response
+Legacy keepalive probes `POST /feedback` once before audio (AirPlay 2 uses the
+two-second cadence above instead). Only a 200 response
 starts 25-second periodic feedback, with no overlapping feedback requests. Unsupported
 feedback responses disable the initial probe or are best-effort during playback.
 A periodic request that times out is logged to stderr with a
@@ -559,15 +592,9 @@ receiver, does not verify a receiver identity, and enables no transport encrypti
 use only on a trusted LAN. Tests use synthetic keys, a verifying loopback peer,
 and independent public legacy verification byte vectors.
 
-Modern RAOP is a distinct unfinished profile, not an extra HAP flag here. It
-requires HAP-encrypted control, plist base/audio SETUP, an event
-channel and per-packet ChaCha20-Poly1305 with audio AAD and nonce; none is claimed
-by this legacy L16 implementation. Internally, the RTSP control client can already
-switch to HAP-encrypted framing and send the CSeq-less HTTP pairing requests
-(`/pair-verify`, `/pair-pin-start`, `/pair-setup`) that this profile needs, and an
-internal setup step (`src/raop/airplay2.ts`) runs HAP pair-verify, the plist base and
-audio-stream SETUPs and the encrypted event channel, but `RaopStream` does not use
-them yet (loopback-tested only). Physical interoperability remains unverified.
+The RTSP control client also sends `/pair-pin-start` and `/pair-setup` as CSeq-less
+HTTP/1.1 requests; transient pairing for HomePods will use them and is not
+implemented yet. Physical interoperability of both profiles remains unverified.
 
 ### Apps, accounts and power (Companion)
 
@@ -719,6 +746,7 @@ Checked on an Apple TV 4K (AppleTV6,2) and an Apple TV HD (AppleTV5,3), both tvO
 - Companion-only devices, legacy Apple TV 2/3 (DMAP) and standalone MRP on tvOS < 15. No such devices were available.
 - Text entry and text-focus events. They need someone watching the screen.
 - Legacy RAOP audio streaming. No legacy RAOP receiver was available.
+- AirPlay 2 realtime audio through `RaopStream` (#22). Hardware check pending.
 
 ## How it works
 
@@ -738,7 +766,7 @@ src/
 ├── auth/           # HAP pair-setup / pair-verify
 ├── companion/      # Companion Link: OPACK, framing, pairing
 ├── dmap/           # legacy codec, HTTP session, reverse pairing
-├── raop/           # partial legacy PCM RTP streaming
+├── raop/           # partial RAOP / AirPlay 2 realtime PCM RTP streaming
 ├── airplay-playback.ts # dedicated URL playback session
 ├── mrp/            # MRP message builders + generated schema.ts
 ├── proto/          # .proto sources (build input only)

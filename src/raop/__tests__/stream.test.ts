@@ -577,12 +577,16 @@ describe('legacy RAOP streaming', () => {
 
   it('selects the AirPlay 2 profile for features bit 38 or 48 without applying legacy-only rules', async () => {
     const module = await load();
+    // A port nobody listens on: passing every pre-ownership check means reaching the connect.
+    const closed = createServer(); closed.listen(0, '127.0.0.1'); await once(closed, 'listening');
+    const refused = (closed.address() as { port: number }).port;
+    await new Promise<void>(resolve => closed.close(() => resolve()));
     for (const features of [{ features: '0x0,0x40' }, { features: '0x0,0x10000' }, { ft: '0x0,0x10000' }, appleTvTxt] as Record<string, string>[]) {
       // No cn/et/tp/sr/ss/ch, and flags 0x200 must not demand a legacy seed.
-      const sender = new module.RaopStream('127.0.0.1', 7000, { flags: '0x244', ...features });
+      const sender = new module.RaopStream('127.0.0.1', refused, { flags: '0x244', ...features });
       const source = Readable.from([Buffer.alloc(4)]);
-      await expect(sender.stream(source, { credentials })).rejects.toThrow(/AirPlay 2 audio streaming is not implemented yet/);
-      expect(source.destroyed).toBe(false);
+      await expect(sender.stream(source, { credentials })).rejects.toMatchObject({ code: 'ECONNREFUSED' });
+      expect(source.destroyed).toBe(true);
     }
     expect(() => new module.RaopStream('127.0.0.1', 7000, { ...appleTvTxt, cn: '1', et: '4', tp: 'TCP', sr: '48000' })).not.toThrow();
   });
