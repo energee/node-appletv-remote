@@ -42,11 +42,20 @@ export interface ParsedHTTP {
 }
 
 /**
+ * Bracket an IPv6 literal for a URL authority or Host header; IPv4 and names pass through.
+ * In URIs the zone separator is percent-encoded (`fe80::1%25en0`); Host headers keep it raw.
+ */
+export function hostForURL(host: string, encodeZone = true): string {
+  return host.includes(':') ? `[${encodeZone ? host.replace('%', '%25') : host}]` : host;
+}
+
+/**
  * Parse one HTTP or RTSP message (request or response) from the start of a buffer.
  * Header names are lower-cased; startLine preserves the request method or response status. Returns null until the headers
- * and `Content-Length` bytes of body have all arrived. Invalid lengths, headers over 64 KiB and bodies over 16 MiB throw a protocol error.
+ * and `Content-Length` bytes of body have all arrived. Invalid lengths, headers over 64 KiB and bodies over
+ * `maxBody` (default 16 MiB) throw a protocol error.
  */
-export function parseHTTPMessage(buf: Buffer): ParsedHTTP | null {
+export function parseHTTPMessage(buf: Buffer, maxBody = 16 * 1024 * 1024): ParsedHTTP | null {
   const headerEnd = buf.indexOf('\r\n\r\n');
   if (headerEnd === -1) {
     if (buf.length > 65536) throw new Error('HTTP header size limit exceeded');
@@ -73,7 +82,7 @@ export function parseHTTPMessage(buf: Buffer): ParsedHTTP | null {
   if (!/^\d+$/.test(length) || !Number.isSafeInteger(contentLength) || !Number.isSafeInteger(bodyStart + contentLength)) {
     throw new Error('Invalid Content-Length');
   }
-  if (contentLength > 16 * 1024 * 1024) throw new Error('HTTP body size limit exceeded');
+  if (contentLength > maxBody) throw new Error('HTTP body size limit exceeded');
   const totalSize = bodyStart + contentLength;
   if (buf.length < totalSize) return null;
 
@@ -343,7 +352,7 @@ export class AirPlayConnection extends MRPConnection {
     return new Promise((resolve, reject) => {
       const headers = [
         `POST ${path} HTTP/1.1`,
-        `Host: ${this.host.includes(':') ? '[' + this.host + ']' : this.host}:${this.port}`,
+        `Host: ${hostForURL(this.host, false)}:${this.port}`,
         'User-Agent: AirPlay/320.20',
         'Connection: keep-alive',
         'X-Apple-HKP: 3',
@@ -451,8 +460,7 @@ export class AirPlayConnection extends MRPConnection {
 
   /** Session URI used for SETUP/RECORD: `rtsp://<local address>/<session id>`. */
   private get rtspUri(): string {
-    const address = this.localAddress?.includes(':') ? `[${this.localAddress.replace('%', '%25')}]` : this.localAddress;
-    return `rtsp://${address}/${this.sessionId}`;
+    return `rtsp://${hostForURL(this.localAddress ?? '')}/${this.sessionId}`;
   }
 
   /**

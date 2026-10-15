@@ -1,11 +1,11 @@
 /** Authenticated AirPlay 2 URL playback, based on pyatv 0.18.0 (d88abc960e188d3cd2498d19117e75d7711d8600). */
-import type { Socket } from 'node:net';
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram';
 import { randomUUID, randomBytes } from 'node:crypto';
+import { isIPv6, type Socket } from 'node:net';
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
 import plist from 'plist';
-import { connectSocket, parseHTTPMessage, type ParsedHTTP } from './connection.js';
+import { connectSocket, hostForURL, parseHTTPMessage, type ParsedHTTP } from './connection.js';
 import { PairVerify } from './auth/pair-verify.js';
 import type { HAPCredentials } from './auth/types.js';
 import { HAPSession } from './util/hap-session.js';
@@ -14,32 +14,9 @@ import { hkdfSha512 } from './util/crypto.js';
 /** Control/status/event messages are bounded, not media payloads. */
 const MAX_REPLY_BYTES = 1024 * 1024;
 
-/** Parse a bounded receiver message without changing legacy MRP parser behavior. */
+/** Parse a receiver message with the shared framing checks and a 1 MiB body cap. */
 function parsePlaybackMessage(buffer: Buffer): ParsedHTTP | null {
-  if (buffer.length > MAX_REPLY_BYTES) throw new Error('AirPlay reply exceeds size limit');
-  const end = buffer.indexOf('\r\n\r\n');
-  if (end >= 0) {
-    const lines = buffer.subarray(0, end).toString('latin1').split('\r\n').slice(1);
-    let length: string | undefined;
-    let transferEncoding = false;
-    for (const line of lines) {
-      const colon = line.indexOf(':');
-      if (colon < 1) continue;
-      const name = line.slice(0, colon).trim().toLowerCase();
-      if (name === 'content-length') {
-        if (length !== undefined) throw new Error('Duplicate AirPlay Content-Length');
-        length = line.slice(colon + 1).trim();
-      }
-      if (name === 'transfer-encoding') {
-        if (transferEncoding) throw new Error('Duplicate AirPlay Transfer-Encoding');
-        transferEncoding = true;
-      }
-    }
-    if (length !== undefined && !/^\d+$/.test(length)) throw new Error('Invalid AirPlay Content-Length');
-    if (Number(length ?? 0) > MAX_REPLY_BYTES) throw new Error('AirPlay reply exceeds size limit');
-    if (transferEncoding) throw new Error('Unsupported AirPlay Transfer-Encoding');
-  }
-  return parseHTTPMessage(buffer);
+  return parseHTTPMessage(buffer, MAX_REPLY_BYTES);
 }
 
 /** bplist-creator exposes Real at runtime, but its bundled declaration omits it. */
@@ -188,13 +165,13 @@ export class AirPlayPlaybackSession {
   private fail(error: Error): void { this.failure ??= error; this.close(); }
   private get uri(): string {
     if (!this.socket || this.closed) throw this.failure ?? new Error('Playback session closed');
-    return `rtsp://${this.socket.localAddress}/${this.rtspId}`;
+    return `rtsp://${hostForURL(this.socket.localAddress ?? '')}/${this.rtspId}`;
   }
 
   /** Reply to the connected peer (and negotiated port, if present); optional UDP sends cannot fail playback. */
   private async openTiming(address: string): Promise<void> {
     if (this.closed) throw new Error('Playback session closed');
-    const timing = createSocket('udp4'); this.timing = timing;
+    const timing = createSocket(isIPv6(address) ? 'udp6' : 'udp4'); this.timing = timing;
     timing.on('message', (data, remote) => {
       const peer = this.timingPeer;
       if (this.closed || !peer || remote.address !== peer.address || (peer.port !== undefined && remote.port !== peer.port) || data.length !== 32) return;
@@ -229,7 +206,7 @@ export class AirPlayPlaybackSession {
         const code = Number(reply.startLine.split(' ')[1]);
         if (!Number.isInteger(code) || code < 200 || code >= 300) reject(new Error(`AirPlay ${code} from ${path}`)); else resolve(reply);
       }, reject: error => { clearTimeout(timer); this.pending = undefined; reject(error); } };
-      const allHeaders = { Host: `${this.host}:${this.port}`, Connection: 'keep-alive', 'User-Agent': 'AirPlay/550.10', CSeq: String(cseq), 'DACP-ID': this.dacp, 'Active-Remote': String(this.rtspId), 'Client-Instance': this.dacp, ...(body ? { 'Content-Type': 'application/x-apple-binary-plist' } : {}), ...headers, 'Content-Length': String(body?.length ?? 0) };
+      const allHeaders = { Host: `${hostForURL(this.host, false)}:${this.port}`, Connection: 'keep-alive', 'User-Agent': 'AirPlay/550.10', CSeq: String(cseq), 'DACP-ID': this.dacp, 'Active-Remote': String(this.rtspId), 'Client-Instance': this.dacp, ...(body ? { 'Content-Type': 'application/x-apple-binary-plist' } : {}), ...headers, 'Content-Length': String(body?.length ?? 0) };
       const message = Buffer.concat([Buffer.from(`${method} ${path} ${protocol}\r\n${Object.entries(allHeaders).map(([key, value]) => `${key}: ${value}\r\n`).join('')}\r\n`), body ?? Buffer.alloc(0)]);
       try { this.socket.write(this.cipher ? this.cipher.encrypt(message) : message, error => { if (error) this.fail(error); }); }
       catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); }
