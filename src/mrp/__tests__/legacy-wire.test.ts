@@ -95,6 +95,7 @@ it('pairs through DeviceInfo and CryptoPairing M1-M6 with one controller keypair
   const server = new SrpServer(SRP.params.hap, salt, Buffer.from('Pair-Setup'), Buffer.from('1234'), Buffer.alloc(32, 5));
   const steps: number[] = [];
   let clientIdentity: Buffer | undefined;
+  let deviceInfoIdentity: unknown;
   const socket = new EventEmitter() as EventEmitter & { write: (data: Buffer, cb: (error?: Error) => void) => void; destroy: () => void };
   const destroy = vi.fn();
   socket.destroy = destroy;
@@ -104,6 +105,7 @@ it('pairs through DeviceInfo and CryptoPairing M1-M6 with one controller keypair
       const message = await MRPMessage.decode(frame.subarray(bytesRead));
       let response: Buffer;
       if (message.type === MessageType.DeviceInfo) {
+        deviceInfoIdentity = (message['.deviceInfoMessage'] as { uniqueIdentifier?: string }).uniqueIdentifier;
         response = await MRPMessage.deviceInfo({ uniqueIdentifier: 'peer', name: 'Peer' });
       } else {
         const crypto = message['.cryptoPairingMessage'] as { pairingData: Buffer; state: number };
@@ -139,6 +141,7 @@ it('pairs through DeviceInfo and CryptoPairing M1-M6 with one controller keypair
   const result = await setup.finish('1234');
   expect(steps).toEqual([1, 3, 5]);
   expect(result.clientId).toBe(clientIdentity!.toString());
+  expect(deviceInfoIdentity).toBe(result.clientId);
   expect(result.serverId).toBe('peer');
   expect(result.serverLTPK).toEqual(Buffer.alloc(32, 9));
   expect(destroy).toHaveBeenCalledOnce();

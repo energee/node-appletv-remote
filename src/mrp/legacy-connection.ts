@@ -1,5 +1,4 @@
 /** Standalone legacy MRP: varint protobuf frames and MediaRemote ChaCha20 keys (pyatv 0.18.0). */
-import { randomUUID } from 'node:crypto';
 import type { Socket } from 'node:net';
 import { connectSocket } from '../connection.js';
 import { PairSetup } from '../auth/pair-setup.js';
@@ -44,13 +43,28 @@ export class LegacyMRPConnection extends MRPConnection {
       this.heartbeat = setInterval(() => {
         if (this.closed || this.heartbeatInFlight) return;
         this.heartbeatInFlight = true;
-        void MRPMessage.sendCommand(MessageType.GenericMessage).then((data) => this.sendMRPMessageAndWait(data, MessageType.GenericMessage))
-          .catch((error) => this.fail(error)).finally(() => { this.heartbeatInFlight = false; });
+        void this.heartbeatOnce().finally(() => { this.heartbeatInFlight = false; });
       }, 30000);
     } catch (error) {
       this.close();
       throw error;
     } finally { this.connecting = false; }
+  }
+
+  /**
+   * One heartbeat (pyatv HEARTBEAT_RETRIES=1): any reply carrying the request's identifier counts;
+   * a miss is retried at once, and a second miss fails the connection.
+   */
+  private async heartbeatOnce(timeoutMs = 5000): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.sendMRPMessageAndWait(await MRPMessage.sendCommand(MessageType.GenericMessage), undefined, timeoutMs);
+        return;
+      } catch (error) {
+        if (this.closed) return;
+        if (attempt >= 1) { this.fail(error as Error); return; }
+      }
+    }
   }
 
   /** Reject active exchanges before optionally delivering an error event. */
@@ -122,7 +136,7 @@ export class LegacyMRPConnection extends MRPConnection {
     const setup = new PairSetup(this.host, this.port, cachedCarrier);
     try {
       await this.open();
-      const deviceInfo = await MRPMessage.deviceInfo({ uniqueIdentifier: randomUUID(), name: 'Node ATV Remote' });
+      const deviceInfo = await MRPMessage.deviceInfo({ uniqueIdentifier: setup.clientId, name: 'Node ATV Remote' });
       const response = this.waitForMRPMessage(MessageType.DeviceInfo);
       void this.sendMRPMessage(deviceInfo).catch(error => this.rejectMRPRequests(error));
       await response;
