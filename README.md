@@ -125,6 +125,24 @@ device acknowledgments. Correct concurrent result matching depends on the MRP
 transport's request correlation.
 
 `getNowPlaying()`, `nowPlaying` and the `nowPlaying` event share `NowPlayingInfo`.
+While connected, `getNowPlaying()` returns the received selected-player snapshot
+without sending a queue request when it has explicit playback state (including
+unknown/stopped), a queue (including an empty queue), or direct now-playing fields.
+A SetNowPlayingClient/SetNowPlayingPlayer routing selection must also have arrived
+in this connection; the legacy first-state fallback does not qualify for cache bypass.
+Client/player identity and supported commands alone do not qualify, except that a selected
+empty client (an idle TV's empty SetNowPlayingClient) with no selected player resolves as nothing playing. If no selected-player
+state has arrived, it still requests a queue reply and propagates the 10 s timeout
+or transport error. After a routing selection, a successful reply resolves with the
+selected player's snapshot (nothing playing if that player has no state), even when the
+reply lands on another player. Without a routing selection, a reply without state for the
+model's current player rejects with `No active-player state received`. It does not force a refresh
+or wait for a future push, and a push during a pending request does not hide that
+request's timeout. A successful queue reply may still establish legacy unrouted state
+for compatibility, but it must contain state for the model's current player; an
+empty/unrelated reply cannot validate an earlier unrouted push.
+`getState()` remains the raw correlated SetState queue-request API,
+even with a cached snapshot; queue and artwork calls retain their response dependency.
 Queue metadata uses its current `location`; item updates merge by identifier.
 Direct state updates retain omitted fields; a changed `uniqueIdentifier` clears
 old-track metadata. Runtime evidence is discarded on disconnect/reconnect. Inactive players stay separate until
@@ -134,7 +152,8 @@ metadata from paused/stopped playback; `playbackState` retains the device's expl
 state (unknown if not reported). `playerIdentifier` and `appBundleIdentifier`
 identify the selected player. Position is a snapshot, not extrapolated. CLI state uses the same summary as
 `NowPlayingInfo.toString()` (percentage progress rather than its former time-pair
-formatter). The raw `playbackQueue` and `supportedCommands` events still expose
+formatter). Metadata-free explicit Playing/Paused/Interrupted/Seeking states are
+printed as their reported state, not "Absent." The raw `playbackQueue` and `supportedCommands` events still expose
 messages from any player; normalized `nowPlaying` is active-player-only.
 
 ```typescript
@@ -153,16 +172,86 @@ than being guessed from model or service presence. Availability is advisory and
 may change at any time; device errors still reject. The event has no payload:
 re-query the capabilities relevant to your application.
 
-**Apple TV HD limitation (#10):** pairing and remote keys can work while `state`,
-queue and artwork requests time out waiting for MRP type 4. A 500 ms settle delay
-has not resolved the reported AppleTV5,3 case. No HD-specific fix is established.
-Offline source comparison only establishes that pyatv reads cached pushed player
-state instead of requiring a queue response for every state read. Diagnosing the
-remaining transport/device difference needs sanitized exchanges from HD and 4K
-while playing, paused and stopped; this implementation does not fabricate that evidence.
+**Apple TV HD limitation (#10) is not solved:** pairing and remote keys can work
+while queue and artwork requests time out waiting for MRP type 4; `state` still
+has this dependency when no valid pushed snapshot exists. A 500 ms settle delay
+has not resolved the reported AppleTV5,3 case. The cache-first normalized read is
+an offline-tested improvement, not an established HD-specific fix. No firmware
+or model-based workaround is inferred.
 
-Reference: pyatv [v0.18.0, commit d88abc960e188d3cd2498d19117e75d7711d8600](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600),
-`protocols/mrp/player_state.py`, MRP result/player protobufs and runtime feature handling.
+Reference: pyatv [v0.18.0, commit d88abc960e188d3cd2498d19117e75d7711d8600](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600).
+`protocols/mrp/__init__.py:MrpMetadata.playing` reads cached player state;
+`player_state.py` merges field-present SetState updates and selects clients/players.
+`protocol.py:MrpProtocol.start` awaits ClientUpdatesConfig and GetKeyboardSession
+replies, while this library only sends them. pyatv correlates application replies
+by UUID; this library does too for media commands and the legacy heartbeat, and additionally
+requires the SetState type for queue requests. These are source
+differences, not proof of which causes #10. The handshake and strict correlation
+are unchanged pending device evidence.
+
+#### Sanitized #10 capture (operator-run only)
+
+Register `mrpDiagnostic` **before** `connect()` on an existing `AppleTV` instance.
+Import `MRPDiagnostic` as a type from `node-appletv-remote` when annotating listeners.
+Use a bounded capture connection; its in-memory token map keeps the 1024 most recently used identifiers (LRU), so recurring client/player tokens stay stable while request identifiers churn.
+The event emits only relevant init/state message types, direction, opaque
+connection-local request/client/player tokens, and `matchedRequest` on receives
+(type plus identifier match before dispatch). Missing identifiers remain omitted;
+no default route is invented. Tokens allow equality comparisons within a connection,
+not identification across devices/sessions. It excludes CryptoPairing, keys, auth
+frames, device names/addresses, keyboard text, metadata, artwork and item identifiers.
+Send entries indicate an attempt, not successful receipt by the TV. Diagnostic
+observer exceptions are reported with a fixed message, never their error content,
+and do not interrupt protocol delivery. No trace is persisted by the library. This is not a
+raw packet dump; do not share the separate `message`/`playbackQueue` payloads or logs
+from verbose auth tooling.
+
+```typescript
+// Use your own authorized device/credentials setup; never print credentials.
+const started = Date.now();
+atv.on('mrpDiagnostic', diagnostic => {
+  console.log(JSON.stringify({ ms: Date.now() - started, ...diagnostic }));
+});
+await atv.connect(credentials);
+try {
+  await new Promise(resolve => setTimeout(resolve, 2000)); // capture window, not a fix
+  try {
+    const info = await atv.getNowPlaying();
+    console.log(JSON.stringify({ operation: 'getNowPlaying', playbackState: info.playbackState,
+      hasPlayback: info.hasPlayback })); // no titles/app names
+  } catch {
+    console.log(JSON.stringify({ operation: 'getNowPlaying', result: 'rejected' }));
+    // Record locally whether this was the exact type-4 timeout; do not dump the error/payload.
+  }
+  try {
+    await atv.getState(); // explicitly compare raw queue behavior; never print the reply
+    console.log(JSON.stringify({ operation: 'getState', result: 'resolved' }));
+  } catch {
+    console.log(JSON.stringify({ operation: 'getState', result: 'rejected' }));
+  }
+} finally {
+  await atv.close();
+}
+```
+
+1. After separate hardware/credential authorization, build this checkout (`npm run build`).
+   Run the capture on HD and 4K using the same transport and app. Record model and
+   actual tvOS version manually, replacing device names/addresses with `HD`/`4K`.
+2. Use the physical remote to start, pause, then stop/exit the same test content.
+   Make a fresh connection/capture for each state on each device (six captures).
+   Also keep one connection open through those three transitions to compare pushes
+   and client/player selection. Do not use library playback commands for the capture.
+3. Compare init types 15/38/16/24, pushed state/routing types 4/46/47/53/54/55/56/72,
+   and queue type 32 followed by type 4. Check whether type 4 is absent, identifierless,
+   carries a different token, matches the request, or routes to an unselected player.
+   Record exact timeout vs other failure locally and share only sanitized outcomes.
+4. If available, repeat with pinned pyatv 0.18.0 and an equally sanitized trace;
+   never export its raw debug/auth logs. Use the comparison to test a specific
+   handshake/correlation hypothesis, not to assume a firmware difference.
+
+**Remaining blocker:** no authorized HD/4K trace establishes whether initial state
+pushes arrive, which client/player is selected, or how the failing queue response
+is identified/typed. Offline fixtures cannot establish that hardware behavior.
 
 ### Legacy Apple TV 2/3 (DMAP, experimental)
 
@@ -252,11 +341,144 @@ try {
 
 This is actual authenticated media playback, not `launchApp(url)`. The receiver must be able to fetch the HTTP(S) URL directly; web pages and app deep links are not media URLs. AirPlay HAP credentials are supplied by the caller; this API does not read credential files or pair automatically. Each session starts one URL and cannot be reused after closing. `playUrl` resolves when the receiver accepts the setup/play/rate requests, not when playback completes. `idle` means the receiver reports no duration and can also mean startup buffering, so it is not proof that playback ended.
 
-Timing replies are restricted to the connected TCP peer address and, when returned by SETUP, its timing port. UDP timing-reply send errors are ignored; timing socket failures still close the session.
+Timing replies are restricted to the connected TCP peer address and, when returned by SETUP, its timing port. Only 32-byte RTP timing requests (payload type `0x52`, or `0xd2` with the marker bit) are answered, whatever their first (version) byte; the reply echoes that byte as pyatv does. Other 32-byte packets get no reply. UDP timing-reply send errors are ignored; timing socket failures still close the session.
 
 HTTP errors, connection loss, malformed status, and `/playback-info` media errors reject and close the failed session. Background heartbeat failures close the session and surface on the next `getStatus`. Requests have a five-second timeout (including URL acceptance); receivers taking longer to probe media will fail. Replies are limited to 1 MiB; duplicate Content-Length framing headers and all Transfer-Encoding responses are rejected. Binary and XML playback-info property lists are supported. Unlike pyatv's player, a rejected `/play` is surfaced immediately rather than retrying the whole authenticated SETUP sequence.
 
 The implementation follows [pyatv 0.18.0](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600): same-socket HAP verification, NTP/event SETUP, feedback, RECORD, binary-plist `/play`, rate/property requests, and `/playback-info`. Stop closes the dedicated connection, matching `AirPlayStream.stop`; it does not send an invented teardown command. Tests use a synthetic loopback receiver and generated keys. **Media/codec compatibility and URL playback on physical hardware remain unverified.** This session currently requires an IPv4 connection. Legacy AirPlay 1, mirroring, DRM, local-file hosting, and transcoding are not supported.
+
+### Legacy RAOP audio (experimental, partial #22)
+
+`RaopStream` sends actual paced UDP audio, not a playback stub. It is a separate
+one-shot API, not `AppleTV`/MRP playback. Legacy receivers accepting unencrypted
+PCM/L16 over IPv4 UDP are supported, with optional legacy PIN pair-verification.
+No hardware verification has been performed for this API; the existing Apple TV
+4K status does not apply. Modern HAP-authenticated Apple TVs, HomePods, AirPlay 2
+buffered/encrypted audio, RSA/FairPlay/MFi authentication, password digest auth,
+legacy PIN pair-setup, ALAC, transcoding, multiroom, live sources, artwork,
+progress, automatic RAOP discovery, and CLI streaming are excluded.
+
+Supply an explicit IPv4 endpoint and its actual `_raop._tcp` TXT record. Required
+capabilities are `cn` containing `0` (PCM), `et` containing `0` (unencrypted), `tp`
+containing `UDP`, `sr=44100`, `ss=16`, and `ch=2`; `pw` must be absent or `false`.
+`sf`/`flags` are parsed as hexadecimal: PIN/legacy-pairing bits `0x8`/`0x200`
+require caller-supplied `legacySeed`; password bit `0x80` is unsupported. Modern
+`ft`/`features` bits 38, 40, 43 or 48, malformed flags, and unsupported access
+control fail closed. Text metadata additionally requires `md` containing `0`.
+Other negotiation and non-200 responses fail closed (except optional feedback),
+without reading stored credentials.
+
+```typescript
+import { createReadStream } from 'node:fs';
+import { RaopStream } from 'node-appletv-remote';
+
+// address, raopPort and raopTxt come from your receiver's _raop._tcp service.
+const sender = new RaopStream(address, raopPort, raopTxt);
+const cancellation = new AbortController();
+await sender.stream(createReadStream('track.pcm', { highWaterMark: 65536 }), {
+  signal: cancellation.signal,
+  volume: 50,
+  metadata: { title: 'Track', artist: 'Artist', album: 'Album' },
+});
+```
+
+`RaopPcmSource` is a Buffer, Node Readable, or `AsyncIterable<Buffer>` containing
+**finite, non-empty raw signed PCM16 little-endian, stereo, 44.1 kHz, interleaved
+left/right**, with no WAV header. Total length must be divisible by four. Keep
+Buffer input unchanged until completion. Async-iterable chunks must be nonempty
+Buffers of at most 65,536 bytes; Node Readables are paused and read in bounded
+pieces even if Node has coalesced larger internal buffers. Arbitrary sample/packet
+boundaries are reassembled. Source staging retains one copied chunk plus one
+1,408-byte PCM packet and does not pull another chunk until needed by the paced
+consumer. Wire packets and the separately bounded 1,000-packet resend cache add
+about 1.42 MB; RTSP headers and bodies each have a 64 KiB cap. Replies use the
+shared `parseHTTPMessage` framing (duplicate Content-Length and any Transfer-Encoding
+are rejected); the status line and a single matching CSeq are validated locally. Producer/Readable
+internal buffering is additional and remains the producer's responsibility. Slow sources
+or delayed event loops that fall more than 100 ms behind after playback starts are
+resynchronized: pacing re-anchors to the current time and a fresh sync packet is sent,
+so the lost time is skipped rather than flooded or aborted. This is not a live-source
+jitter buffer; the receiver may hear a gap. Samples become
+big-endian L16 on the wire, in 352-frame packets; the last packet is zero-padded. The sender
+negotiates ANNOUNCE/SETUP/RECORD/FLUSH, requires UDP unicast receiver ports, and
+uses the pinned upstream 66,150-frame latency (1.5 seconds). Other returned
+`Audio-Latency` values are rejected rather than silently assumed compatible.
+
+The TCP route selects the local interface; all three UDP sockets bind only to
+that address. Timing requests are accepted only after SETUP validates the receiver
+address and timing port; requests before negotiation or from other ports are ignored.
+SETUP must return `server_port` and `control_port`; an omitted `timing_port` defaults
+to 0 as in pinned pyatv AirPlayV1 (an explicit `timing_port=0` is treated the same), and
+timing requests are then accepted from any port at the receiver address.
+Playback uses monotonic deadlines, one-second RTP/NTP synchronization, NTP timing
+replies anchored to the same monotonic clock as sync (wall-clock changes do not
+step the session clock), and a bounded 1,000-packet retransmission cache. Requests are checked for
+length/type and retransmissions are restricted to the negotiated control peer,
+with at most 100 packets per request and per second. Optional timing/resend send
+errors do not terminate audio. Abandoned RTSP replies are discarded so cancellation
+can finish teardown.
+Long event-loop or source stalls re-anchor pacing rather than flooding a receiver. A paced silence tail
+keeps sync alive until buffered audio drains. `stream()` resolves after the tail
+and bounded best-effort TEARDOWN; failures/cancellation reject and close all sockets,
+timers and history. An instance cannot be reused. A supplied signal must be an
+AbortSignal. Ownership begins after input, options, cancellation and one-shot validation: the caller must not consume a
+streamed source concurrently. Rejection before ownership leaves the source with
+the caller, who must close it. After ownership, every exit destroys the Readable or
+requests the iterator's `return()`, including EOF; custom iterators should make
+cleanup idempotent. Cancellation interrupts pending `next()` without
+waiting for arbitrary producer code; unresolved `next()`/`return()` operations are
+observed but cannot block socket teardown. A custom producer must make those
+operations settle itself. Pass the caller's signal to producer I/O too if user cancellation
+should interrupt it; the sender does not inject a signal into an arbitrary producer, but internal sender failures cannot abort that caller-owned signal;
+use a caller-owned producer controller and abort it in the `stream()` rejection
+handler/finally block to cancel producer I/O. Internal cancellation is private.
+Pre-aborted calls reject with `Error('RAOP aborted')`; cancellation after ownership
+preserves the supplied signal's reason (which can be any value), rather than
+promising a uniform `AbortError` across all APIs.
+
+Legacy keepalive probes `POST /feedback` once before audio. Only a 200 response
+starts 25-second periodic feedback, with no overlapping feedback requests. Unsupported
+feedback responses disable the initial probe or are best-effort during playback.
+As in pinned pyatv, a periodic request that times out is logged to stderr with a
+`[RAOP]` prefix and playback continues; transport loss and malformed replies still
+terminate the stream.
+Feedback and sync stop on EOF/drain, cancellation or failure. Receivers rejecting
+feedback have no invented fallback keepalive; their long-stream idle-timeout
+behavior remains unverified.
+
+While playback is active, `setVolume(percent)` and `setMetadata({ title, album,
+artist })` update the receiver. Volume is 0..100, maps linearly to -30..0 dB, and
+zero sends -144 dB mute; decimal wire values are rounded to two places. Metadata uses UTF-8 DMAP `mlit`/`minm`/`asal`/`asar` tags
+(maximum 4,096 bytes per field). Both methods reject outside an active session.
+
+Protocol evidence is pinned to [pyatv 0.18.0,
+commit d88abc960e188d3cd2498d19117e75d7711d8600](https://github.com/postlund/pyatv/tree/d88abc960e188d3cd2498d19117e75d7711d8600):
+`pyatv/support/rtsp.py` (L16 SDP and DMAP), `protocols/raop/packets.py`,
+`stream_client.py` (RTP, sync and resend), `protocols/__init__.py` (latency/timing),
+and `audio_source.py` (executable PCM byte swap). Its audio-source docstring says
+little-endian despite swapping on little-endian hosts; this implementation follows
+L16 network byte order and the executable conversion, with independent byte fixtures.
+`protocols/raop/protocols/airplayv1.py` and `support/rtsp.py` establish the
+25-second feedback probe/loop. `protocols/airplay/auth/legacy.py` and
+`protocols/airplay/srp.py` establish legacy pair-verify: two raw `/pair-verify`
+HTTP/1.1 POSTs before ANNOUNCE on the same socket, using AirPlay/320.20 and no CSeq.
+Authentication accepts serialized HTTP replies without CSeq; audio setup and feedback
+remain RTSP/1.0 with CSeq correlation. A canceled authentication request closes the
+connection, so a late anonymous HTTP reply cannot satisfy a later request. Seed-derived X25519 and Ed25519 keys,
+SHA-512-derived AES-CTR key/IV, and receiver ciphertext advancement before the
+client signature. Supply `stream(source, { legacySeed })` only with a 32-byte seed
+from prior **legacy AirPlay PIN pairing**; HAP `Credentials`, HAP `clientLTSK` and
+DMAP GUIDs are not interchangeable. No key/credential files are read automatically.
+As in pinned upstream, this legacy exchange proves the client's paired key to the
+receiver, does not verify a receiver identity, and enables no transport encryption;
+use only on a trusted LAN. Tests use synthetic keys, a verifying loopback peer,
+and the independent public legacy verification byte vectors in pinned
+`tests/fake_device/airplay.py`.
+
+Modern RAOP is a distinct unfinished profile, not an extra HAP flag here. Pinned
+`airplayv2.py` requires HAP-encrypted control, plist base/audio SETUP, an event
+channel and per-packet ChaCha20-Poly1305 with audio AAD and nonce; none is claimed
+by this legacy L16 implementation. Physical interoperability remains unverified.
 
 ### Apps, accounts and power (Companion)
 
@@ -359,7 +581,8 @@ atv.on('powerState', (state) => {});       // after subscribePowerState()
 atv.on('supportedCommands', (cmds) => {}); // SupportedCommand[]
 atv.on('playbackQueue', (queue) => {});
 atv.on('keyboard', (kb) => {});            // text field focused/unfocused
-atv.on('message', (msg) => {});            // every raw MRP message
+atv.on('message', (msg) => {});            // every raw MRP message; not sanitized
+atv.on('mrpDiagnostic', (d: MRPDiagnostic) => {}); // opt in before connect; safe routing tokens
 atv.on('close', () => {});
 atv.on('error', (err) => {});
 ```
@@ -382,6 +605,7 @@ src/
 ├── auth/           # HAP pair-setup / pair-verify
 ├── companion/      # Companion Link: OPACK, framing, pairing
 ├── dmap/           # legacy codec, HTTP session, reverse pairing
+├── raop/           # partial legacy PCM RTP streaming
 ├── airplay-playback.ts # dedicated URL playback session
 ├── mrp/            # MRP message builders + generated schema.ts
 ├── proto/          # .proto sources (build input only)

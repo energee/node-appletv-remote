@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AirPlayConnection } from '../connection.js';
+import { AirPlayConnection, parseHTTPMessage } from '../connection.js';
 import { randomBytes } from 'node:crypto';
 
 describe('AirPlayConnection', () => {
@@ -24,5 +24,11 @@ describe('AirPlayConnection', () => {
     });
     expect(typeof conn.on).toBe('function');
     expect(typeof conn.emit).toBe('function');
+  });
+});
+
+describe('parseHTTPMessage', () => {
+  it('tolerates a duplicate CSeq and keeps the last value', () => {
+    expect(parseHTTPMessage(Buffer.from('RTSP/1.0 200 OK\r\nCSeq: 1\r\ncseq: 2\r\n\r\n'))?.headers.cseq).toBe('2');
   });
 });

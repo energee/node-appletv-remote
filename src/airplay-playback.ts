@@ -10,6 +10,7 @@ import { PairVerify } from './auth/pair-verify.js';
 import type { HAPCredentials } from './auth/types.js';
 import { HAPSession } from './util/hap-session.js';
 import { hkdfSha512 } from './util/crypto.js';
+import { timingReply } from './raop/packets.js';
 
 /** Control/status/event messages are bounded, not media payloads (passed as parseHTTPMessage's body cap). */
 const MAX_REPLY_BYTES = 1024 * 1024;
@@ -170,12 +171,10 @@ export class AirPlayPlaybackSession {
     const timing = createSocket(isIPv6(address) ? 'udp6' : 'udp4'); this.timing = timing;
     timing.on('message', (data, remote) => {
       const peer = this.timingPeer;
-      if (this.closed || !peer || remote.address !== peer.address || (peer.port !== undefined && remote.port !== peer.port) || data.length !== 32) return;
-      const reply = Buffer.alloc(32); reply[0] = data[0]; reply[1] = 0xd3; reply.writeUInt16BE(7, 2);
-      data.copy(reply, 8, 24, 32);
-      const now = Date.now() / 1000 + 2208988800;
-      for (const offset of [16, 24]) { reply.writeUInt32BE(Math.floor(now) >>> 0, offset); reply.writeUInt32BE(Math.floor((now % 1) * 0x100000000), offset + 4); }
-      timing.send(reply, remote.port, remote.address, () => {});
+      if (this.closed || !peer || remote.address !== peer.address || (peer.port !== undefined && remote.port !== peer.port)) return;
+      const now = Date.now();
+      const reply = timingReply(data, now, now);
+      if (reply) timing.send(reply, remote.port, remote.address, () => {});
     });
     timing.on('error', error => this.fail(error));
     await new Promise<void>((resolve, reject) => {

@@ -186,7 +186,13 @@ describe('AirPlay URL playback', () => {
       expect(fake.eventAcknowledged).toBe(true);
       const udp = createSocket('udp4');
       try {
-        const request = Buffer.alloc(32); request[0] = 0x80; request.writeUInt32BE(123, 24);
+        const replies: Buffer[] = []; udp.on('message', packet => replies.push(packet));
+        // 32-byte packets that are not RTP timing requests (type 0x52 or 0xd2) get no reply.
+        const ignored = Buffer.alloc(32); ignored[0] = 0x80; ignored[1] = 0xd3; ignored.writeUInt32BE(999, 24);
+        udp.send(ignored, fake.timingPort, '127.0.0.1');
+        await new Promise(r => setTimeout(r, 30));
+        expect(replies).toEqual([]);
+        const request = Buffer.alloc(32); request[0] = 0x80; request[1] = 0xd2; request.writeUInt32BE(123, 24);
         const response = new Promise<Buffer>((resolve, reject) => { udp.once('message', resolve); udp.once('error', reject); });
         udp.send(request, fake.timingPort, '127.0.0.1');
         const packet = await response;

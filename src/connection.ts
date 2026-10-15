@@ -46,8 +46,9 @@ export function hostForURL(host: string, encodeZone = true): string {
 /**
  * Parse one HTTP or RTSP message (request or response) from the start of a buffer.
  * Header names are lower-cased; startLine preserves the request method or response status. Returns null until the headers
- * and `Content-Length` bytes of body have all arrived. Invalid lengths, headers over 64 KiB and bodies over
- * `maxBody` (default 16 MiB) throw a protocol error.
+ * and `Content-Length` bytes of body have all arrived. Invalid lengths, duplicate Content-Length or Transfer-Encoding
+ * headers, any Transfer-Encoding, headers over 64 KiB and bodies over `maxBody` (default 16 MiB) throw a protocol error.
+ * Other repeated headers (including CSeq) keep the last value.
  */
 export function parseHTTPMessage(buf: Buffer, maxBody = 16 * 1024 * 1024): ParsedHTTP | null {
   const headerEnd = buf.indexOf('\r\n\r\n');

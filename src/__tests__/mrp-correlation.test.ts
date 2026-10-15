@@ -119,6 +119,98 @@ it('rejects concurrent reuse of an identifier without disturbing the original wa
   expect((await first).identifier).toBe(identifier);
   conn.close();
 });
+describe('sanitized MRP diagnostics', () => {
+  it('distinguishes pushes, wrong-type replies and correlated replies without disclosing media', async () => {
+    const conn = connection();
+    const observed: Record<string, unknown>[] = [];
+    conn.on('mrp-diagnostic', diagnostic => observed.push(diagnostic));
+    const request = await MRPMessage.playbackQueueRequest();
+    const identifier = (await MRPMessage.decode(request)).identifier as string;
+    const pending = conn.sendMRPMessageAndWait(request, MessageType.SetState);
+    await Promise.resolve();
+    const payload = { playerPath: { client: { bundleIdentifier: 'private.app' }, player: { identifier: 'private-player' } }, nowPlayingInfo: { title: 'Private title', artist: 'Private artist' }, playbackQueue: { contentItems: [{ identifier: 'private-track', artworkData: Buffer.from('secret artwork') }] } };
+    await (conn as any).handleMRPResponse(Buffer.from(protocol.encode(protocol.create({ type: 4, '.setStateMessage': payload })).finish()));
+    await reply(conn, identifier, MessageType.DeviceInfo);
+    await (conn as any).handleMRPResponse(Buffer.from(protocol.encode(protocol.create({ type: 4, identifier, '.setStateMessage': payload })).finish()));
+    await pending;
+    expect(observed).toHaveLength(4);
+    expect(observed[0]).toEqual({ direction: 'send', type: 32, identifier: 'request-1' });
+    expect(observed[1]).toEqual({ direction: 'receive', type: 4, matchedRequest: false, client: 'client-2', player: 'player-3' });
+    expect(observed[2]).toEqual({ direction: 'receive', type: 15, identifier: 'request-1', matchedRequest: false });
+    expect(observed[3]).toEqual({ direction: 'receive', type: 4, identifier: 'request-1', matchedRequest: true, client: 'client-2', player: 'player-3' });
+    expect(JSON.stringify(observed)).not.toMatch(/private|Private|secret/);
+    conn.close();
+  });
+
+  it('bounds the token map while keeping tokens unique', async () => {
+    const conn = connection();
+    const tokens = new Set<unknown>();
+    conn.on('mrp-diagnostic', diagnostic => tokens.add(diagnostic.identifier));
+    for (let i = 0; i < 1500; i++) (conn as any).emitDiagnostic('send', { type: MessageType.SetConnectionState, identifier: `id-${i}` });
+    expect(tokens.size).toBe(1500);
+    expect((conn as any).diagnosticIds.size).toBeLessThanOrEqual(1024);
+    conn.close();
+  });
+
+  it('keeps a recurring client token stable while request identifiers churn past the cap (LRU)', async () => {
+    const conn = connection();
+    const clients: unknown[] = [];
+    conn.on('mrp-diagnostic', diagnostic => { if (diagnostic.client) clients.push(diagnostic.client); });
+    const state = { type: MessageType.SetState, '.setStateMessage': { playerPath: { client: { bundleIdentifier: 'app' } } } };
+    for (let i = 0; i < 1500; i++) {
+      (conn as any).emitDiagnostic('receive', state);
+      (conn as any).emitDiagnostic('send', { type: MessageType.SetConnectionState, identifier: `id-${i}` });
+    }
+    expect(new Set(clients).size).toBe(1);
+    expect((conn as any).diagnosticIds.size).toBeLessThanOrEqual(1024);
+    conn.close();
+  });
+
+  it('excludes auth and unrelated message types entirely', async () => {
+    const conn = connection();
+    const observed: unknown[] = [];
+    conn.on('mrp-diagnostic', diagnostic => observed.push(diagnostic));
+    for (const type of [MessageType.CryptoPairing, MessageType.Keyboard, MessageType.TextInput, MessageType.GenericMessage]) {
+      await reply(conn, 'not-for-export', type);
+    }
+    // A closed proto2 enum can leave only an inherited default. It is not a received type.
+    (conn as any).emitDiagnostic('receive', Object.create({ type: MessageType.SetState }));
+    (conn as any).emitDiagnostic('receive', {});
+    expect(observed).toEqual([]);
+    conn.close();
+  });
+
+  it('does not let diagnostic observer exceptions skip state delivery or the handshake', async () => {
+    const conn = connection();
+    conn.on('mrp-diagnostic', () => { throw new Error('observer failed'); });
+    const received: unknown[] = [];
+    conn.on('mrp-message', msg => received.push(msg));
+    vi.mocked(conn.sendMRPMessage).mockImplementation(async data => {
+      const request = await MRPMessage.decode(data);
+      if (request.type === MessageType.DeviceInfo) await reply(conn, undefined, MessageType.DeviceInfo);
+      if (request.type === MessageType.PlaybackQueueRequest) await reply(conn, request.identifier as string);
+    });
+    await expect((conn as any).initMRPProtocol()).resolves.toBeUndefined();
+    await expect(conn.sendMRPMessageAndWait(await MRPMessage.playbackQueueRequest(), MessageType.SetState)).resolves.toMatchObject({ type: 4 });
+    expect(received).toHaveLength(2);
+    conn.close();
+  });
+
+  it('captures relevant init sends and identifierless handshake matches', async () => {
+    const conn = connection();
+    const observed: Record<string, unknown>[] = [];
+    conn.on('mrp-diagnostic', diagnostic => observed.push(diagnostic));
+    vi.mocked(conn.sendMRPMessage).mockImplementation(async data => {
+      if ((await MRPMessage.decode(data)).type === MessageType.DeviceInfo) await reply(conn, undefined, MessageType.DeviceInfo);
+    });
+    await (conn as any).initMRPProtocol();
+    expect(observed.map(item => [item.direction, item.type, item.matchedRequest])).toEqual([
+      ['send', 15, undefined], ['receive', 15, true], ['send', 38, undefined], ['send', 16, undefined], ['send', 24, undefined],
+    ]);
+    conn.close();
+  });
+});
+
 it('rejects identifierless application requests before creating response timers', async () => {
   vi.useFakeTimers();
   const conn = connection();

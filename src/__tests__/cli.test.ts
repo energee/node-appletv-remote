@@ -56,13 +56,18 @@ describe('CLI timing defaults', () => {
 });
 
 describe('CLI operations', () => {
-  it.each([PlaybackState.Paused, PlaybackState.Interrupted])('preserves metadata-free normalized playback state %s', async state => {
-    const info = new NowPlayingInfo({ hasPlayback: true, playbackState: state }, {});
+  it.each([PlaybackState.Playing, PlaybackState.Paused, PlaybackState.Interrupted])('preserves metadata-free normalized playback state %s', async state => {
+    const info = new NowPlayingInfo({ hasPlayback: false, playbackState: state }, {});
     vi.spyOn(AppleTV.prototype, 'getNowPlaying').mockResolvedValue(info);
     await run(['state']);
     expect(console.log).toHaveBeenCalledWith(`[${PlaybackState[state]}]`);
     expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('Absent'));
     expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
+  });
+  it('prints the nothing-playing line for an idle TV snapshot', async () => {
+    vi.spyOn(AppleTV.prototype, 'getNowPlaying').mockResolvedValue(new NowPlayingInfo({ hasPlayback: false }, {}));
+    await run(['state']);
+    expect(console.log).toHaveBeenCalledWith('Nothing playing. [Absent]');
   });
   it.each([['state', 'getNowPlaying', new NowPlayingInfo({ hasPlayback: false }, {}), 'Requesting state...'],
     ['queue', 'requestPlaybackQueue', {}, 'Requesting playback queue...'], ['artwork', 'requestArtwork', null, 'Requesting artwork...']] as const)(
@@ -117,7 +122,7 @@ describe('CLI operations', () => {
     expect(readFileSync).not.toHaveBeenCalled();
     expect(scan).not.toHaveBeenCalled();
   });
-  it.each([['state', 'getState'], ['queue', 'requestPlaybackQueue'], ['artwork', 'requestArtwork'], ['command', 'guide']])('propagates %s failures and closes', async (cmd, method) => {
+  it.each([['state', 'getNowPlaying'], ['queue', 'requestPlaybackQueue'], ['artwork', 'requestArtwork'], ['command', 'guide']])('propagates %s failures and closes', async (cmd, method) => {
     const name = cmd === 'command' ? 'guide' : method;
     vi.spyOn(AppleTV.prototype, name as 'getState').mockRejectedValue(new Error('request failed'));
     await expect(run(cmd === 'command' ? [cmd, method] : [cmd])).rejects.toThrow('request failed');
