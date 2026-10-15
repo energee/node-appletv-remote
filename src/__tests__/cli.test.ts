@@ -38,6 +38,16 @@ describe('CLI timing defaults', () => {
     expect(AppleTV.prototype.connect).toHaveBeenCalledWith(expect.anything(), { settleMs: 500 });
     expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
   });
+  it.each([[['power'], 'fetchPowerState', 'on'], [['app', 'list'], 'appList', []], [['account', 'list'], 'accountList', []]] as const)(
+    'skips the post-send wait for read-only %j', async (args, method, result) => {
+      vi.unstubAllEnvs();
+      vi.useFakeTimers();
+      vi.spyOn(AppleTV.prototype, method).mockResolvedValue(result as never);
+      const done = run([...args]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
+      await done;
+    });
   it('honors explicit zero for both waits', async () => {
     vi.spyOn(AppleTV.prototype, 'sendKeyCommand').mockResolvedValue(undefined);
     await run(['command', 'select']);
@@ -54,6 +64,14 @@ describe('CLI operations', () => {
     expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('Absent'));
     expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
   });
+  it.each([['state', 'getNowPlaying', new NowPlayingInfo({ hasPlayback: false }, {}), 'Requesting state...'],
+    ['queue', 'requestPlaybackQueue', {}, 'Requesting playback queue...'], ['artwork', 'requestArtwork', null, 'Requesting artwork...']] as const)(
+    'prints %s progress to stderr, keeping stdout for results', async (cmd, method, result, progress) => {
+      vi.spyOn(AppleTV.prototype, method).mockResolvedValue(result as never);
+      await run([cmd]);
+      expect(console.error).toHaveBeenCalledWith(progress);
+      expect(console.log).not.toHaveBeenCalledWith(progress);
+    });
   it.each([
     [['stop'], 'stop', []], [['seek', '12.5'], 'setPosition', [12.5]],
     [['skip-forward', '10'], 'skipForward', [10]], [['skip-backward', '3'], 'skipBackward', [3]],

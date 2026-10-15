@@ -225,12 +225,12 @@ describe('cleanup and independent wire evidence', () => {
     (atv as any).handleMRPMessage({ type: 37, '.deviceInfoMessage': { groupedDevices: [] } });
     await next;
   });
-  it('failed touch shutdown still closes both transports', async () => {
+  it('failed touch shutdown is ignored and still closes both transports', async () => {
     const atv = device(); mrp(atv); const { conn } = companion(atv);
     await atv.touchAction(0, 0, 1);
     conn.sendRequest.mockRejectedValue(new Error('shutdown rejected'));
     const airplay = (atv as any).connection;
-    await expect(atv.close()).rejects.toThrow('shutdown rejected');
+    await expect(atv.close()).resolves.toBeUndefined();
     expect(conn.close).toHaveBeenCalledOnce(); expect(airplay.close).toHaveBeenCalledOnce();
     expect((atv as any).touchSession).toBeUndefined();
   });
@@ -323,6 +323,12 @@ describe('gesture cancellation and input lifecycle', () => {
     await vi.runAllTimersAsync(); await rejected;
     expect(sent.filter(([id]) => id === '_hidC').map(([, c]) => c.get('_hBtS'))).toEqual([1, 2]);
   });
+});
+
+it('does not treat an uncorrelated envelope error as a routing rejection when nothing is pending', () => {
+  const atv = device();
+  (atv as any).handleMRPMessage({ type: 15, errorCode: 1, '.deviceInfoMessage': { groupedDevices: [{ name: 'S', deviceUID: 's' }] } });
+  expect(atv.outputDevices).toEqual([{ name: 'S', identifier: 's' }]);
 });
 
 it('retains both touch teardown errors and clears registrations', async () => {

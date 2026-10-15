@@ -24,19 +24,21 @@ describe('media acknowledgments', () => {
       sendMRPMessage: async () => {},
       sendMRPMessageAndWait: async (bytes: Buffer, type: number) => {
         expect((await MRPMessage.decode(bytes)).type).toBe(1);
-        expect(type).toBe(2);
+        // pyatv send_and_receive matches by identifier only.
+        expect(type).toBeUndefined();
         return { type: 2, '.sendCommandResultMessage': { sendError, handlerReturnStatus: 0 } };
       },
     };
     if (sendError === 0) await expect(atv.play()).resolves.toBeUndefined();
     else await expect(atv.play()).rejects.toThrow(`sendError=${sendError}`);
   });
-  it('uses sendError rejection with handler diagnostics and rejects a missing result extension', async () => {
+  it('uses sendError rejection with handler diagnostics and accepts a missing result extension', async () => {
     const atv = device();
     (atv as any).connection = { sendMRPMessage: async () => {}, sendMRPMessageAndWait: async () => ({ '.sendCommandResultMessage': { handlerReturnStatus: 2, sendError: 8 } }) };
     await expect(atv.pause()).rejects.toThrow('handlerReturnStatus=2');
+    // pyatv: no inner SendCommandResultMessage means sendError NoError.
     (atv as any).connection = { sendMRPMessage: async () => {}, sendMRPMessageAndWait: async () => ({ type: 2 }) };
-    await expect(atv.pause()).rejects.toThrow('Malformed');
+    await expect(atv.pause()).resolves.toBeUndefined();
   });
   it('accepts a decoded acknowledgment whose status fields are omitted (pyatv: absent sendError is NoError)', async () => {
     const atv = device();
@@ -122,6 +124,21 @@ describe('unified player state', () => {
     expect((atv as any).nowPlaying).toMatchObject({ title: 'two', playerIdentifier: 'two' });
     deliver(atv, MessageType.SetNowPlayingClient, 'setNowPlayingClientMessage', {});
     expect((atv as any).nowPlaying.hasPlayback).toBe(false);
+  });
+  it('treats an empty now-playing client as the active client (pyatv: bundle id \'\')', () => {
+    const atv = device();
+    deliver(atv, MessageType.SetNowPlayingClient, 'setNowPlayingClientMessage', {});
+    deliver(atv, MessageType.SetState, 'setStateMessage', { playbackState: 3 });
+    expect(atv.nowPlaying).toMatchObject({ hasPlayback: false, playbackState: PlaybackState.Stopped });
+  });
+  it('retains only snapshot state fields, not queue artwork, from SetState', () => {
+    const atv = device();
+    deliver(atv, MessageType.SetState, 'setStateMessage', { playerPath: path('app'), playbackState: 1, displayName: 'App',
+      playbackQueue: { contentItems: [{ identifier: 'x', artworkData: Buffer.alloc(1024), metadata: { title: 'T' } }] } });
+    const player = (atv as any).playerState.clients.get('app').players.get('MediaRemote-DefaultPlayer');
+    expect(player.state).toEqual({ playbackState: 1, displayName: 'App' });
+    expect(player.items[0].artworkData).toBeUndefined();
+    expect(atv.nowPlaying).toMatchObject({ title: 'T', playbackState: PlaybackState.Playing, appDisplayName: 'App' });
   });
   it('uses the same snapshot for getNowPlaying and events', async () => {
     const atv = device();

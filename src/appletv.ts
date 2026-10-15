@@ -317,13 +317,14 @@ export class AppleTV extends EventEmitter {
   }
 
   /**
-   * Cancel gestures, attempt touch cleanup, then close both transports even if cleanup fails.
-   * A touch startup still in flight is abandoned (closing Companion ends it), not awaited.
+   * Cancel gestures, attempt best-effort touch cleanup, then close both transports; never rejects.
+   * Touch teardown errors are ignored (call stopTouch() first to observe them). A touch startup
+   * still in flight is abandoned (closing Companion ends it), not awaited.
    */
   async close(): Promise<void> {
     this.gestureController?.abort();
     try {
-      if (!this.touchStarting) await this.stopTouch();
+      if (!this.touchStarting) await this.stopTouch().catch(() => {});
     } finally {
       const companion = this.companionConnection;
       const connection = this.connection;
@@ -568,8 +569,8 @@ export class AppleTV extends EventEmitter {
 
   /** Track DeviceInfo selected groups; reject UUID-correlated envelope errors regardless of discriminator. */
   private handleOutputMessage(msg: Record<string, unknown>): void {
-    if (msg.identifier === this.pendingRouting?.identifier && msg.errorCode) {
-      this.pendingRouting?.reject(new Error(`Output routing rejected: ${msg.errorDescription ?? msg.errorCode}`));
+    if (this.pendingRouting && msg.identifier !== undefined && msg.identifier === this.pendingRouting.identifier && msg.errorCode) {
+      this.pendingRouting.reject(new Error(`Output routing rejected: ${msg.errorDescription ?? msg.errorCode}`));
       return;
     }
     // Types 65/66 update/remove output-device records; neither confirms the selected group.
@@ -757,15 +758,15 @@ export class AppleTV extends EventEmitter {
   private async sendMediaCommand(command: number, options?: Record<string, unknown>): Promise<void> {
     const conn = this.requireConnection();
     const msg = await MRPMessage.sendMediaCommand(command, options);
-    const response = await conn.sendMRPMessageAndWait(msg, MessageType.SendCommandResult);
+    // pyatv send_and_receive matches the reply by identifier only, not by message type.
+    const response = await conn.sendMRPMessageAndWait(msg, undefined);
     if (typeof response.errorCode === 'number' && response.errorCode !== 0) {
       throw new Error(`Media command ${command} rejected: errorCode=${response.errorCode} ${response.errorDescription ?? ''}`);
     }
     const result = response['.sendCommandResultMessage'] as Record<string, unknown> | undefined;
-    // pyatv checks only sendError; an omitted proto2 field is its default (NoError).
-    if (!result) throw new Error('Malformed media-command acknowledgment');
-    const sendError = result.sendError ?? 0;
-    const status = result.handlerReturnStatus ?? 0;
+    // pyatv checks only sendError; an absent result extension or omitted proto2 field means NoError.
+    const sendError = result?.sendError ?? 0;
+    const status = result?.handlerReturnStatus ?? 0;
     if (sendError !== 0) throw new Error(`Media command ${command} rejected: sendError=${sendError}, handlerReturnStatus=${status}`);
   }
 
