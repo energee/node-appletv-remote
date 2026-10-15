@@ -37,6 +37,7 @@ atv volume 40 [deviceId]          # absolute volume, 0..100
 atv text set "search words" [deviceId]  # prints the new text; fails if no field is focused
 atv text append " more" [deviceId]
 atv text clear [deviceId]
+atv text focus [deviceId]         # focused, unfocused, or unknown
 atv app list [deviceId]           # tab-separated bundle ID and name
 atv app launch com.netflix.Netflix [deviceId] # bundle ID or URL / URL scheme
 atv account list [deviceId]       # tab-separated account ID and name
@@ -49,12 +50,12 @@ Credentials are saved to `~/.atv-credentials.json`. Leave out `deviceId` to use 
 
 Playback commands open only AirPlay/MRP; text/app/account/power commands and extra buttons open only Companion. `command` (alias `cmd`) still accepts `skip_forward` / `skip_backward` for the app's default interval; use the hyphenated commands to specify seconds. Extra Companion buttons are `channel_up`, `channel_down`, `screensaver`, `guide`, `page_up`, and `page_down` (not available in the MRP-only interactive remote).
 
-Numeric values must be finite decimal numbers in the documented range. Required IDs must be nonblank. Quote text to preserve spaces; `atv text set ""` explicitly sets empty text. Invalid arguments fail before reading credentials, discovery, or connection. For one-shot commands, operation and connection failures print an error to stderr and exit nonzero; one-shot operations close their connection even on failure. Absolute volume can fail if the TV does not report its output device. These commands depend on device/app support and do not bypass pairing. Extra positional arguments are rejected instead of ignored. Progress (including `Requesting ...` lines from state, queue and artwork) goes to stderr so results remain clean on stdout. Empty scans and pairing cancellation/no-device selections retain their existing successful exit behavior.
+Numeric values must be finite decimal numbers in the documented range. Required IDs must be nonblank. Quote text to preserve spaces; `atv text set ""` explicitly sets empty text. Invalid arguments fail before reading credentials, discovery, or connection. For one-shot commands, operation and connection failures print an error to stderr and exit nonzero; one-shot operations close their connection even on failure. Absolute volume can fail if the TV does not report its output device, and has no effect when the TV offers only relative or no volume control (see #39 below). These commands depend on device/app support and do not bypass pairing. Extra positional arguments are rejected instead of ignored. Progress (including `Requesting ...` lines from state, queue and artwork) goes to stderr so results remain clean on stdout. Empty scans and pairing cancellation/no-device selections retain their existing successful exit behavior.
 
 Two CLI timing knobs guard HID keys, which the Apple TV never acknowledges. Set either to `0` for faster one-shot commands:
 
 - `ATV_SETTLE_MS` (default 500): pause after the MRP handshake before sending anything, for every MRP command (a request sent before the device is ready may be dropped; for a query that would mean waiting out its 10 s timeout). Companion-only commands do not use it. The library defaults to `0`; opt in with `atv.connect(credentials, { settleMs: 500 })`.
-- `ATV_POST_SEND_MS` (default 1000): pause after a one-shot key/playback/text/volume/Companion-button/app-launch/account-switch operation, before disconnecting. Read-only queries (`power`, `app list`, `account list`, `state`, `queue`, `artwork`) disconnect as soon as their reply arrives.
+- `ATV_POST_SEND_MS` (default 1000): pause after a one-shot key/playback/text/volume/Companion-button/app-launch/account-switch operation, before disconnecting. Read-only queries (`power`, `text focus`, `app list`, `account list`, `state`, `queue`, `artwork`) disconnect as soon as their reply arrives.
 
 ```
 $ atv state
@@ -167,10 +168,22 @@ Availability is `supported` (advertised and enabled), `unavailable` (advertised 
 currently disabled), `unsupported` (missing from a received command list), or
 `unknown` (no runtime evidence). Media commands use the active player's command
 list plus client defaults. Volume uses explicit relative/absolute capability
-flags and the known output UID. Other public capabilities remain `unknown` rather
+flags and the known output UID. The flags come from a pushed VolumeControlAvailability
+(type 17), from the reply (type 63) to the GetVolumeControlCapabilities request the
+handshake sends (tvOS 26 does not always push type 17), and from
+VolumeControlCapabilitiesDidChange (type 64) pushes for our output device. A type 63 or
+64 without capabilities leaves earlier flags unchanged. Other public capabilities remain `unknown` rather
 than being guessed from model or service presence. Availability is advisory and
 may change at any time; device errors still reject. The event has no payload:
 re-query the capabilities relevant to your application.
+
+**Volume on tvOS 26 (#39):** on the tested devices `volume` stayed `undefined` and the
+`volume` event never fired when the TV offered no absolute volume, and `setVolume` sent
+but changed nothing. Check `featureAvailability('setVolume')` first. On tvOS 26.6 an
+AppleTV6,2 reports volume control unavailable (most likely because the TV's volume is not
+under its control over CEC or IR; not confirmed), and an AppleTV5,3 reports relative only (`volumeUp`/`volumeDown` supported, `setVolume`
+unsupported). Both answer a GetVolume request with 0 for every output UID, and their
+UpdateOutputDevice descriptors carry no volume.
 
 **Idle Apple TV state (#10):** when no app has a loaded item, an Apple TV (seen on
 the HD AppleTV5,3 and the 4K AppleTV6,2) answers the queue request with a typeless
@@ -183,8 +196,8 @@ while playing, paused and after `stop`: queue replies and pushed state both work
 once an app has a loaded item. With nothing loaded, the HD sends no reply at all
 to `play`, so that command still times out after 5 s.
 
-The handshake sends ClientUpdatesConfig and GetKeyboardSession without waiting for
-their replies. Media commands and the legacy heartbeat correlate replies by identifier;
+The handshake sends ClientUpdatesConfig, GetKeyboardSession and
+GetVolumeControlCapabilities without waiting for their replies. Media commands and the legacy heartbeat correlate replies by identifier;
 queue requests additionally require the SetState type, except that a same-identifier
 error reply also settles them (#10).
 
@@ -193,7 +206,9 @@ error reply also settles them (#10).
 Register `mrpDiagnostic` **before** `connect()` on an existing `AppleTV` instance.
 Import `MRPDiagnostic` as a type from `node-appletv-remote` when annotating listeners.
 Use a bounded capture connection; its in-memory token map keeps the 1024 most recently used identifiers (LRU), so recurring client/player tokens stay stable while request identifiers churn.
-The event emits only relevant init/state message types, direction, opaque
+The event emits only relevant init/state message types (including the
+GetVolumeControlCapabilities request, volume capability replies and changes, and tvOS 26
+types 104/105), direction, opaque
 connection-local request/client/player tokens, and `matchedRequest` on receives
 (type plus identifier match before dispatch). Missing identifiers remain omitted;
 no default route is invented. Tokens allow equality comparisons within a connection,
@@ -539,9 +554,16 @@ await atv.setText('apple tv');               // 'apple tv'
 await atv.insertText(' remote');             // 'apple tv remote'
 await atv.getText();                         // read without editing
 await atv.clearText();                       // ''
+
+// Is a text field focused? import { KeyboardFocusState } from 'node-appletv-remote'
+atv.textFocusState;                          // KeyboardFocusState.Focused / Unfocused / Unknown
+atv.on('textFocusState', (state) => {});     // fires when focus changes (session opened by connectCompanion)
+await atv.fetchTextFocusState();             // re-ask the TV; also updates atv.textFocusState
 ```
 
 Text input uses Companion RTI: restart the text session (`_tiStop`/`_tiStart`), read the session UUID and current text from the reply, then send `_tiC` edits. A real Apple TV 4K ignored the older MRP `TextInputMessage`, so text input now needs `connectCompanion()`, and it rejects with `No text field is focused` instead of silently succeeding. `deleteText()` still sends the MRP Delete action.
+
+Text focus comes from the same RTI session: a `_tiStart` reply carries a `_tiD` archive only while a text field is focused. `connectCompanion()` sends `_tiStart` right after `_systemInfo`, because the TV pushes `_tiStarted`/`_tiStopped` events only to clients with an open RTI session; a TV that rejects it just emits `companionError` and leaves the state `unknown`. Every `_tiStart` reply (from connect, `fetchTextFocusState()` or a text edit) and every `_tiStarted`/`_tiStopped` event updates `textFocusState`, which emits only on change. It starts as `unknown` and returns to `unknown` when Companion closes. This is fixture-tested only; whether a given tvOS version pushes these events to this client is not hardware-verified (tracked in #30). The MRP `keyboard` event is separate and only fires on devices that still send KeyboardMessage.
 
 `connectCompanion()` sends `_systemInfo` after pair-verify. Without it, a real Apple TV 4K answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on an Apple TV 4K (tvOS, AppleTV6,2).
 
@@ -607,16 +629,17 @@ await atv.stopTouch(); // close() also releases and stops registrations
 
 console.log(atv.outputDevices); // current selected outputs [{ name, identifier }]
 atv.on('outputDevices', devices => console.log(devices));
-await atv.addOutputDevices(['speaker-uid']);
-await atv.removeOutputDevices(['speaker-uid']);
-await atv.setOutputDevices(['speaker-uid']);
+const [speaker] = await scan({ filter: d => d.name === 'Kitchen' });
+await atv.addOutputDevices([speaker.airplayPsi!]); // the speaker's AirPlay psi
+await atv.removeOutputDevices([speaker.airplayPsi!]);
+await atv.setOutputDevices([speaker.airplayPsi!]);
 ```
 
 Import `TouchAction` from the package; `InputAction` and `OutputDevice` are exported types. HID button methods accept `'singleTap'` (default), `'doubleTap'`, or `'hold'`. MRP taps preserve the existing 50ms press and flush; each double tap repeats that complete sequence, and hold lasts 1000ms. Existing Companion button taps release immediately; touch clicks use 20ms taps or 1000ms holds and phase 5. Media commands, wake/suspend, skip commands, and the fixed `home_hold` alias reject non-default action arguments to `sendKeyCommand`.
 
 Touch coordinates must be integers in 0..1000; swipes require an integer duration of 1..60000ms and interpolate at 16ms intervals. Hold/release require an active press. Overlapping high-level gestures and a second press without release are rejected. Close/stop also cancel held clicks; close both connections before explicitly reconnecting Companion. Abort rejects the swipe and releases its finger while still connected; disconnect invalidates local session state rather than pretending to send cleanup on a dead connection. Gesture completion means events were transmitted, not that a visible Apple TV action was confirmed.
 
-Output listing reflects DeviceInfo/DeviceInfoUpdate selected groups, not discovery of available speakers. IDs must be unique nonempty strings; only `setOutputDevices([])` accepts an empty list. One routing operation may be pending at a time. Routing sends `ModifyOutputContextRequest` (message type 48, protobuf extension 52), with both regular and cluster-aware device IDs. Types 65 (`UpdateOutputDevice`) and 66 (`RemoveOutputDevices`) are not routing acknowledgements; unsolicited messages of these types neither confirm nor reject an operation. A nonzero envelope error rejects routing only when its identifier matches the outgoing UUID, regardless of message type. Routing resolves once the reported group matches the operation (immediately if it already does; for `set`, the reporting group leader is not counted unless requested), and rejects on failed transmission/connection close or lack of confirmation within five seconds. It never optimistically changes the output list. A successful write or non-error envelope alone is not confirmation.
+Output listing reflects DeviceInfo/DeviceInfoUpdate selected groups, not discovery of available speakers. Routing IDs are each receiver's AirPlay `psi` TXT value, exposed by `scan()` as `airplayPsi`; on tvOS 26 its MAC-style `deviceid` and its `pi` are ignored and the operation times out. IDs must be unique nonempty strings; only `setOutputDevices([])` accepts an empty list. One routing operation may be pending at a time. Routing sends `ModifyOutputContextRequest` (message type 48, protobuf extension 52), with both regular and cluster-aware device IDs. Types 65 (`UpdateOutputDevice`) and 66 (`RemoveOutputDevices`) are not routing acknowledgements; unsolicited messages of these types neither confirm nor reject an operation. A nonzero envelope error rejects routing only when its identifier matches the outgoing UUID, regardless of message type. Routing resolves once the reported group matches the operation (immediately if it already does; for `set`, the reporting group leader is not counted unless requested), and rejects on failed transmission/connection close or lack of confirmation within five seconds. It never optimistically changes the output list. A successful write or non-error envelope alone is not confirmation.
 
 Hardware gates: verify tap/double-tap/hold timing and effects on Apple TV, touch clicks/swipes and release on cancellation/disconnect, and grouping/ungrouping real AirPlay speakers including UUID-correlated routing errors. No hardware or stored credentials are accessed by the regression tests.
 
@@ -628,12 +651,24 @@ atv.on('volume', (level) => {});           // 0–100
 atv.on('powerState', (state) => {});       // after subscribePowerState()
 atv.on('supportedCommands', (cmds) => {}); // SupportedCommand[]
 atv.on('playbackQueue', (queue) => {});
-atv.on('keyboard', (kb) => {});            // text field focused/unfocused
+atv.on('keyboard', (kb) => {});            // MRP KeyboardMessage focus (older tvOS)
+atv.on('textFocusState', (state) => {});   // Companion RTI focus; KeyboardFocusState, after connectCompanion()
 atv.on('message', (msg) => {});            // every raw MRP message; not sanitized
 atv.on('mrpDiagnostic', (d: MRPDiagnostic) => {}); // opt in before connect; safe routing tokens
 atv.on('close', () => {});
 atv.on('error', (err) => {});
 ```
+
+`Message.type` is the numeric discriminator sent on the wire, even when `MessageType`
+does not name it, so `toString()` shows `Unknown(n)` with the real number. A message
+without a type field also reports type 0 (`Unknown(0)`); test `'type' in msg.payload`
+to tell it from a real type 0. tvOS 26
+also sends `PlayerClientProperties` (104, extension 86), `OriginClientProperties`
+(105, extension 87), `UpdateOutputDevice` (65, extension 69, identity and volume
+descriptor fields only) and a `uniqueIdentifier` UUID on every envelope (field 85).
+A message with no type field, only `identifier` and `uniqueIdentifier`, also arrives on
+connect. Typeless messages that carry our identifier are usually replies to our requests
+(#10), so this is most likely a reply to a handshake request; that is not confirmed.
 
 ## How it works
 
@@ -701,6 +736,8 @@ npm run build        # also regenerates src/mrp/schema.ts
 npm test             # or npm run test:watch
 ```
 
+With pnpm, `pnpm install --frozen-lockfile` works as is: `pnpm-workspace.yaml` pre-approves the esbuild and protobufjs build scripts that pnpm 10+ otherwise blocks.
+
 The MRP schema is compiled into `src/mrp/schema.ts`, so no `.proto` files are read at run time and the package bundles cleanly. After editing a `.proto` (or adding one to `PROTO_FILES` in `scripts/gen-proto.mjs`), run `npm run gen:proto` and commit the result.
 
-Use `protobufjs >=8.8.1` within major 8; the manifest and pnpm lockfile exclude older vulnerable releases. Fresh npm installs and pnpm's locked installs must both pass. Patched protobufjs enforces proto2 closed enums, so every supported message discriminator must be declared in `ProtocolMessage.Type`, not just in the TypeScript `MessageType` enum. The bare HID flush is `GENERIC_MESSAGE = 42`. `SendButtonEvent` is message type 39 with payload extension field 43, not message type 43. Independent wire fixtures test these values in addition to builder/decoder round trips.
+Use `protobufjs >=8.8.1` within major 8; the manifest and pnpm lockfile exclude older vulnerable releases. Fresh npm installs and pnpm's locked installs must both pass. Patched protobufjs enforces proto2 closed enums and drops undeclared values, so `ProtocolMessage.type` is declared `int32`: every discriminator, known or not, decodes as its number (#40). `ProtocolMessage.Type` remains as the reference list; add new values there and to the TypeScript `MessageType` enum. The bare HID flush is `GENERIC_MESSAGE = 42`. `SendButtonEvent` is message type 39 with payload extension field 43, not message type 43. Independent wire fixtures test these values in addition to builder/decoder round trips.
