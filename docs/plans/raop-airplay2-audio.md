@@ -38,33 +38,47 @@ Read from the upstream reference implementation's `protocols/raop/*` and `protoc
 - **Protocol choice:** AirPlay 2 when `features` has bit 38 (unified media control) or bit 48
   (CoreUtils pairing and encryption); otherwise AirPlay 1 (legacy RAOP). Credentials: stored
   credentials if given, else *transient* pairing when bit 43 (system pairing) or 48 is set,
-  else none.
+  else none. Receivers with bit 40 (buffered audio) or 43 (system pairing) but neither 38 nor 48
+  are treated as AirPlay 1.
 - **AirPlay 2 realtime audio flow:** pair-verify on the RTSP socket, then `Control-Salt`
   keys encrypt the RTSP connection; `SETUP` with a base bplist (`timingProtocol: NTP`,
   `timingPort`, device/session identity) returns `eventPort`; connect the event channel with
   `Events-Salt` keys and answer its requests; second `SETUP` with
   `streams: [{ type: 0x60, ct: 1, audioFormat: 0x800, spf: 352, sr: 44100, latencyMin: 11025,
-  latencyMax: 88200, shk: <32-byte key>, controlPort, isMedia: true, audioMode: 'default' }]`
-  returns `dataPort` and `controlPort`; feedback every 2 s; `RECORD`; `FLUSH` with
-  `RTP-Info`; then the same paced RTP/sync/timing/resend loop as legacy.
+  latencyMax: 88200, shk: <32-byte key>, controlPort, isMedia: true, audioMode: 'default',
+  supportsDynamicStreamID: false, streamConnectionID: <RTSP session id> }]` (the session id is
+  the number in the request URI `rtsp://<local ip>/<id>`) returns `dataPort` and `controlPort`;
+  feedback every 2 s; `RECORD`; `FLUSH` with `RTP-Info`; then the same paced
+  RTP/sync/timing/resend loop as legacy. The event-channel connect is retried up to 5 times,
+  1 s apart, on connection refused, because some receivers open the event port only after
+  answering SETUP. The reference never reads a `Session` header in this profile and sends
+  `Session: 0` on FLUSH/TEARDOWN.
 - **Per-packet encryption (AirPlay 2 realtime):** ChaCha20-Poly1305 with key `shk`;
   nonce = 4 zero bytes + 64-bit LE counter incremented per packet; AAD = RTP header bytes 4..11
   (timestamp + SSRC); wire packet = 12-byte RTP header + ciphertext + 16-byte tag + the last
   8 bytes of the nonce. Resends retransmit the stored sealed packet. Samples are the same
   byte-swapped (big-endian) PCM16 as legacy L16.
-- **Transient pairing (HomePods):** pair-setup M1 with `Flags = 0x10` (transient), M3 with the
-  fixed PIN `3939`; stop after M4 and derive session keys from the SRP shared key with HKDF.
+- **Transient pairing (HomePods):** on the RTSP connection itself (HTTP/1.1 framing, no CSeq,
+  header `X-Apple-HKP: 4`): `POST /pair-pin-start`, then `POST /pair-setup` M1 with
+  `Flags = 0x10` (transient), M3 with the fixed PIN `3939`; stop after M4 and derive the
+  `Control-Salt` / `Events-Salt` keys from the SRP shared key K with HKDF. The `Control-Salt`
+  keys then encrypt that same RTSP connection. (Stored-credential HAP pair-verify uses
+  `X-Apple-HKP: 3`.)
 - **Legacy PIN pair-setup:** `POST /pair-pin-start`, then three binary-plist `POST
   /pair-setup-pin` steps: `{ method: 'pin', user: <client id hex> }` → `{ pk, salt }`;
   `{ pk: A, proof: M1 }`; `{ epk, authTag }` where `epk`/`authTag` are AES-128-GCM of the client
   Ed25519 public key with key `SHA512("Pair-Setup-AES-Key" || K)[0:16]` and IV
   `SHA512("Pair-Setup-AES-IV" || K)[0:16]` with the last byte incremented. SRP uses the 2048-bit
   group, SHA-1, username = client id, password = PIN, and an Apple-specific session key
-  `K = SHA1(S || 00000000) || SHA1(S || 00000001)`. The resulting 32-byte seed is exactly the
-  existing `legacySeed`.
+  `K = SHA1(S || 00000000) || SHA1(S || 00000001)`. `fast-srp-hap` already computes exactly this
+  K whenever the params hash is `sha1` (its `SRP.params[2048]` group; checked by comparing
+  `computeK()` with the formula). The resulting 32-byte seed is exactly the existing `legacySeed`.
 - **Metadata:** `md` TXT lists `0` text, `1` artwork, `2` progress. Artwork is
-  `SET_PARAMETER` with `Content-Type: image/jpeg` and `RTP-Info`; progress is
-  `SET_PARAMETER text/parameters` body `progress: <start>/<now>/<end>` in RTP time.
+  `SET_PARAMETER` with `Content-Type: image/jpeg` (always JPEG) and `RTP-Info`; progress is
+  `SET_PARAMETER text/parameters` body `progress: <start>/<now>/<end>` in RTP time with
+  `start = now = ` the first packet's RTP time and `end = start + duration * 44100`. The
+  reference sends progress, text and artwork after SETUP and **before** `RECORD`. (This library
+  currently sends text metadata after `FLUSH`; that ordering is unverified on hardware.)
 - **Decoding:** the reference uses a native audio library to decode files and resample.
   Formats other than raw PCM are a sender-side concern; receivers only see PCM (or ALAC).
 - **ALAC:** the reference sends L16 only for both protocols. Buffered AirPlay 2 audio
@@ -125,24 +139,35 @@ upstream project name.
   `src/index.ts`).
 - Types: `RtspClient.encryptWith(session: HAPSession): void` — after it is called every write
   is `session.encrypt(...)` and reads go through `session.decryptAvailable` before
-  `parseHTTPMessage`. Add `'X-Apple-HKP': '3'` on HAP `/pair-verify` HTTP requests via the
-  existing `headers` argument.
+  `parseHTTPMessage`. HTTP/1.1 framing without CSeq (today only `POST /pair-verify`) is extended
+  to `POST /pair-pin-start` and `POST /pair-setup` so transient pairing (task 12) runs on the
+  same socket. Callers pass `X-Apple-HKP` (`3` for HAP pair-verify, `4` for transient) through
+  the existing `headers` argument.
 - Test first: `src/raop/__tests__/rtsp-client.test.ts`: loopback server with a mirror
   `HAPSession`; encrypted request/response round trip with CSeq correlation; a response split
-  across TCP chunks and across 1,024-byte frames; authentication failure fails the client.
+  across TCP chunks and across 1,024-byte frames; authentication failure fails the client;
+  `POST /pair-setup` and `/pair-pin-start` go out as `HTTP/1.1` without `CSeq`.
 - Depends on: none. Parallel with 1, 3.
 
 **3. Profile classification from TXT**
 - Files: `src/raop/stream.ts` (constructor).
 - Types: private `readonly profile: 'legacy' | 'airplay2'`; `RaopStreamOptions.credentials?:
   HAPCredentials`.
-- Behavior: bit 38 or 48 selects `airplay2` (no longer a constructor error); legacy checks
-  (`cn`, `et`, `tp`, `sr/ss/ch`) apply only to `legacy`. Password bit `0x80`, `pw=true`,
-  `act=2` and `acl=1` still fail closed for both. `stream()` rejects `airplay2` without
-  `credentials`, `credentials` on `legacy`, and `legacySeed` on `airplay2`, all before taking
-  source ownership.
+- Behavior: bit 38 or 48 selects `airplay2` (no longer a constructor error). Everything
+  legacy-only applies only to `legacy`: the `cn`, `et`, `tp`, `sr/ss/ch` checks **and** the
+  `sf`/`flags` `0x8`/`0x200` rule that sets `requiresLegacySeed` (real Apple TVs advertise
+  `flags=0x244`, which includes `0x200`; applying the rule to `airplay2` would reject every
+  Apple TV). Password bit `0x80`, `pw=true`, `act=2` and `acl=1` still fail closed for both.
+  Bit 40 or 43 without 38 or 48 keeps failing closed in the constructor, as today: the
+  reference would try AirPlay 1 there, but legacy setup cannot handle buffered-only or
+  system-paired receivers, so relaxing this waits for hardware evidence. `stream()` rejects
+  `airplay2` without `credentials`, `credentials` on `legacy`, and `legacySeed` on `airplay2`,
+  all before taking source ownership.
 - Test first: update `src/raop/__tests__/stream.test.ts` case "requires legacy material for
-  PIN flags and refuses modern audio/auth advertisements" into explicit cases for each rule.
+  PIN flags and refuses modern audio/auth advertisements" into explicit cases for each rule,
+  including: features with bit 48 plus `flags=0x244` and `credentials` (no `legacySeed`) is
+  accepted; the same TXT without bit 38/48 still requires `legacySeed`; bit 40 alone and bit
+  43 alone are rejected by the constructor.
 - Depends on: none. Parallel with 1, 2.
 
 **4. Shared encrypted event-channel responder**
@@ -151,10 +176,13 @@ upstream project name.
 - Types: `export async function openEventChannel(host: string, port: number, sharedSecret:
   Buffer, onError: (error: Error) => void, signal?: AbortSignal): Promise<Socket>` — connects
   with `Events-Salt` read/write keys and answers each RTSP/HTTP request with `200 OK`
-  (echoing `CSeq`), exactly as `airplay-playback.ts` does today.
+  (echoing `CSeq`), exactly as `airplay-playback.ts` does today. On `ECONNREFUSED` it retries
+  up to 5 attempts in total, 1 s apart (abortable); other errors and the fifth refusal reject.
 - Test first: loopback receiver sends two encrypted requests in one chunk and one split
   request; each gets one encrypted 200 with matching CSeq; a bad tag calls `onError`; abort
-  destroys the socket.
+  destroys the socket; a port that starts listening after the first refused attempt connects
+  on retry (fake timers); five refusals reject; abort during the retry wait rejects without
+  another attempt.
 - Depends on: none. Parallel with 1–3.
 
 **5. AirPlay 2 audio SETUP sequence**
@@ -163,16 +191,22 @@ upstream project name.
   ```ts
   export interface AirPlay2Audio { serverPort: number; controlPort: number; audioKey: Buffer; events: Socket }
   export async function setupAirPlay2Audio(client: RtspClient, host: string, credentials: HAPCredentials,
-    localPorts: { timing: number; control: number }, signal: AbortSignal): Promise<AirPlay2Audio>
+    sessionId: number, localPorts: { timing: number; control: number }, signal: AbortSignal): Promise<AirPlay2Audio>
   ```
-  Runs `PairVerify` through `client` (HTTP `/pair-verify`), calls `client.encryptWith`, sends the
-  base SETUP bplist, opens the event channel (task 4), sends the stream SETUP bplist with a random
-  32-byte `shk`, validates `dataPort`/`controlPort` as integers 1..65535, and returns them.
+  Runs `PairVerify` through `client` (HTTP `/pair-verify`, `X-Apple-HKP: 3`) via an inline
+  `{ post, destroy }` object over `client.request` (no new adapter class), calls
+  `client.encryptWith`, sends the base SETUP bplist, opens the event channel (task 4), sends the
+  stream SETUP bplist with a random 32-byte `shk`, `supportsDynamicStreamID: false` and
+  `streamConnectionID: sessionId` (the same number passed to `client.setLocalUri`), validates
+  `dataPort`/`controlPort` as integers 1..65535, and returns them. Task 12 later widens
+  `credentials` to optional (transient pairing); nothing else changes in this signature.
 - Test first: `src/raop/__tests__/airplay2.test.ts`: loopback receiver that performs HAP
   pair-verify (pattern from `src/__tests__/airplay-playback.test.ts`), decodes both SETUP
   bodies with `bplist-parser` and asserts the fields listed above (`type 0x60`, `ct 1`,
-  `audioFormat 0x800`, `spf 352`, `sr 44100`, `timingProtocol 'NTP'`, 32-byte `shk`); missing
-  or invalid ports reject; wrong credentials reject; abort during event connect cleans up.
+  `audioFormat 0x800`, `spf 352`, `sr 44100`, `timingProtocol 'NTP'`, 32-byte `shk`,
+  `supportsDynamicStreamID false`, `streamConnectionID` equal to the request-URI session id);
+  missing or invalid ports reject; wrong credentials reject; abort during event connect
+  cleans up.
 - Depends on: 2, 4.
 
 **6. Stream AirPlay 2 realtime audio through `RaopStream`**
@@ -181,14 +215,19 @@ upstream project name.
 - Behavior for `airplay2`: no ANNOUNCE/Transport SETUP; `setupAirPlay2Audio` instead; `RECORD`,
   `FLUSH` with `RTP-Info`; feedback every 2 s, best effort; every audio packet sealed with a
   per-stream counter before `history.add`; sync/timing/resend/volume/metadata unchanged;
-  TEARDOWN then destroy the event socket and zero `audioKey`. The fixed 66,150-frame latency
+  TEARDOWN then destroy the event socket and zero `audioKey`. `this.session` comes from the
+  stream SETUP response's `Session` header when present (validated as in legacy), otherwise
+  `'0'` as the reference sends; it is never left undefined, so TEARDOWN, `setVolume` and
+  `setMetadata` always carry a `Session` header (unverified on hardware). The fixed 66,150-frame latency
   is kept; a different `Audio-Latency` on RECORD is accepted for `airplay2` (receiver-chosen)
   and documented as unverified.
 - Test first: `src/raop/__tests__/airplay2-stream.test.ts`: loopback receiver decrypts every
   UDP audio packet with `shk` and reassembles exactly the source PCM in big-endian order plus
   the silence tail; counter increments by one per packet; a resend request returns
   byte-identical sealed packets; feedback cadence 2 s under the controlled clock;
-  cancellation and source errors close RTSP, event and UDP sockets.
+  cancellation and source errors close RTSP, event and UDP sockets; with no `Session` header
+  in either SETUP response, RECORD/FLUSH/SET_PARAMETER/TEARDOWN carry `Session: 0` and
+  TEARDOWN is sent; with one, that value is used.
 - Depends on: 1, 2, 3, 5.
 
 **7. Hardware check H1 (needs hardware)**
@@ -226,14 +265,14 @@ upstream project name.
   keeps a RAOP-only receiver, ignores a malformed instance name, TXT keys lower-cased.
 - Depends on: none. Parallel.
 
-**10. Legacy SRP client**
-- Files: new `src/auth/legacy-srp.ts` (module comment).
-- Types: `export class LegacySRPClient { constructor(username: string, pin: string, secret?: Buffer); start(salt: Buffer, serverPublic: Buffer): { publicKey: Buffer; proof: Buffer }; sessionKey(): Buffer }`
-  — SRP-6a over the RFC 5054 2048-bit group with SHA-1 and the Apple 40-byte session key, using
-  native `BigInt` (fast-srp-hap fixes `K = H(S)` and cannot express this key).
+**10. Legacy SRP compatibility check (no new SRP code)**
+- Files: none in `src`; task 11 calls `fast-srp-hap`'s `SrpClient` directly with
+  `SRP.params[2048]` (SHA-1, which already yields the Apple 40-byte interleaved K), username =
+  client id, password = PIN. No wrapper class: it would have one caller.
 - Test first: `src/auth/__tests__/legacy-srp.test.ts` with fixed vectors (salt, B, a, PIN,
-  username → A, M1, K) generated once by an independent SRP implementation and stored as hex;
-  also a self-consistency check against a minimal in-test verifier-side computation.
+  username → A, M1, K) generated once by an independent SRP implementation and stored as hex,
+  asserting `SrpClient` reproduces them. If M1 differs (e.g. padding), task 11 computes M1
+  inline from `SrpClient`'s A, B and K; still no second SRP implementation.
 - Depends on: none. Parallel.
 
 **11. Legacy PIN pair-setup (`legacySeed` without manual material)**
@@ -250,7 +289,7 @@ upstream project name.
   `clientId` is 16 upper-case hex characters; `seed` is a fresh 32-byte Ed25519 seed and is what
   `stream(source, { legacySeed })` accepts.
 - Test first: `src/auth/__tests__/legacy-pair-setup.test.ts`: loopback receiver checks the
-  three plist bodies, verifies the SRP proof with task 10, decrypts `epk` with AES-128-GCM
+  three plist bodies, verifies the SRP proof with fast-srp-hap's `SrpServer` (2048-bit, SHA-1), decrypts `epk` with AES-128-GCM
   (key/IV derivation above, IV last byte + 1) and matches it to the seed's public key; the
   resulting seed then passes the existing legacy pair-verify loopback in `stream.test.ts`.
   Wrong PIN rejects with a clear error.
@@ -259,28 +298,42 @@ upstream project name.
 ### Phase 3 — HomePods, metadata and CLI
 
 **12. Transient pairing (HomePods and system-paired receivers)**
-- Files: new `src/auth/transient-pair.ts` (module comment), `src/raop/airplay2.ts`, `README.md`.
-- Types: `export async function transientVerify(transport: Pick<PersistentHttp, 'post'>): Promise<{ outputKey: Buffer; inputKey: Buffer; sharedSecret: Buffer }>`
-  — same shape as `PairVerify.verify()` so `setupAirPlay2Audio` takes either. Uses `SRPClient`
-  with PIN `3939`, M1 `Flags = 0x10`, stops after M4.
+- Files: new `src/auth/transient-pair.ts` (module comment), `src/raop/airplay2.ts`,
+  `src/raop/stream.ts` (credential check in `stream()`), `README.md`.
+- Types: `export async function transientVerify(client: RtspClient, signal: AbortSignal): Promise<{ outputKey: Buffer; inputKey: Buffer; sharedSecret: Buffer }>`
+  — same shape as `PairVerify.verify()`. Runs on the RTSP connection (not `PersistentHttp`,
+  which is a separate socket and sends `X-Apple-HKP: 3`): `POST /pair-pin-start`, then
+  `/pair-setup` M1 with `Flags = 0x10` and M3 with PIN `3939` via `SRPClient`, all with
+  `X-Apple-HKP: 4`; stops after M4; derives `Control-Salt` keys (and returns K as
+  `sharedSecret` for `Events-Salt`) with `hkdfSha512`. `setupAirPlay2Audio`'s `credentials`
+  becomes optional: present → `PairVerify`, absent → `transientVerify`; both then call
+  `client.encryptWith` on the same connection.
 - Behavior: `airplay2` with no `credentials` and bit 43 or 48 uses transient pairing;
-  otherwise it still requires credentials.
-- Test first: `src/auth/__tests__/transient-pair.test.ts` using fast-srp-hap's `SrpServer`
-  as the receiver; keys match an independent HKDF over the server's K; `Flags` TLV present;
-  server error TLV rejects.
-- Depends on: 5.
+  otherwise `stream()` still rejects missing credentials before taking ownership.
+- Test first: `src/auth/__tests__/transient-pair.test.ts` using a loopback RTSP receiver with
+  fast-srp-hap's `SrpServer`: request order `/pair-pin-start`, `/pair-setup`, `/pair-setup`;
+  each is HTTP/1.1 with `X-Apple-HKP: 4` on the one socket; `Flags` TLV present; keys match an
+  independent HKDF over the server's K; the following SETUP arrives encrypted with them on the
+  same socket; server error TLV rejects. Plus a `stream.test.ts` case for the credential rule.
+- Depends on: 6 (edits `stream.ts` and the `setupAirPlay2Audio` signature; run after 6 and
+  sequentially with 13).
 
 **13. Artwork and progress metadata**
 - Files: `src/raop/stream.ts`, `README.md`.
-- Types: `RaopMetadata.artwork?: Buffer` (JPEG or PNG, content type sniffed from magic bytes,
-  at most 1 MiB); `RaopStreamOptions.duration?: number` (seconds; enables progress);
-  `RaopStream.setArtwork(image: Buffer): Promise<void>`.
+- Types: `RaopMetadata.artwork?: Buffer` (JPEG only: must start with `FF D8 FF`; at most
+  1 MiB; sent as `image/jpeg` like the reference); `RaopStreamOptions.duration?: number`
+  (seconds; enables progress). No separate `setArtwork()`: artwork goes through the existing
+  `metadata` option and `setMetadata()`.
 - Behavior: artwork requires `md` containing `1`, progress requires `md` containing `2`
-  (otherwise reject before ownership); progress is sent once after FLUSH as
-  `progress: start/now/end` in RTP frames.
+  (otherwise reject before ownership). As in the reference, progress
+  (`start = now = ` first packet RTP time, `end = start + duration * 44100`) and initial
+  artwork are sent after SETUP and before `RECORD`. Text metadata keeps its current
+  after-`FLUSH` placement; the divergence from the reference is documented as unverified and
+  H4 decides whether text moves too.
 - Test first: additions in `src/raop/__tests__/stream.test.ts` (legacy) and
-  `src/raop/__tests__/airplay2-stream.test.ts` (encrypted): headers, bodies, gating, size cap.
-- Depends on: 6 (same file; run after it).
+  `src/raop/__tests__/airplay2-stream.test.ts` (encrypted): request order (progress/artwork
+  before RECORD), headers, bodies, gating, non-JPEG rejected, size cap.
+- Depends on: 6 (same file; run after it, sequentially with 12).
 
 **14. CLI audio streaming integration**
 - Files: `src/cli/index.ts`, `src/__tests__/cli.test.ts`, `README.md` (CLI section).
@@ -294,9 +347,11 @@ upstream project name.
 - Depends on: 6, 8, 9 and the CLI track's merged stream command.
 
 **15. Move `airplay-playback.ts` onto the shared event-channel helper**
-- Files: `src/airplay-playback.ts`.
-- Test first: `src/__tests__/airplay-playback.test.ts` gains an assertion that event replies
-  still carry the request CSeq (fails if behavior drifts during the move); existing tests stay green.
+- Files: `src/airplay-playback.ts`, `README.md` (if the retry is user-visible there).
+- Test first: `src/__tests__/airplay-playback.test.ts` gains a case where the event port
+  refuses the first connect and accepts on retry; playback must still succeed. This is red
+  before the move (today's code connects once) and green after it (task 4 retries). The
+  existing CSeq echo assertion (line 32) already guards reply behavior and stays green.
 - Depends on: 4 and PR #43 merged (it rewrites this file).
 
 **16. Hardware checks H2–H4 (needs hardware)**
@@ -329,12 +384,12 @@ upstream project name.
 | Can run together | Must be sequential |
 | --- | --- |
 | 1, 2, 3, 4, 8, 9, 10 | 2 + 4 → 5 → 6 → 7 |
-| 11 after 10, independent of Phase 1 | 6 → 13 (same file) |
-| 12 after 5, parallel with 6 | 6 + 8 + 9 + CLI track → 14 |
-| 15 any time after 4 once PR #43 merges | 9 + 11 + 12 + 13 → 16 |
+| 11 after 10, independent of Phase 1 | 6 → 12 → 13 (same file; 12 and 13 may swap but not overlap) |
+| 15 any time after 4 once PR #43 merges | 6 + 8 + 9 + CLI track → 14 |
+| | 9 + 11 + 12 + 13 → 16 |
 
-Tasks 2, 3, 6 and 13 all edit `src/raop/stream.ts`; give them to one agent in order, or land
-2 and 3 before 6 starts.
+Tasks 2, 3, 6, 12 and 13 all edit `src/raop/stream.ts`; give them to one agent in order, or
+land 2 and 3 before 6 starts.
 
 ## Phase boundaries
 
@@ -358,15 +413,19 @@ Tasks 2, 3, 6 and 13 all edit `src/raop/stream.ts`; give them to one agent in or
 - **Timing protocol.** Recent tvOS may prefer PTP. Realtime streams declare NTP and the
   reference still works with NTP, but this is a known way for H1 to fail.
 - **Event channel.** If it is not connected and answered promptly, receivers tear the session
-  down. Covered by task 4 tests, but timing on hardware is unverified.
+  down. Task 4 retries refused connects like the reference; timing on hardware is unverified.
+- **Session id.** AirPlay 2 receivers may omit the RTSP `Session` header; the plan falls back to
+  `Session: 0` like the reference. Unverified on hardware.
 - **Feature-bit heuristics.** Bits 38/48 are a heuristic for AirPlay 2 support. Misclassified
-  receivers fail during SETUP rather than at construction.
+  receivers fail during SETUP rather than at construction. Bit 40/43-only receivers stay
+  rejected (the reference would try AirPlay 1).
 - **Conflict with PR #43.** It rewrites `src/airplay-playback.ts`; task 15 waits for it and
   nothing else in this plan edits that file.
 - **CLI track coordination.** Task 14 depends on another branch's stream command; rebase on it
   rather than adding a second command.
 - **Legacy SRP vectors.** Must come from an independent implementation; self-generated
-  vectors would only prove self-consistency.
+  vectors would only prove self-consistency. The K formula is already confirmed in
+  `fast-srp-hap`; M1 compatibility is what task 10 checks.
 - **Security.** Legacy pair-verify authenticates only the client and encrypts nothing; keep the
   trusted-LAN warning in the README. AirPlay 2 keys (`shk`, session keys, seeds) are zeroed on
   teardown where Buffers allow it.
