@@ -133,6 +133,7 @@ async function receiver(mode = 'normal') {
         }
         if (method === 'RECORD' && mode === 'latency') extra = 'Audio-Latency: 1000\r\n';
         if (mode === 'duplicate') extra += `CSeq: ${headers.cseq}\r\n`;
+        if (mode === 'chunked') extra += 'Transfer-Encoding: chunked\r\n';
         socket.write(`RTSP/1.0 ${status}\r\nCSeq: ${headers.cseq}\r\n${extra}Content-Length: 0\r\n\r\n`);
       }
     });
@@ -257,7 +258,7 @@ describe('legacy RAOP streaming', () => {
     expect(peer.requests.at(-1)!.method).toBe('TEARDOWN');
   });
 
-  for (const mode of ['auth', 'bad-port', 'disconnect', 'hang', 'invalid-session', 'wrong-transport', 'latency', 'duplicate']) {
+  for (const mode of ['auth', 'bad-port', 'disconnect', 'hang', 'invalid-session', 'wrong-transport', 'latency', 'duplicate', 'chunked']) {
     it(`rejects ${mode} negotiation and releases the TCP connection`, async () => {
       const module = await load(); expect(module?.RaopStream).toBeTypeOf('function');
       const peer = await receiver(mode); const controller = new AbortController();

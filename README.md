@@ -300,7 +300,9 @@ pieces even if Node has coalesced larger internal buffers. Arbitrary sample/pack
 boundaries are reassembled. Source staging retains one copied chunk plus one
 1,408-byte PCM packet and does not pull another chunk until needed by the paced
 consumer. Wire packets and the separately bounded 1,000-packet resend cache add
-about 1.42 MB; RTSP headers and bodies each have a 64 KiB cap. Producer/Readable
+about 1.42 MB; RTSP headers and bodies each have a 64 KiB cap. Replies use the
+shared `parseHTTPMessage` framing (duplicate Content-Length and any Transfer-Encoding
+are rejected); the status line and a single matching CSeq are validated locally. Producer/Readable
 internal buffering is additional and remains the producer's responsibility. Slow sources
 that fall more than 100 ms behind after playback starts fail the same stall guard
 as delayed event loops; this is not a live-source jitter buffer. Samples become

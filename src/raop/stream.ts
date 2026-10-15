@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { audioPacket, timingReply, syncPacket, PacketHistory, FRAMES_PER_PACKET, SAMPLE_RATE, PACKET_BYTES } from './packets.js';
 import { x25519PublicKeyFromRaw, X25519_PKCS8_PREFIX, ED25519_PKCS8_PREFIX } from '../util/crypto.js';
+import { parseHTTPMessage } from '../connection.js';
 
 /** Finite raw PCM chunks; streamed chunks are Buffers of at most 65,536 bytes. */
 export type RaopPcmSource = Buffer | AsyncIterable<Buffer>;
@@ -43,29 +44,17 @@ class RtspClient {
       try { this.parse(); } catch (error) { this.pending?.reject(error as Error); onFailure(error as Error); this.socket.destroy(); }
     });
   }
+  /** Shared HTTP framing (64 KiB header and body caps); RTSP status and CSeq correlation are checked here. */
   private parse(): void {
     while (true) {
-      const end = this.input.indexOf('\r\n\r\n');
-      if (end < 0) {
-        if (this.input.length > 65536) throw new Error('Oversized RAOP RTSP headers');
-        return;
-      }
-      if (end + 4 > 65536) throw new Error('Oversized RAOP RTSP headers');
-      const lines = this.input.subarray(0, end).toString().split('\r\n');
-      const status = /^(RTSP\/1\.0|HTTP\/1\.1) (\d{3})(?: |$)/.exec(lines[0]);
+      const message = parseHTTPMessage(this.input, 65536);
+      if (!message) return;
+      const status = /^(RTSP\/1\.0|HTTP\/1\.1) (\d{3})(?: |$)/.exec(message.startLine);
       if (!status) throw new Error('Malformed RAOP RTSP response');
-      const headers: Record<string, string> = {};
-      for (const line of lines.slice(1)) {
-        const colon = line.indexOf(':'); if (colon < 1) throw new Error('Malformed RAOP header');
-        const name = line.slice(0, colon).toLowerCase();
-        if (Object.hasOwn(headers, name)) throw new Error('Duplicate RAOP response header');
-        headers[name] = line.slice(colon + 1).trim();
-      }
-      const rawLength = headers['content-length'] ?? '0';
-      if (!/^\d+$/.test(rawLength) || Number(rawLength) > 65536) throw new Error('Invalid RAOP response length');
-      const length = Number(rawLength); if (this.input.length < end + 4 + length) return;
-      const body = Buffer.from(this.input.subarray(end + 4, end + 4 + length));
-      this.input = this.input.subarray(end + 4 + length);
+      // parseHTTPMessage keeps the last duplicate header, so a repeated CSeq is rejected from the raw header block.
+      if ((this.input.subarray(0, message.totalSize - message.body.length).toString().match(/\r\ncseq:/gi)?.length ?? 0) > 1) throw new Error('Duplicate RAOP response header');
+      const { headers, body } = message;
+      this.input = this.input.subarray(message.totalSize);
       if (status[1] === 'RTSP/1.0' && this.abandoned.delete(Number(headers.cseq))) continue;
       if (!this.pending || status[1] !== this.pending.protocol) throw new Error('Unexpected RAOP response protocol');
       if (this.pending.sequence !== undefined && headers.cseq !== String(this.pending.sequence)) throw new Error('Unexpected RAOP CSeq');
