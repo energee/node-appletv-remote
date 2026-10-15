@@ -127,7 +127,9 @@ export class RtspClient {
       const message = `${method} ${uri} ${protocol}\r\n${controlHeaders}${Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join('')}Content-Length: ${body.length}\r\n\r\n`;
       try {
         const wire = Buffer.concat([Buffer.from(message), body]);
-        this.socket.write(this.cipher ? this.cipher.encrypt(wire) : wire, error => { if (error) finish(error); });
+        const sealed = this.cipher?.encrypt(wire);
+        if (sealed) wire.fill(0); // Encrypted bodies may carry keys (the AirPlay 2 stream SETUP's shk).
+        this.socket.write(sealed ?? wire, error => { if (error) finish(error); });
       } catch (error) { finish(error as Error); }
     }));
     this.queue = request.catch(() => undefined);
@@ -368,9 +370,10 @@ export class RaopStream {
       if (options.volume !== undefined) await this.setVolume(options.volume);
       if (options.metadata) await this.setMetadata(options.metadata);
       // Legacy: probe /feedback, then repeat every 25 seconds only if supported. AirPlay 2: send now and
-      // every 2 seconds without a probe. A failed periodic request is logged and playback continues
-      // (at most one in flight); transport loss and malformed replies still fail the stream through
-      // the client's onFailure path.
+      // every 2 seconds without a probe. The reference starts feedback just before RECORD without waiting;
+      // requests here are serialized, so feedback first would hold RECORD up to 5 s on a receiver ignoring
+      // it. A failed periodic request is logged and playback continues (at most one in flight); transport
+      // loss and malformed replies still fail the stream through the client's onFailure path.
       const feedback = () => client.request('POST', {}, undefined, controller.signal, 5000, '/feedback', true);
       let pending = false;
       const tick = () => {

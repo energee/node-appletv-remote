@@ -64,7 +64,11 @@ function port(value: unknown, name: string): number {
  * Event-channel errors, or the event socket closing, destroy the RTSP socket so the client's
  * failure callback ends the stream; destroy the RTSP socket before the event socket to avoid
  * that. `signal` cancels setup, including the event connect; on any rejection the event
- * channel is closed.
+ * channel is closed and `shk` is zeroed.
+ *
+ * Key material: the pair-verify shared secret and the plaintext stream SETUP body are zeroed
+ * before this returns; the `Control-Salt` RTSP keys are zeroed when `client.socket` closes;
+ * the event keys when the event socket closes; `audioKey` is left to the caller.
  *
  * @throws (rejects) when pair-verify fails (for example wrong credentials), a reply is not a
  * valid binary plist, `eventPort`/`dataPort`/`controlPort` is not an integer 1..65535, the
@@ -77,8 +81,11 @@ export async function setupAirPlay2Audio(client: RtspClient, host: string, crede
     destroy() {}, // The RTSP connection stays open for the encrypted session.
   }).verify();
   let events: Socket | undefined;
+  let audioKey: Buffer | undefined;
   const lost = (error: Error) => client.socket.destroy(error);
   const closed = () => lost(new Error('AirPlay 2 event connection closed'));
+  // The RTSP session holds these Buffers by reference; they are needed until the connection closes.
+  client.socket.once('close', () => { keys.outputKey.fill(0); keys.inputKey.fill(0); });
   try {
     client.encryptWith(new HAPSession(keys.outputKey, keys.inputKey));
     const base = await client.request('SETUP', PLIST, senderSetupBody(randomMac(), localPorts.timing), signal);
@@ -86,12 +93,14 @@ export async function setupAirPlay2Audio(client: RtspClient, host: string, crede
     // `signal` cancels only the connect; once open, the caller sends TEARDOWN before closing it.
     events = await openEventChannel(host, eventPort, keys.sharedSecret, lost, signal);
     events.on('error', lost); events.on('close', closed);
-    const audioKey = randomBytes(32);
-    const reply = await client.request('SETUP', PLIST, bplistCreator({ streams: [{
+    audioKey = randomBytes(32);
+    const body = bplistCreator({ streams: [{
       type: 0x60, ct: 1, audioFormat: 0x800, spf: 352, sr: 44100, latencyMin: 11025, latencyMax: 88200,
       shk: audioKey, controlPort: localPorts.control, isMedia: true, audioMode: 'default',
       supportsDynamicStreamID: false, streamConnectionID: sessionId,
-    }] }), signal);
+    }] });
+    let reply: Awaited<ReturnType<RtspClient['request']>>;
+    try { reply = await client.request('SETUP', PLIST, body, signal); } finally { body.fill(0); } // The body holds shk in the clear.
     const streams = dictionary(reply.body, 'stream SETUP').streams;
     const stream = Array.isArray(streams) && streams[0] && typeof streams[0] === 'object' ? streams[0] as Record<string, unknown> : {};
     return {
@@ -100,6 +109,7 @@ export async function setupAirPlay2Audio(client: RtspClient, host: string, crede
     };
   } catch (error) {
     if (events) { events.removeListener('close', closed); events.destroy(); }
+    audioKey?.fill(0);
     throw error;
   } finally { keys.sharedSecret.fill(0); }
 }

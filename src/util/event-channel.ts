@@ -23,7 +23,9 @@ const RETRY_DELAY_MS = 1000;
  * derived from it with `Events-Salt`. Decryption, framing and unknown-protocol errors are
  * reported through `onError` and destroy the socket; the caller owns the returned socket and
  * its `error`/`close` handling. `signal` cancels only the connect and retry waits; once
- * connected, the caller decides when to close (for example after sending TEARDOWN).
+ * connected, the caller decides when to close (for example after sending TEARDOWN). The
+ * derived event keys are zeroed when the socket closes or the connect fails; the caller
+ * still owns (and zeroes) `sharedSecret`.
  *
  * @throws (rejects) when aborted, on any connect error other than `ECONNREFUSED`, or on the
  * fifth refused attempt (attempts are 1 s apart).
@@ -40,16 +42,18 @@ export async function openEventChannel(host: string, port: number, sharedSecret:
       socket = await connectSocket(host, port, undefined, signal);
       break;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ECONNREFUSED' || attempt === CONNECT_ATTEMPTS) throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'ECONNREFUSED' || attempt === CONNECT_ATTEMPTS) { readKey.fill(0); writeKey.fill(0); throw error; }
     }
     await new Promise<void>((resolve, reject) => {
-      const abort = (): void => { clearTimeout(timer); reject(new Error('Connection closed during setup')); };
+      const abort = (): void => { clearTimeout(timer); readKey.fill(0); writeKey.fill(0); reject(new Error('Connection closed during setup')); };
       const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, RETRY_DELAY_MS);
       signal?.addEventListener('abort', abort, { once: true });
       if (signal?.aborted) abort();
     });
   }
 
+  // The session holds the key Buffers by reference, so zeroing them ends its use too.
+  socket.once('close', () => { readKey.fill(0); writeKey.fill(0); });
   let encrypted: Buffer = Buffer.alloc(0), plain: Buffer = Buffer.alloc(0);
   socket.on('data', (data: Buffer) => {
     try {

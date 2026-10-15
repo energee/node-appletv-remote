@@ -28,6 +28,10 @@ export interface ReceiverOptions {
   session?: string;
   /** Leave `/feedback` requests unanswered. */
   holdFeedback?: boolean;
+  /** Replaces the base SETUP reply body (for example something that is not a binary-plist dictionary). */
+  baseReply?: Buffer;
+  /** Sent as the `Audio-Latency` header on the RECORD reply. */
+  recordLatency?: string;
 }
 
 const raw = (key: KeyObject) => Buffer.from(key.export({ format: 'der', type: 'spki' }).subarray(-32));
@@ -116,13 +120,14 @@ export async function airplay2Receiver(options: ReceiverOptions = {}) {
         if (options.holdFeedback && uri === '/feedback') continue;
         if (method === 'SETUP') {
           const plist = parseBuffer(body)[0] as Record<string, unknown>;
-          if (!plist.streams) { reply(bplistCreator({ eventPort: options.eventPort ?? (events.address() as { port: number }).port }), 'Content-Type: application/x-apple-binary-plist\r\n'); continue; }
+          if (!plist.streams) { reply(options.baseReply ?? bplistCreator({ eventPort: options.eventPort ?? (events.address() as { port: number }).port }), 'Content-Type: application/x-apple-binary-plist\r\n'); continue; }
           state.senderControlPort = ((plist.streams as Record<string, unknown>[])[0].controlPort as number);
           // bplist-creator cannot encode undefined, so an undefined override removes the field.
           const stream = Object.fromEntries(Object.entries({ type: 0x60, dataPort: audio.address().port, controlPort: control.address().port, ...options.stream }).filter(([, value]) => value !== undefined));
           reply(bplistCreator({ streams: [stream] }), `Content-Type: application/x-apple-binary-plist\r\n${options.session ? `Session: ${options.session}\r\n` : ''}`);
           continue;
         }
+        if (method === 'RECORD' && options.recordLatency) { reply(undefined, `Audio-Latency: ${options.recordLatency}\r\n`); continue; }
         reply();
       }
     });
@@ -133,6 +138,8 @@ export async function airplay2Receiver(options: ReceiverOptions = {}) {
     port: (server.address() as { port: number }).port, credentials, requests, audioPackets, controlPackets, state,
     /** Close the receiver side of every event connection. */
     closeEvents: () => { for (const socket of eventSockets) socket.destroy(); },
+    /** Reset every event connection (TCP RST), so the sender's event socket emits `error`. */
+    resetEvents: () => { for (const socket of eventSockets) socket.resetAndDestroy(); },
     /** Decoded bplist bodies of the base and stream SETUP requests, in order. */
     setups: () => requests.filter(request => request.method === 'SETUP').map(request => parseBuffer(request.body)[0] as Record<string, unknown>),
     async close() {

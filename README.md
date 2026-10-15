@@ -474,24 +474,35 @@ On the same RTSP connection the sender runs HAP pair-verify (HTTP/1.1
 `/pair-verify` with `X-Apple-HKP: 3`, no CSeq), then encrypts all RTSP traffic with
 the `Control-Salt` keys. A binary-plist base SETUP (`timingProtocol: NTP`, the
 local timing port) returns `eventPort`; the sender connects the event channel with
-`Events-Salt` keys, answers each of its requests with `200 OK`, and retries a refused
-connect up to five times, one second apart. A second SETUP declares one realtime
-stream (`type: 0x60`, `ct: 1` PCM, `audioFormat: 0x800`, 352 frames per packet,
+`Events-Salt` keys, answers each of its requests with `200 OK`, and makes up to five
+connect attempts in total, one second apart, while the connection is refused. A second
+SETUP declares one realtime stream (`type: 0x60`, `ct: 1` PCM, `audioFormat: 0x800`, 352 frames per packet,
 44,100 Hz, latency 11,025..88,200, a random 32-byte `shk`, and
 `streamConnectionID` equal to the request-URI session id) and must return integer
 `dataPort` and `controlPort` values in 1..65535. There is no ANNOUNCE or Transport
 header. The `Session` header from that reply is used when present (validated like
 legacy); otherwise `Session: 0` is sent, as receivers of this profile may omit it.
-RECORD and FLUSH (with `RTP-Info`) follow. `POST /feedback` is sent at once and then
-every two seconds, best effort (failures are logged, at most one in flight); a
+RECORD and FLUSH (with `RTP-Info`) follow. `POST /feedback` is sent once FLUSH (and any
+initial volume/metadata) has been answered, then every two seconds, best effort (failures
+are logged, at most one in flight). The reference sends the first feedback right after
+RECORD without waiting for replies; this sender's RTSP requests are strictly serialized,
+so putting feedback first would hold RECORD for up to 5 s on a receiver that ignores it.
+The same serialization means an unanswered feedback request can delay `setVolume` or
+`setMetadata` by up to 5 s. RECORD carries `Range: npt=0-` and FLUSH does not, as in the
+legacy profile (the reference does the reverse; unverified which a receiver needs). A
 receiver-chosen `Audio-Latency` on RECORD is accepted while the fixed 66,150-frame
 send schedule is kept. Every audio packet is sealed with ChaCha20-Poly1305 using
 `shk`, a per-stream 64-bit counter nonce and the RTP timestamp and SSRC as AAD; the
 packet carries the 12-byte RTP header, ciphertext, tag and the counter's 8 bytes.
 Resends repeat the stored sealed packet. Sync, timing, volume, text metadata,
 cancellation and source handling are the same as legacy. Losing the event channel
-fails the stream. Teardown sends TEARDOWN, then closes the RTSP and event
-connections and zeroes `shk`.
+(close, error, or a request the responder cannot decrypt or parse) fails the stream;
+the reference instead logs per-message failures and ignores the channel closing, so
+this is stricter and unverified on hardware. Teardown sends TEARDOWN, then closes the
+RTSP and event connections and zeroes `shk`. Other key material is zeroed too: the
+pair-verify shared secret and the plaintext stream SETUP body (which carries `shk`) as
+soon as setup has used them, and the RTSP and event-channel session keys when their
+connections close (also on setup failure).
 
 ```typescript
 import { createReadStream } from 'node:fs';

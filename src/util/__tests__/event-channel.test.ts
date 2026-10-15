@@ -85,6 +85,60 @@ describe('openEventChannel', () => {
     expect(await failed).toBeInstanceOf(Error);
   });
 
+  it('rejects a request with an unknown protocol through onError without replying', async () => {
+    const cipher = await receiverCipher();
+    let replied!: () => void;
+    const reply = new Promise<string>(resolve => { replied = () => resolve('replied'); });
+    const server = createServer(socket => {
+      socket.on('error', () => {});
+      socket.on('data', replied);
+      socket.write(cipher.encrypt(Buffer.from('GET / FOO/9\r\nCSeq: 1\r\nContent-Length: 0\r\n\r\n')));
+    });
+    servers.push(server);
+    const port = await listen(server);
+    let socket!: Socket;
+    const failed = new Promise<Error>(resolve => {
+      void openEventChannel('127.0.0.1', port, secret, resolve).then(opened => { socket = opened; opened.on('error', () => {}); });
+    });
+    // A reply arriving first means the request was wrongly acknowledged.
+    const outcome = await Promise.race([failed, reply]);
+    const destroyed = socket.destroyed;
+    socket.destroy();
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe('Invalid event request');
+    expect(destroyed).toBe(true);
+  });
+
+  it('zeroes the event read and write keys once the channel closes', async () => {
+    const cipher = await receiverCipher();
+    const decrypt = vi.spyOn(HAPSession.prototype, 'decryptAvailable');
+    const server = createServer(socket => {
+      socket.on('error', () => {});
+      socket.resume().on('end', () => socket.destroy());
+      socket.write(cipher.encrypt(Buffer.from('POST /event RTSP/1.0\r\nCSeq: 1\r\nContent-Length: 0\r\n\r\n')));
+    });
+    servers.push(server);
+    const port = await listen(server);
+    const socket = await openEventChannel('127.0.0.1', port, secret, () => {});
+    while (!decrypt.mock.contexts.length) await new Promise(resolve => setImmediate(resolve));
+    const session = decrypt.mock.contexts[0] as unknown as { outKey: Buffer; inKey: Buffer };
+    expect(session.inKey.some(byte => byte !== 0)).toBe(true);
+    socket.destroy();
+    await new Promise(resolve => socket.once('close', resolve));
+    expect([...session.outKey, ...session.inKey].every(byte => byte === 0)).toBe(true);
+    decrypt.mockRestore();
+  });
+
+  it('rejects at once without connecting when the signal is already aborted', async () => {
+    let connections = 0;
+    const server = createServer(socket => { connections++; socket.destroy(); });
+    servers.push(server);
+    const port = await listen(server);
+    await expect(openEventChannel('127.0.0.1', port, secret, () => {}, AbortSignal.abort())).rejects.toThrow('Connection closed during setup');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(connections).toBe(0);
+  });
+
   it('leaves the connected socket to the caller when the signal aborts after connect', async () => {
     const server = createServer(socket => socket.on('error', () => {}));
     servers.push(server);

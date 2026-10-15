@@ -26,10 +26,17 @@ vi.mock('node:dgram', async importOriginal => {
   } };
 });
 
+// Capture the sender's shk Buffer (by reference) to check it is zeroed on teardown.
+const sealed = vi.hoisted(() => ({ key: undefined as Buffer | undefined, calls: 0 }));
+vi.mock('../packets.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../packets.js')>();
+  return { ...actual, sealAudioPacket: (packet: Buffer, key: Buffer, counter: bigint) => { sealed.key = key; sealed.calls++; return actual.sealAudioPacket(packet, key, counter); } };
+});
+
 const { RaopStream } = await import('../stream.js');
 const txt = { features: '0x4A7FDFD5,0x3C155FDE', flags: '0x244', md: '0,1,2' };
 const receivers: { close(): Promise<void> }[] = [];
-afterEach(async () => { controlledClock.now = undefined; vi.useRealTimers(); vi.restoreAllMocks(); for (const receiver of receivers.splice(0)) await receiver.close(); });
+afterEach(async () => { controlledClock.now = undefined; sealed.key = undefined; sealed.calls = 0; vi.useRealTimers(); vi.restoreAllMocks(); for (const receiver of receivers.splice(0)) await receiver.close(); });
 
 async function start(options: Parameters<typeof airplay2Receiver>[0] = {}) {
   const receiver = await airplay2Receiver(options); receivers.push(receiver);
@@ -71,7 +78,21 @@ describe('RaopStream AirPlay 2 realtime profile', () => {
     const flush = receiver.requests.find(request => request.method === 'FLUSH')!;
     expect(flush.headers['rtp-info']).toBe(`seq=${first.readUInt16BE(2)};rtptime=${first.readUInt32BE(4)}`);
     expect(receiver.requests.filter(request => request.method !== 'POST' || request.uri === '/feedback').every(request => request.encrypted)).toBe(true);
+    // streamConnectionID is the session id in the request URI (bplist-parser reads integers >= 2^31 as signed).
+    const uriSession = Number(receiver.requests.find(request => request.method === 'SETUP')!.uri.split('/').at(-1));
+    expect(((receiver.setups()[1].streams as Record<string, number>[])[0].streamConnectionID) >>> 0).toBe(uriSession);
+    // Teardown zeroed the sender's copy of shk: the receiver's copy no longer opens a fresh packet.
+    expect(sealed.calls).toBeGreaterThan(0);
+    expect(sealed.key!.every(byte => byte === 0)).toBe(true);
   }, 10000);
+
+  it('accepts a receiver-chosen Audio-Latency on RECORD', async () => {
+    const { receiver, stream } = await start({ recordLatency: '11025' });
+    controlledClock.now = 0; vi.spyOn(performance, 'now').mockImplementation(() => controlledClock.now!);
+    await stream.stream(Buffer.alloc(4), { credentials: receiver.credentials });
+    expect(receiver.requests.map(request => request.method)).toContain('FLUSH');
+    expect(receiver.audioPackets.length).toBeGreaterThan(0);
+  });
 
   it.each([
     ['no Session header', undefined, '0'],
@@ -91,7 +112,26 @@ describe('RaopStream AirPlay 2 realtime profile', () => {
     expect(receiver.requests.some(request => request.method === 'RECORD')).toBe(false);
   });
 
-  it('sends best-effort feedback every 2 seconds', async () => {
+  it('sends feedback at once and then every 2 seconds', async () => {
+    const { receiver, stream } = await start();
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const cancellation = new AbortController();
+    const settled = stream.stream(endless(), { credentials: receiver.credentials, signal: cancellation.signal }).catch(error => error);
+    const feedback = () => receiver.requests.filter(request => request.uri === '/feedback').length;
+    try {
+      await until(() => receiver.audioPackets.length > 0);
+      await until(() => feedback() === 1);
+      for (const expected of [2, 3]) {
+        await vi.advanceTimersByTimeAsync(1999); await delay(20);
+        expect(feedback()).toBe(expected - 1);
+        await vi.advanceTimersByTimeAsync(1);
+        await until(() => feedback() === expected);
+      }
+    } finally { cancellation.abort(); }
+    expect(await settled).toBeInstanceOf(Error);
+  });
+
+  it('keeps streaming when feedback goes unanswered', async () => {
     const { receiver, stream } = await start({ holdFeedback: true });
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
@@ -136,5 +176,13 @@ describe('RaopStream AirPlay 2 realtime profile', () => {
     await until(() => receiver.audioPackets.length > 0 && receiver.state.eventConnected);
     receiver.closeEvents();
     await expect(playing).rejects.toThrow(/event connection closed/);
+  });
+
+  it('fails the stream with the event socket error when the event channel is reset', async () => {
+    const { receiver, stream } = await start();
+    const playing = stream.stream(endless(), { credentials: receiver.credentials });
+    await until(() => receiver.audioPackets.length > 0 && receiver.state.eventConnected);
+    receiver.resetEvents();
+    await expect(playing).rejects.toThrow(/ECONNRESET/);
   });
 });
