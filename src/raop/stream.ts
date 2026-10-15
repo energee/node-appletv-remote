@@ -1,4 +1,7 @@
-/** One-shot legacy RAOP PCM streaming; supports legacy PIN verification but not HAP/AirPlay 2 audio. */
+/**
+ * One-shot legacy RAOP PCM streaming; supports legacy PIN verification but not HAP/AirPlay 2 audio.
+ * The RTSP control client can already switch to HAP-encrypted framing for the AirPlay 2 profile (#22).
+ */
 import { isIPv4, type Socket } from 'node:net';
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram';
 import { randomBytes, createPrivateKey, createPublicKey, diffieHellman, createHash, createCipheriv, sign } from 'node:crypto';
@@ -8,6 +11,7 @@ import { audioPacket, timingReply, syncPacket, PacketHistory, FRAMES_PER_PACKET,
 import { x25519PublicKeyFromRaw, X25519_PKCS8_PREFIX, ed25519PrivateKeyFromSeed } from '../util/crypto.js';
 import { connectSocket, parseHTTPMessage } from '../connection.js';
 import { encodeDmap } from '../dmap/codec.js';
+import type { HAPSession } from '../util/hap-session.js';
 
 /** Finite raw PCM chunks; streamed chunks are Buffers of at most 65,536 bytes. */
 export type RaopPcmSource = Buffer | AsyncIterable<Buffer>;
@@ -25,9 +29,20 @@ export interface RaopStreamOptions {
 }
 interface Response { headers: Record<string, string>; code: number; body: Buffer }
 
-/** Serialized legacy HTTP authentication and CSeq-correlated RTSP audio requests on one socket. */
-class RtspClient {
+/** HTTP/1.1 pairing endpoints sent without CSeq on the RTSP socket; everything else is CSeq-correlated RTSP/1.0. */
+const HTTP_PAIRING_URIS = new Set(['/pair-verify', '/pair-pin-start', '/pair-setup']);
+
+/**
+ * Serialized HTTP pairing and CSeq-correlated RTSP audio requests on one socket.
+ * After `encryptWith`, all traffic in both directions uses HAP-encrypted framing.
+ * Exported for tests only; not part of the public API (`src/index.ts`).
+ */
+export class RtspClient {
+  /** Plaintext received and not yet parsed. */
   private input = Buffer.alloc(0);
+  /** Ciphertext received and not yet forming a complete frame (only after `encryptWith`). */
+  private encrypted = Buffer.alloc(0);
+  private cipher?: HAPSession;
   /** Request URI; set by setLocalUri before the first request. */
   private uri = '';
   private cseq = 0;
@@ -41,8 +56,14 @@ class RtspClient {
     this.socket.on('error', error => { this.pending?.reject(error); onFailure(error); });
     this.socket.on('close', () => { const error = new Error('RAOP control connection closed'); this.pending?.reject(error); onFailure(error); });
     this.socket.on('data', (chunk: Buffer) => {
-      this.input = Buffer.concat([this.input, chunk]);
-      try { this.parse(); } catch (error) { this.pending?.reject(error as Error); onFailure(error as Error); this.socket.destroy(); }
+      try {
+        if (this.cipher) {
+          const { plaintext, rest } = this.cipher.decryptAvailable(Buffer.concat([this.encrypted, chunk]));
+          this.encrypted = Buffer.from(rest);
+          this.input = Buffer.concat([this.input, plaintext]);
+        } else this.input = Buffer.concat([this.input, chunk]);
+        this.parse();
+      } catch (error) { this.pending?.reject(error as Error); onFailure(error as Error); this.socket.destroy(); }
     });
   }
   /** Shared HTTP framing (64 KiB header and body caps); RTSP status, a single CSeq and CSeq correlation are checked here. */
@@ -62,12 +83,18 @@ class RtspClient {
       this.pending.resolve({ headers, code: Number(status[2]), body });
     }
   }
+  /**
+   * Encrypt every later write with `session` and decrypt every later read before HTTP parsing.
+   * Call it after the pair-verify (or transient pairing) response and before the next request.
+   * A frame that fails authentication fails the pending request and the client, and destroys the socket.
+   */
+  encryptWith(session: HAPSession): void { this.cipher = session; }
   setLocalUri(sessionId: number): void { this.uri = `rtsp://${this.socket.localAddress}/${sessionId}`; }
   request(method: string, headers: Record<string, string> = {}, body: Buffer = Buffer.alloc(0), signal?: AbortSignal, timeout = 5000, uri = this.uri, allowError = false): Promise<Response> {
     const request = this.queue.then(() => new Promise<Response>((resolve, reject) => {
       if (signal?.aborted) { reject(new Error('RAOP aborted')); return; }
       if (this.socket.destroyed) { reject(new Error('RAOP control connection closed')); return; }
-      const http = method === 'POST' && uri === '/pair-verify';
+      const http = method === 'POST' && HTTP_PAIRING_URIS.has(uri);
       const protocol = http ? 'HTTP/1.1' : 'RTSP/1.0';
       const sequence = http ? undefined : ++this.cseq;
       let settled = false;
@@ -93,7 +120,8 @@ class RtspClient {
         `CSeq: ${sequence}\r\nUser-Agent: AirPlay/550.10\r\nDACP-ID: ${this.senderId}\r\nClient-Instance: ${this.senderId}\r\nActive-Remote: ${this.activeRemote}\r\n`;
       const message = `${method} ${uri} ${protocol}\r\n${controlHeaders}${Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join('')}Content-Length: ${body.length}\r\n\r\n`;
       try {
-        this.socket.write(Buffer.concat([Buffer.from(message), body]), error => { if (error) finish(error); });
+        const wire = Buffer.concat([Buffer.from(message), body]);
+        this.socket.write(this.cipher ? this.cipher.encrypt(wire) : wire, error => { if (error) finish(error); });
       } catch (error) { finish(error as Error); }
     }));
     this.queue = request.catch(() => undefined);
