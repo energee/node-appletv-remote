@@ -9,8 +9,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Install from the committed lockfile; a fresh npm resolve broke when vitest peers were republished.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm install
-      - run: npm test
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
