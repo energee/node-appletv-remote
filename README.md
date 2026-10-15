@@ -726,7 +726,7 @@ src/
 ├── airplay-playback.ts # dedicated URL playback session
 ├── mrp/            # MRP message builders + generated schema.ts
 ├── proto/          # .proto sources (build input only)
-├── util/           # crypto, TLV, HTTP helpers
+├── util/           # crypto, TLV, HTTP, HAP framing, AirPlay 2 event channel
 └── cli/            # the `atv` command
 ```
 
