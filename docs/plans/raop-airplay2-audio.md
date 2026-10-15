@@ -336,15 +336,16 @@ upstream project name.
 - Depends on: 6 (same file; run after it, sequentially with 12).
 
 **14. CLI audio streaming integration**
-- Files: `src/cli/index.ts`, `src/__tests__/cli.test.ts`, `README.md` (CLI section).
-- Behavior: builds on the basic PCM stream command being added by the separate CLI track.
+- Files: `src/cli/index.ts`, `src/__tests__/cli-parity.test.ts`, `README.md` (CLI section).
+- Behavior: extends the existing `atv raop-stream` command (merged in #54; tests in
+  `src/__tests__/cli-parity.test.ts`).
   Inputs: `.pcm` as-is, `.wav` via task 8, anything else via `ffmpeg` child process (missing
   ffmpeg → error naming the WAV/PCM alternatives). Endpoint from task 9; HAP credentials from
   the existing device cache for `airplay2`; `--legacy-seed <file>` for legacy; `--volume`.
-- Test first: `src/__tests__/cli.test.ts` with mocked `child_process.spawn` and a mocked
+- Test first: `src/__tests__/cli-parity.test.ts` with mocked `child_process.spawn` and a mocked
   `RaopStream`: argument validation, ffmpeg argv, ffmpeg-missing message, exit code on stream
   failure, SIGINT aborts the stream.
-- Depends on: 6, 8, 9 and the CLI track's merged stream command.
+- Depends on: 6, 8, 9.
 
 **15. Move `airplay-playback.ts` onto the shared event-channel helper**
 - Files: `src/airplay-playback.ts`, `README.md` (if the retry is user-visible there).
@@ -385,7 +386,7 @@ upstream project name.
 | --- | --- |
 | 1, 2, 3, 4, 8, 9, 10 | 2 + 4 → 5 → 6 → 7 |
 | 11 after 10, independent of Phase 1 | 6 → 12 → 13 (same file; 12 and 13 may swap but not overlap) |
-| 15 any time after 4 once PR #43 merges | 6 + 8 + 9 + CLI track → 14 |
+| 15 any time after 4 once PR #43 merges | 6 + 8 + 9 → 14 |
 | | 9 + 11 + 12 + 13 → 16 |
 
 Tasks 2, 3, 6, 12 and 13 all edit `src/raop/stream.ts`; give them to one agent in order, or
@@ -421,8 +422,7 @@ land 2 and 3 before 6 starts.
   rejected (the reference would try AirPlay 1).
 - **Conflict with PR #43.** It rewrites `src/airplay-playback.ts`; task 15 waits for it and
   nothing else in this plan edits that file.
-- **CLI track coordination.** Task 14 depends on another branch's stream command; rebase on it
-  rather than adding a second command.
+- **CLI command.** Task 14 extends `atv raop-stream` (#54) rather than adding a second command.
 - **Legacy SRP vectors.** Must come from an independent implementation; self-generated
   vectors would only prove self-consistency. The K formula is already confirmed in
   `fast-srp-hap`; M1 compatibility is what task 10 checks.
