@@ -28,6 +28,8 @@ interface Response { headers: Record<string, string>; code: number; body: Buffer
 /** Serialized legacy HTTP authentication and CSeq-correlated RTSP audio requests on one socket. */
 class RtspClient {
   private input = Buffer.alloc(0);
+  /** Request URI; set by setLocalUri before the first request. */
+  private uri = '';
   private cseq = 0;
   private abandoned = new Set<number>();
   private readonly senderId = randomBytes(8).toString('hex').toUpperCase();
@@ -35,7 +37,7 @@ class RtspClient {
   private queue: Promise<unknown> = Promise.resolve();
   private pending?: { sequence?: number; protocol: 'HTTP/1.1' | 'RTSP/1.0'; resolve: (response: Response) => void; reject: (error: Error) => void };
   /** Takes ownership of a connected socket from `connectSocket`. */
-  constructor(readonly socket: Socket, private uri: string, onFailure: (error: Error) => void) {
+  constructor(readonly socket: Socket, onFailure: (error: Error) => void) {
     this.socket.on('error', error => { this.pending?.reject(error); onFailure(error); });
     this.socket.on('close', () => { const error = new Error('RAOP control connection closed'); this.pending?.reject(error); onFailure(error); });
     this.socket.on('data', (chunk: Buffer) => {
@@ -217,8 +219,7 @@ export class RaopStream {
       } else if (!Buffer.isBuffer(pcm)) iterator = pcm[Symbol.asyncIterator]();
       let payload = await readPacket();
       controller.signal.throwIfAborted();
-      const uri = `rtsp://${this.address}/${this.ssrc}`;
-      const client = new RtspClient(await connectSocket(this.address, this.port, 5000, controller.signal), uri, fail); this.client = client;
+      const client = new RtspClient(await connectSocket(this.address, this.port, 5000, controller.signal), fail); this.client = client;
       const bind = async () => {
         controller.signal.throwIfAborted();
         const socket = createSocket('udp4'); sockets.push(socket); socket.on('error', fail);
