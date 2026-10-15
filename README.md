@@ -317,8 +317,8 @@ The TCP route selects the local interface; all three UDP sockets bind only to
 that address. Timing requests are accepted only after SETUP validates the receiver
 address and timing port; requests before negotiation or from other ports are ignored.
 SETUP must return `server_port` and `control_port`; an omitted `timing_port` defaults
-to 0 as in pinned pyatv AirPlayV1, and timing requests are then accepted from any
-port at the receiver address.
+to 0 as in pinned pyatv AirPlayV1 (an explicit `timing_port=0` is treated the same), and
+timing requests are then accepted from any port at the receiver address.
 Playback uses monotonic deadlines, one-second RTP/NTP synchronization, NTP timing
 replies anchored to the same monotonic clock as sync (wall-clock changes do not
 step the session clock), and a bounded 1,000-packet retransmission cache. Requests are checked for

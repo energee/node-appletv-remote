@@ -131,6 +131,7 @@ async function receiver(mode = 'normal') {
           if (mode === 'wrong-transport') extra = extra.replace('RTP/AVP/UDP', 'RTP/AVP/TCP');
           if (mode === 'bad-port') extra = 'Session: test-session\r\nTransport: RTP/AVP/UDP;server_port=0;control_port=1\r\n';
           if (mode === 'no-timing-port') extra = extra.replace(/;timing_port=\d+/, '');
+          if (mode === 'zero-timing-port') extra = extra.replace(/;timing_port=\d+/, ';timing_port=0');
           localTiming = Number(/timing_port=(\d+)/.exec(headers.transport)![1]);
 
         }
@@ -204,6 +205,14 @@ describe('legacy RAOP streaming', () => {
     await waitForIo(() => peer.packets.length === 189 && peer.timingReplies.length > 0);
     expect(peer.timingReplies[0].subarray(8, 12).toString('hex')).toBe('12345678');
     expect(peer.requests.at(-1)!.method).toBe('TEARDOWN');
+  }, 5000);
+
+  it('accepts an explicit SETUP timing_port=0 like an omitted one', async () => {
+    const module = await load(); const peer = await receiver('zero-timing-port');
+    useControlledClock();
+    await new module.RaopStream('127.0.0.1', peer.port, txt).stream(Buffer.alloc(4));
+    await waitForIo(() => peer.packets.length === 189 && peer.timingReplies.length > 0);
+    expect(peer.timingReplies[0].subarray(8, 12).toString('hex')).toBe('12345678');
   }, 5000);
 
   it('binds the selected interface and pins timing peer without following wall-clock steps', async () => {
