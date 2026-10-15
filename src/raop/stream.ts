@@ -1,12 +1,12 @@
 /** One-shot legacy RAOP PCM streaming; supports legacy PIN verification but not HAP/AirPlay 2 audio. */
-import { createConnection, isIPv4, type Socket } from 'node:net';
+import { isIPv4, type Socket } from 'node:net';
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram';
 import { randomBytes, createPrivateKey, createPublicKey, diffieHellman, createHash, createCipheriv, sign } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { audioPacket, timingReply, syncPacket, PacketHistory, FRAMES_PER_PACKET, SAMPLE_RATE, PACKET_BYTES } from './packets.js';
 import { x25519PublicKeyFromRaw, X25519_PKCS8_PREFIX, ED25519_PKCS8_PREFIX } from '../util/crypto.js';
-import { parseHTTPMessage } from '../connection.js';
+import { connectSocket, parseHTTPMessage } from '../connection.js';
 
 /** Finite raw PCM chunks; streamed chunks are Buffers of at most 65,536 bytes. */
 export type RaopPcmSource = Buffer | AsyncIterable<Buffer>;
@@ -34,9 +34,9 @@ class RtspClient {
   private readonly activeRemote = randomBytes(4).readUInt32BE();
   private queue: Promise<unknown> = Promise.resolve();
   private pending?: { sequence?: number; protocol: 'HTTP/1.1' | 'RTSP/1.0'; resolve: (response: Response) => void; reject: (error: Error) => void };
-  constructor(host: string, port: number, private uri: string, onFailure: (error: Error) => void) {
-    this.socket = createConnection({ host, port });
-    this.socket.setNoDelay(true);
+  /** Takes ownership of a connected socket from `connectSocket`. */
+  constructor(socket: Socket, private uri: string, onFailure: (error: Error) => void) {
+    this.socket = socket;
     this.socket.on('error', error => { this.pending?.reject(error); onFailure(error); });
     this.socket.on('close', () => { const error = new Error('RAOP control connection closed'); this.pending?.reject(error); onFailure(error); });
     this.socket.on('data', (chunk: Buffer) => {
@@ -219,20 +219,7 @@ export class RaopStream {
       let payload = await readPacket();
       controller.signal.throwIfAborted();
       const uri = `rtsp://${this.address}/${this.ssrc}`;
-      const client = new RtspClient(this.address, this.port, uri, fail); this.client = client;
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => finish(new Error('RAOP connect timeout')), 5000);
-        const aborted = () => finish(new Error('RAOP aborted'));
-        const connected = () => finish();
-        const error = (error: Error) => finish(error);
-        const finish = (error?: Error) => {
-          clearTimeout(timer); controller.signal.removeEventListener('abort', aborted); client.socket.removeListener('connect', connected); client.socket.removeListener('error', errorHandler);
-          if (error) reject(error); else resolve();
-        };
-        const errorHandler = error;
-        controller.signal.addEventListener('abort', aborted, { once: true }); client.socket.once('connect', connected); client.socket.once('error', errorHandler);
-        if (controller.signal.aborted) aborted();
-      });
+      const client = new RtspClient(await connectSocket(this.address, this.port, 5000, controller.signal), uri, fail); this.client = client;
       const bind = async () => {
         controller.signal.throwIfAborted();
         const socket = createSocket('udp4'); sockets.push(socket); socket.on('error', fail);

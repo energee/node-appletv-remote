@@ -30,6 +30,13 @@ vi.mock('node:dgram', async importOriginal => {
   } };
 });
 
+// Spy on the shared TCP setup helper while keeping its real behavior.
+const connectSpy = vi.hoisted(() => ({ calls: [] as unknown[][] }));
+vi.mock('../../connection.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../connection.js')>();
+  return { ...actual, connectSocket: (...args: Parameters<typeof actual.connectSocket>) => { connectSpy.calls.push(args); return actual.connectSocket(...args); } };
+});
+
 /** Drive paced completion independently of host scheduling while retaining real socket I/O. */
 function useControlledClock(): void {
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
@@ -179,6 +186,15 @@ describe('legacy RAOP streaming', () => {
     expect(peer.timingReplies[0].subarray(8, 12).toString('hex')).toBe('12345678');
     expect(peer.resends[0].subarray(4)).toEqual(peer.packets[0]);
     expect(peer.requests.at(-1)!.headers.session).toBe('test-session');
+  }, 5000);
+
+  it('opens the RTSP control connection through the shared cancellable connectSocket helper', async () => {
+    const module = await load(); const peer = await receiver(); connectSpy.calls.length = 0;
+    useControlledClock();
+    await new module.RaopStream('127.0.0.1', peer.port, txt).stream(Buffer.alloc(4));
+    expect(connectSpy.calls).toHaveLength(1);
+    expect(connectSpy.calls[0].slice(0, 3)).toEqual(['127.0.0.1', peer.port, 5000]);
+    expect(connectSpy.calls[0][3]).toBeInstanceOf(AbortSignal);
   }, 5000);
 
   it('defaults a missing SETUP timing_port to 0 and answers receiver timing from any port', async () => {
