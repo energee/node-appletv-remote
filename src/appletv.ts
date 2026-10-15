@@ -14,7 +14,7 @@ import type { MRPConnection } from './mrp/connection.js';
 import { Credentials } from './credentials.js';
 import { MRPMessage, HID_KEY_MAP, MessageType, PLAYER_STATE_FIELDS } from './mrp/messages.js';
 import { NowPlayingInfo } from './now-playing-info.js';
-import { PlayerState } from './mrp/player-state.js';
+import { DEFAULT_PLAYER, PlayerState, carriesState } from './mrp/player-state.js';
 import { Command, SupportedCommand } from './supported-command.js';
 import { Message } from './message.js';
 import { CompanionConnection } from './companion/connection.js';
@@ -660,12 +660,10 @@ export class AppleTV extends EventEmitter {
       if (this.playerState.routingSelected) return this.nowPlaying;
       const state = response['.setStateMessage'] as Record<string, unknown> | undefined;
       const path = state?.playerPath as { client?: { bundleIdentifier?: string }; player?: { identifier?: string } } | undefined;
-      const replyHasState = state && (typeof state.playbackState === 'number' || state.playbackQueue !== undefined ||
-        (state.nowPlayingInfo && Object.keys(state.nowPlayingInfo).length > 0));
       const replyMatchesPlayer = this.nowPlaying.appBundleIdentifier === (path?.client?.bundleIdentifier ?? '') &&
-        this.nowPlaying.playerIdentifier === (path?.player?.identifier ?? 'MediaRemote-DefaultPlayer');
+        this.nowPlaying.playerIdentifier === (path?.player?.identifier ?? DEFAULT_PLAYER);
       // A real reply may establish legacy unrouted state; an empty/unrelated reply cannot validate an earlier push.
-      if (!(replyHasState && replyMatchesPlayer && this.playerState.hasSnapshot)) {
+      if (!(state && carriesState(state) && replyMatchesPlayer && this.playerState.hasSnapshot)) {
         throw new Error('No active-player state received');
       }
     }
