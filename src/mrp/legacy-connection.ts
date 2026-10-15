@@ -102,29 +102,32 @@ export class LegacyMRPConnection extends MRPConnection {
     };
   }
 
-  /** Start DeviceInfo and M1; retain M2 for the existing PairSetup.finish(pin) exchange. */
+  /** Start DeviceInfo and M1; keep one pairing identity and cache M2 for finish(pin). */
   async startPairing(): Promise<PairSetup> {
     if (this.connecting || this.socket) throw new Error('MRP already connected');
     this.connecting = true;
     const carrier = this.pairingTransport();
-    const setup = new PairSetup(this.host, this.port, carrier);
+    let m2: Buffer | undefined;
+    const cachedCarrier = {
+      post: (path: string, body: Buffer) => {
+        if (path === '/pair-setup' && m2) {
+          const response = m2;
+          m2 = undefined;
+          return Promise.resolve(response);
+        }
+        return carrier.post(path, body);
+      },
+      destroy: carrier.destroy,
+    };
+    const setup = new PairSetup(this.host, this.port, cachedCarrier);
     try {
       await this.open();
       const deviceInfo = await MRPMessage.deviceInfo({ uniqueIdentifier: randomUUID(), name: 'Node ATV Remote' });
       const response = this.waitForMRPMessage(MessageType.DeviceInfo);
       void this.sendMRPMessage(deviceInfo).catch(error => this.rejectMRPRequests(error));
       await response;
-      const m2 = await carrier.post('/pair-setup', setup.buildM1());
-      let first = true;
-      const cachedCarrier = {
-        post: (path: string, body: Buffer) => {
-          if (path === '/pair-setup' && first) { first = false; return Promise.resolve(m2); }
-          return carrier.post(path, body);
-        },
-        destroy: carrier.destroy,
-      };
-      // M1 carries no controller identity, so the finisher can own the long-term keypair.
-      return new PairSetup(this.host, this.port, cachedCarrier);
+      m2 = await carrier.post('/pair-setup', setup.buildM1());
+      return setup;
     } catch (error) {
       this.close();
       throw error;
