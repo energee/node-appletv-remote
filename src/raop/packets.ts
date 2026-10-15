@@ -24,9 +24,9 @@ function writeNtp(packet: Buffer, offset: number, milliseconds: number): void {
   packet.writeUInt32BE(Math.floor((milliseconds - seconds * 1000) / 1000 * 2 ** 32) >>> 0, offset + 4);
 }
 
-/** Reply only to complete RTP timing requests; echo the sender's transmit time. */
+/** Reply only to 32-byte RTP timing requests (any version byte, which is echoed); echo the sender's transmit time. */
 export function timingReply(request: Buffer, receivedMs: number, sentMs: number): Buffer | undefined {
-  if (request.length !== 32 || request[0] !== 0x80 || (request[1] & 0x7f) !== 0x52) return;
+  if (request.length !== 32 || (request[1] & 0x7f) !== 0x52) return;
   const reply = Buffer.alloc(32);
   reply[0] = request[0]; reply[1] = 0xd3; reply.writeUInt16BE(7, 2);
   request.copy(reply, 8, 24, 32);

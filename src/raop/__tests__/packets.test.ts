@@ -32,6 +32,12 @@ describe('RAOP packets', () => {
     expect(module!.timingReply(Buffer.alloc(32), 0, 0)).toBeUndefined();
   });
 
+  it('answers timing requests regardless of the version byte and echoes it', async () => {
+    const module = await load();
+    const request = Buffer.from('00d200010000000000000000000000000000000000000000123456789abcdef0', 'hex');
+    expect(module!.timingReply(request, 0, 500)?.subarray(0, 2).toString('hex')).toBe('00d3');
+  });
+
   it('encodes sync latency subtraction modulo 32 bits', async () => {
     const module = await load();
     expect(module?.syncPacket).toBeTypeOf('function');
