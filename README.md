@@ -438,9 +438,9 @@ one-shot API, not `AppleTV`/MRP playback. Two profiles are supported, chosen fro
 receiver's TXT record: **legacy** receivers accepting unencrypted PCM/L16 over IPv4
 UDP, with optional legacy PIN pair-verification, and **AirPlay 2 realtime** audio to
 HAP-paired receivers (current Apple TVs), described below.
-Hardware status: AirPlay 2 realtime audio is audible on an Apple TV 4K (details
-below); legacy receivers, legacy PIN pairing and RAOP discovery are verified only
-against loopback tests. HomePods and other receivers needing transient pairing,
+Hardware status: AirPlay 2 realtime audio is audible on an Apple TV 4K and an Apple TV
+HD (the HD run used RAOP discovery, `wavPcm` and text metadata too); legacy receivers
+and legacy PIN pairing are verified only against loopback tests. HomePods and other receivers needing transient pairing,
 AirPlay 2 buffered audio, RSA/FairPlay/MFi authentication, password digest auth,
 ALAC, transcoding, multiroom, live sources, artwork,
 and progress are excluded. `atv raop-stream` wraps this API
@@ -487,9 +487,9 @@ it; password and access-control bits still fail closed. `stream()` requires
 `credentials` on legacy receivers and `legacySeed` on AirPlay 2, all before taking
 ownership of the source.
 
-**AirPlay 2 realtime audio** (audible on an Apple TV 4K, AppleTV6,2, tvOS 26.6, with
-volume changes; text metadata, other receivers and the details marked unverified below
-are untested on hardware). Pass the HAP `Credentials` that `PairSetup` (or `atv pair`) produced for
+**AirPlay 2 realtime audio** (audible on an Apple TV 4K, AppleTV6,2, and an Apple TV HD,
+AppleTV5,3, both tvOS 26.6, with volume changes; text metadata shown on the Apple TV HD;
+other receivers and the details marked unverified below are untested on hardware). Pass the HAP `Credentials` that `PairSetup` (or `atv pair`) produced for
 the receiver:
 
 ```typescript
@@ -821,7 +821,7 @@ connect. Typeless messages that carry our identifier are usually replies to our 
 
 Checked on an Apple TV 4K (AppleTV6,2) and an Apple TV HD (AppleTV5,3), both tvOS 26.6, in #30.
 
-**Verified:** button tap/double-tap/hold; touch swipes, and finger release when a swipe is cancelled; Companion apps, accounts and power; app launch by URL; media commands; IPv6 (global, ULA and link-local) for MRP and Companion; output add/remove through a receiver's `psi`; volume capability reporting (#39); MRP message types 104/105 (#40); AirPlay 2 realtime PCM audio and `setVolume` through `RaopStream` on the Apple TV 4K (#22 phase 1).
+**Verified:** button tap/double-tap/hold; touch swipes, and finger release when a swipe is cancelled; Companion apps, accounts and power; app launch by URL; media commands; IPv6 (global, ULA and link-local) for MRP and Companion; output add/remove through a receiver's `psi`; volume capability reporting (#39); MRP message types 104/105 (#40); AirPlay 2 realtime PCM audio and `setVolume` through `RaopStream` on the Apple TV 4K (#22 phase 1); on the Apple TV HD, the full #22 phase 2 library path (`scan()` RAOP fields → `wavPcm` → `RaopStream` with stored HAP credentials): audible tone, `setVolume`, text metadata shown on screen, and a clean return to idle after TEARDOWN.
 An Apple TV closes the AirPlay 2 event channel while handling TEARDOWN, so the TEARDOWN reply is not read; teardown is best effort and the stream still completes.
 
 **Not verified** (protocol- or fixture-tested only; reports from real devices welcome):
@@ -830,8 +830,8 @@ An Apple TV closes the AirPlay 2 event channel while handling TEARDOWN, so the T
 - Reading absolute volume. Neither test setup offers it (#39).
 - Companion-only devices, legacy Apple TV 2/3 (DMAP) and standalone MRP on tvOS < 15. No such devices were available.
 - Text entry and text-focus events. They need someone watching the screen.
-- Legacy RAOP audio streaming. No legacy RAOP receiver was available.
-- AirPlay 2 text metadata on screen, HomePods and the Apple TV HD (#22).
+- Legacy RAOP audio streaming and legacy PIN pairing (`LegacyPairSetup`, H3). No legacy RAOP receiver was available; Apple TVs use HAP pairing instead.
+- HomePods (transient pairing) and AirPlay 2 text metadata on the Apple TV 4K (#22).
 
 ## How it works
 
