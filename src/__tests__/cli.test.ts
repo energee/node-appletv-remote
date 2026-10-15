@@ -64,6 +64,14 @@ describe('CLI operations', () => {
     expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('Absent'));
     expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
   });
+  it.each([['state', 'getNowPlaying', new NowPlayingInfo({ hasPlayback: false }, {}), 'Requesting state...'],
+    ['queue', 'requestPlaybackQueue', {}, 'Requesting playback queue...'], ['artwork', 'requestArtwork', null, 'Requesting artwork...']] as const)(
+    'prints %s progress to stderr, keeping stdout for results', async (cmd, method, result, progress) => {
+      vi.spyOn(AppleTV.prototype, method).mockResolvedValue(result as never);
+      await run([cmd]);
+      expect(console.error).toHaveBeenCalledWith(progress);
+      expect(console.log).not.toHaveBeenCalledWith(progress);
+    });
   it.each([
     [['stop'], 'stop', []], [['seek', '12.5'], 'setPosition', [12.5]],
     [['skip-forward', '10'], 'skipForward', [10]], [['skip-backward', '3'], 'skipBackward', [3]],

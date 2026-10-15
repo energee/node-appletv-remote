@@ -258,7 +258,7 @@ async function cmdRemote(deviceId?: string) {
 async function cmdState(deviceId?: string) {
   const atv = await connectToDevice(deviceId);
   try {
-    console.log('Requesting state...');
+    console.error('Requesting state...');
     const info = await atv.getNowPlaying();
     console.log(info.hasPlayback ? info.toString() : `Nothing playing. [${info.playbackState === PlaybackState.Stopped ? 'Stopped' : 'Absent'}]`);
   } finally {
@@ -270,7 +270,7 @@ async function cmdState(deviceId?: string) {
 async function cmdQueue(deviceId?: string) {
   const atv = await connectToDevice(deviceId);
   try {
-    console.log('Requesting playback queue...');
+    console.error('Requesting playback queue...');
     const response = await atv.requestPlaybackQueue({
       location: 0,
       length: 20,
@@ -295,7 +295,7 @@ async function cmdQueue(deviceId?: string) {
 async function cmdArtwork(deviceId?: string, outputFile?: string) {
   const atv = await connectToDevice(deviceId);
   try {
-    console.log('Requesting artwork...');
+    console.error('Requesting artwork...');
     const artwork = await atv.requestArtwork(600, 600);
     if (artwork) {
       const filename = outputFile ?? 'artwork.jpg';
