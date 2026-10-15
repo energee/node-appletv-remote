@@ -11,13 +11,9 @@ import type { HAPCredentials } from './auth/types.js';
 import { HAPSession } from './util/hap-session.js';
 import { hkdfSha512 } from './util/crypto.js';
 
-/** Control/status/event messages are bounded, not media payloads. */
+/** Control/status/event messages are bounded, not media payloads (passed as parseHTTPMessage's body cap). */
 const MAX_REPLY_BYTES = 1024 * 1024;
 
-/** Parse a receiver message with the shared framing checks and a 1 MiB body cap. */
-function parsePlaybackMessage(buffer: Buffer): ParsedHTTP | null {
-  return parseHTTPMessage(buffer, MAX_REPLY_BYTES);
-}
 
 /** bplist-creator exposes Real at runtime, but its bundled declaration omits it. */
 const PlistReal = (bplistCreator as typeof bplistCreator & { Real: new (value: number) => object }).Real;
@@ -105,7 +101,7 @@ export class AirPlayPlaybackSession {
           const decoded = eventCipher.decryptAvailable(encrypted); encrypted = Buffer.from(decoded.rest);
           plain = Buffer.concat([plain, decoded.plaintext]);
           let message: ParsedHTTP | null;
-          while ((message = parsePlaybackMessage(plain))) {
+          while ((message = parseHTTPMessage(plain, MAX_REPLY_BYTES))) {
             plain = Buffer.from(plain.subarray(message.totalSize));
             const protocol = message.startLine.split(' ')[2];
             if (!['RTSP/1.0', 'HTTP/1.1'].includes(protocol)) throw new Error('Invalid event request');
@@ -223,7 +219,7 @@ export class AirPlayPlaybackSession {
         this.plain = Buffer.concat([this.plain, decoded.plaintext]);
       } else this.plain = Buffer.concat([this.plain, data]);
       let reply: ParsedHTTP | null;
-      while ((reply = parsePlaybackMessage(this.plain))) { this.plain = Buffer.from(this.plain.subarray(reply.totalSize)); this.pending?.resolve(reply); }
+      while ((reply = parseHTTPMessage(this.plain, MAX_REPLY_BYTES))) { this.plain = Buffer.from(this.plain.subarray(reply.totalSize)); this.pending?.resolve(reply); }
     } catch (error) { this.fail(error as Error); }
   }
 }

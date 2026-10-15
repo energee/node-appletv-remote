@@ -279,11 +279,10 @@ describe('review regression guards', () => {
   it('close does not wait on or rethrow a hung touch startup', async () => {
     const atv = device(); mrp(atv); const { conn } = companion(atv);
     conn.sendRequest.mockImplementation(() => new Promise(() => {}));
-    const start = atv.touchAction(1, 1, 1).catch(error => error);
+    void atv.touchAction(1, 1, 1).catch(() => {});
     await new Promise(resolve => setImmediate(resolve));
     await expect(atv.close()).resolves.toBeUndefined();
     expect(conn.close).toHaveBeenCalledOnce();
-    void start;
   });
   it('stopTouch does not rethrow a failed touch startup that rolled back', async () => {
     const atv = device(); const { conn } = companion(atv);
