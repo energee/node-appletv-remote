@@ -304,8 +304,10 @@ about 1.42 MB; RTSP headers and bodies each have a 64 KiB cap. Replies use the
 shared `parseHTTPMessage` framing (duplicate Content-Length and any Transfer-Encoding
 are rejected); the status line and a single matching CSeq are validated locally. Producer/Readable
 internal buffering is additional and remains the producer's responsibility. Slow sources
-that fall more than 100 ms behind after playback starts fail the same stall guard
-as delayed event loops; this is not a live-source jitter buffer. Samples become
+or delayed event loops that fall more than 100 ms behind after playback starts are
+resynchronized: pacing re-anchors to the current time and a fresh sync packet is sent,
+so the lost time is skipped rather than flooded or aborted. This is not a live-source
+jitter buffer; the receiver may hear a gap. Samples become
 big-endian L16 on the wire, in 352-frame packets; the last packet is zero-padded. The sender
 negotiates ANNOUNCE/SETUP/RECORD/FLUSH, requires UDP unicast receiver ports, and
 uses the pinned upstream 66,150-frame latency (1.5 seconds). Other returned
@@ -324,7 +326,7 @@ length/type and retransmissions are restricted to the negotiated control peer,
 with at most 100 packets per request and per second. Optional timing/resend send
 errors do not terminate audio. Abandoned RTSP replies are discarded so cancellation
 can finish teardown.
-Long event-loop stalls fail rather than flooding a receiver. A paced silence tail
+Long event-loop or source stalls re-anchor pacing rather than flooding a receiver. A paced silence tail
 keeps sync alive until buffered audio drains. `stream()` resolves after the tail
 and bounded best-effort TEARDOWN; failures/cancellation reject and close all sockets,
 timers and history. An instance cannot be reused. A supplied signal must be an
