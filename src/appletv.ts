@@ -318,27 +318,24 @@ export class AppleTV extends EventEmitter {
    */
   async close(): Promise<void> {
     this.gestureController?.abort();
-    try {
-      if (!this.touchStarting) await this.stopTouch().catch(() => {});
-    } finally {
-      const companion = this.companionConnection;
-      const connection = this.connection;
-      // Invalidate forwarding before low-level close emits synchronous lifecycle events.
-      this.companionConnection = undefined;
-      this.connection = undefined;
-      this.companionErrorSource = undefined;
-      this.airPlayErrorSource = undefined;
-      this.touchSession = undefined;
-      this.activeTouch = undefined;
-      this.pendingRouting?.reject(new Error('Connection closed'));
-      companion?.close();
-      connection?.close();
-      this.reportedOutputs = [];
-      this.reportedLeader = undefined;
-      this.resetRuntimeState();
-      if (companion && this.readyTransports.has(companion)) this.emit('companionClose');
-      if (connection && this.readyTransports.has(connection)) this.emit('close');
-    }
+    if (!this.touchStarting) await this.stopTouch().catch(() => {});
+    const companion = this.companionConnection;
+    const connection = this.connection;
+    // Invalidate forwarding before low-level close emits synchronous lifecycle events.
+    this.companionConnection = undefined;
+    this.connection = undefined;
+    this.companionErrorSource = undefined;
+    this.airPlayErrorSource = undefined;
+    this.touchSession = undefined;
+    this.activeTouch = undefined;
+    this.pendingRouting?.reject(new Error('Connection closed'));
+    companion?.close();
+    connection?.close();
+    this.reportedOutputs = [];
+    this.reportedLeader = undefined;
+    this.resetRuntimeState();
+    if (companion && this.readyTransports.has(companion)) this.emit('companionClose');
+    if (connection && this.readyTransports.has(connection)) this.emit('close');
   }
 
   // --- Companion protocol ---
@@ -564,7 +561,7 @@ export class AppleTV extends EventEmitter {
 
   /** Track DeviceInfo selected groups; reject UUID-correlated envelope errors regardless of discriminator. */
   private handleOutputMessage(msg: Record<string, unknown>): void {
-    if (this.pendingRouting && msg.identifier !== undefined && msg.identifier === this.pendingRouting.identifier && msg.errorCode) {
+    if (this.pendingRouting && msg.identifier === this.pendingRouting.identifier && msg.errorCode) {
       this.pendingRouting.reject(new Error(`Output routing rejected: ${msg.errorDescription ?? msg.errorCode}`));
       return;
     }
