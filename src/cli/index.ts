@@ -16,7 +16,7 @@ import { pathToFileURL } from 'node:url';
 import { withCachedDevice } from './device-cache.js';
 import { createInterface } from 'node:readline';
 import type { Message } from '../message.js';
-import type { KeyboardInfo, TextInputEvent, CompanionEvent, App, UserAccount, PowerState } from '../appletv.js';
+import type { KeyboardInfo, TextInputEvent, CompanionEvent, App, UserAccount } from '../appletv.js';
 
 /** Where paired credentials are stored (falls back to the current directory if HOME is unset). */
 const CREDS_FILE = join(process.env.HOME ?? '.', '.atv-credentials.json');
@@ -489,7 +489,7 @@ export async function main(argv: string[]): Promise<void> {
   if (!cmd || ['help', '--help', '-h'].includes(cmd)) { help(); return; }
   let companion = false;
   let device: string | undefined;
-  let operation: (atv: AppleTV) => Promise<void | PowerState | App[] | UserAccount[]>;
+  let operation: (atv: AppleTV) => Promise<void | string | App[] | UserAccount[]>;
   switch (cmd) {
     case 'command': case 'cmd':
       argumentsFor(args, 1, 'command <key> [device]');
@@ -518,6 +518,7 @@ export async function main(argv: string[]): Promise<void> {
     }
     case 'text': {
       const [action, ...values] = args;
+      companion = true; // modern tvOS ignores the MRP TextInputMessage; text uses Companion RTI
       if (action === 'clear') {
         argumentsFor(values, 0, 'text clear [device]');
         device = values[0]; operation = (atv) => atv.clearText();

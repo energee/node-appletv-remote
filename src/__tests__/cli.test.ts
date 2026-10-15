@@ -81,8 +81,7 @@ describe('CLI operations', () => {
     [['stop'], 'stop', []], [['seek', '12.5'], 'setPosition', [12.5]],
     [['skip-forward', '10'], 'skipForward', [10]], [['skip-backward', '3'], 'skipBackward', [3]],
     [['shuffle', 'albums'], 'setShuffle', [ShuffleState.Albums]], [['repeat', 'track'], 'setRepeat', [RepeatState.Track]],
-    [['volume', '0'], 'setVolume', [0]], [['text', 'set', ''], 'setText', ['']],
-    [['text', 'append', 'hello world'], 'insertText', ['hello world']], [['text', 'clear'], 'clearText', []],
+    [['volume', '0'], 'setVolume', [0]],
   ] as const)('dispatches %j over MRP', async (args, method, values) => {
     const call = vi.spyOn(AppleTV.prototype, method).mockResolvedValue(undefined);
     await run([...args, 'device']);
@@ -97,8 +96,10 @@ describe('CLI operations', () => {
     [['power'], 'fetchPowerState', []], [['command', 'channel_up'], 'channelUp', []],
     [['cmd', 'channel_down'], 'channelDown', []], [['command', 'screensaver'], 'screensaver', []],
     [['command', 'guide'], 'guide', []], [['command', 'page_up'], 'pageUp', []], [['command', 'page_down'], 'pageDown', []],
+    // Modern tvOS ignores the MRP TextInputMessage; text input uses Companion RTI.
+    [['text', 'set', ''], 'setText', ['']], [['text', 'append', 'hello world'], 'insertText', ['hello world']], [['text', 'clear'], 'clearText', []],
   ] as const)('dispatches %j over Companion only', async (args, method, values) => {
-    const result = method === 'appList' ? [{ name: 'App', bundleId: 'com.example.app' }] : method === 'accountList' ? [{ name: 'User', id: 'user-id' }] : method === 'fetchPowerState' ? 'on' : undefined;
+    const result = method === 'appList' ? [{ name: 'App', bundleId: 'com.example.app' }] : method === 'accountList' ? [{ name: 'User', id: 'user-id' }] : method === 'fetchPowerState' ? 'on' : method === 'insertText' ? 'hello world' : undefined;
     const call = vi.spyOn(AppleTV.prototype, method).mockResolvedValue(result as never);
     await run([...args, 'device']);
     expect(call).toHaveBeenCalledWith(...values);
@@ -108,6 +109,7 @@ describe('CLI operations', () => {
     if (method === 'appList') expect(console.log).toHaveBeenCalledWith('com.example.app\tApp');
     if (method === 'accountList') expect(console.log).toHaveBeenCalledWith('user-id\tUser');
     if (method === 'fetchPowerState') expect(console.log).toHaveBeenCalledWith('on');
+    if (method === 'insertText') expect(console.log).toHaveBeenCalledWith('hello world');
   });
   it.each([
     ['text', 'append'], ['seek', ''], ['seek', ' '], ['volume', '-1'], ['volume', '1e2'], ['shuffle', '__proto__'], ['repeat', 'constructor'], ['artwork', 'a', 'b', 'c'], ['scan', 'extra'], ['stop', ''], ['text', 'set', 'hi', ' '], ['seek'], ['seek', '-1'], ['seek', 'NaN'], ['seek', 'Infinity'], ['seek', '12junk'],

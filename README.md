@@ -25,18 +25,18 @@ atv messages [deviceId]           # stream raw MRP messages until Ctrl+C
 atv keyboard [deviceId]           # stream keyboard/text events
 atv --help                       # complete syntax and available keys
 
-# AirPlay/MRP playback and text
+# AirPlay/MRP playback
 atv stop [deviceId]
 atv seek 120.5 [deviceId]          # absolute position in seconds (>= 0)
 atv skip-forward 30 [deviceId]    # positive seconds; skip-backward also supported
 atv shuffle songs [deviceId]      # off, albums, songs
 atv repeat all [deviceId]         # off, track, all
 atv volume 40 [deviceId]          # absolute volume, 0..100
-atv text set "search words" [deviceId]
-atv text append " more" [deviceId]
-atv text clear [deviceId]
 
 # Companion only (requires atv companion-pair)
+atv text set "search words" [deviceId]  # prints the new text; fails if no field is focused
+atv text append " more" [deviceId]
+atv text clear [deviceId]
 atv app list [deviceId]           # tab-separated bundle ID and name
 atv app launch com.netflix.Netflix [deviceId] # bundle ID or URL / URL scheme
 atv account list [deviceId]       # tab-separated account ID and name
@@ -47,7 +47,7 @@ atv command guide [deviceId]      # extra Companion button
 
 Credentials are saved to `~/.atv-credentials.json`. Leave out `deviceId` to use the most recently paired device. An explicit selector matches a paired device ID case-insensitively; blank or unmatched selectors fail instead of silently selecting the last device. Each device's last working address is cached in `~/.atv-devices.json`, so commands skip the network scan. If the TV has moved, the CLI rescans automatically.
 
-Playback/text commands open only AirPlay/MRP; app/account/power commands and extra buttons open only Companion. `command` (alias `cmd`) still accepts `skip_forward` / `skip_backward` for the app's default interval; use the hyphenated commands to specify seconds. Extra Companion buttons are `channel_up`, `channel_down`, `screensaver`, `guide`, `page_up`, and `page_down` (not available in the MRP-only interactive remote).
+Playback commands open only AirPlay/MRP; text/app/account/power commands and extra buttons open only Companion. `command` (alias `cmd`) still accepts `skip_forward` / `skip_backward` for the app's default interval; use the hyphenated commands to specify seconds. Extra Companion buttons are `channel_up`, `channel_down`, `screensaver`, `guide`, `page_up`, and `page_down` (not available in the MRP-only interactive remote).
 
 Numeric values must be finite decimal numbers in the documented range. Required IDs must be nonblank. Quote text to preserve spaces; `atv text set ""` explicitly sets empty text. Invalid arguments fail before reading credentials, discovery, or connection. For one-shot commands, operation and connection failures print an error to stderr and exit nonzero; one-shot operations close their connection even on failure. Absolute volume can fail if the TV does not report its output device. These commands depend on device/app support and do not bypass pairing. Extra positional arguments are rejected instead of ignored. Progress (including `Requesting ...` lines from state, queue and artwork) goes to stderr so results remain clean on stdout. Empty scans and pairing cancellation/no-device selections retain their existing successful exit behavior.
 
@@ -495,7 +495,15 @@ await atv.fetchPowerState();                 // PowerState.On / Off / Unknown
 atv.subscribePowerState();                   // then listen for 'powerState'
 
 await atv.guide();  // also channelUp, channelDown, pageUp, pageDown, screensaver
+
+// Text input into the focused field; each resolves with the field's resulting text
+await atv.setText('apple tv');               // 'apple tv'
+await atv.insertText(' remote');             // 'apple tv remote'
+await atv.getText();                         // read without editing
+await atv.clearText();                       // ''
 ```
+
+Text input uses Companion RTI, following pyatv's `CompanionKeyboard`: restart the text session (`_tiStop`/`_tiStart`), read the session UUID and current text from the reply, then send `_tiC` edits. A real Apple TV 4K ignored the older MRP `TextInputMessage`, so text input now needs `connectCompanion()`, and it rejects with `No text field is focused` instead of silently succeeding. `deleteText()` still sends the MRP Delete action.
 
 `connectCompanion()` sends pyatv's `_systemInfo` after pair-verify. Without it, a real Apple TV 4K answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on an Apple TV 4K (tvOS, AppleTV6,2).
 
