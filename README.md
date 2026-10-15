@@ -184,7 +184,8 @@ Reference: pyatv [v0.18.0, commit d88abc960e188d3cd2498d19117e75d7711d8600](http
 `player_state.py` merges field-present SetState updates and selects clients/players.
 `protocol.py:MrpProtocol.start` awaits ClientUpdatesConfig and GetKeyboardSession
 replies, while this library only sends them. pyatv correlates application replies
-by UUID; this library additionally requires the expected type. These are source
+by UUID; this library does too for media commands and the legacy heartbeat, and additionally
+requires the SetState type for queue requests. These are source
 differences, not proof of which causes #10. The handshake and strict correlation
 are unchanged pending device evidence.
 

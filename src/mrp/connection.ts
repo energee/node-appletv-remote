@@ -106,7 +106,7 @@ export abstract class MRPConnection extends EventEmitter {
   }
 
   /**
-   * Decode an MRP protobuf, emit it as `mrp-message`, and match request UUID plus type.
+   * Decode an MRP protobuf, emit it as `mrp-message`, and resolve the first waiter whose identifier and type (each only if set) match.
    * Separate handshake waiters accept unsolicited messages of their expected type. Stale session decodes are discarded; only decode errors are logged, while listener exceptions propagate.
    */
   protected async handleMRPResponse(protobufData: Buffer): Promise<void> {
