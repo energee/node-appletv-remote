@@ -734,15 +734,15 @@ export class AppleTV extends EventEmitter {
   private async sendMediaCommand(command: number, options?: Record<string, unknown>): Promise<void> {
     const conn = this.requireConnection();
     const msg = await MRPMessage.sendMediaCommand(command, options);
-    const response = await conn.sendMRPMessageAndWait(msg, MessageType.SendCommandResult);
+    // pyatv send_and_receive matches the reply by identifier only, not by message type.
+    const response = await conn.sendMRPMessageAndWait(msg, undefined);
     if (typeof response.errorCode === 'number' && response.errorCode !== 0) {
       throw new Error(`Media command ${command} rejected: errorCode=${response.errorCode} ${response.errorDescription ?? ''}`);
     }
     const result = response['.sendCommandResultMessage'] as Record<string, unknown> | undefined;
-    // pyatv checks only sendError; an omitted proto2 field is its default (NoError).
-    if (!result) throw new Error('Malformed media-command acknowledgment');
-    const sendError = result.sendError ?? 0;
-    const status = result.handlerReturnStatus ?? 0;
+    // pyatv checks only sendError; an absent result extension or omitted proto2 field means NoError.
+    const sendError = result?.sendError ?? 0;
+    const status = result?.handlerReturnStatus ?? 0;
     if (sendError !== 0) throw new Error(`Media command ${command} rejected: sendError=${sendError}, handlerReturnStatus=${status}`);
   }
 

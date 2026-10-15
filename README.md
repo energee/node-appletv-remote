@@ -116,10 +116,11 @@ await atv.close();
 ### Media results, state and runtime availability
 
 `play`, `pause`, `stop`, `next`, `previous`, seek, shuffle, repeat and skip commands
-wait for `SendCommandResult` (5 s timeout). Nonzero `sendError` rejects with both numeric codes; handler status is diagnostic
+wait for the reply carrying the request's identifier (5 s timeout; matched by identifier only, like pyatv).
+Nonzero `sendError` rejects with both numeric codes; handler status is diagnostic
 context, not an independent rejection gate (matching pinned pyatv). Explicit
-nonzero envelope `errorCode` also rejects; missing result status rejects
-as malformed. HID keys (including `playPause`) only report successful writes, not
+nonzero envelope `errorCode` also rejects; an absent `sendError` or an absent
+`SendCommandResult` extension both count as success (pyatv NoError). HID keys (including `playPause`) only report successful writes, not
 device acknowledgments. Correct concurrent result matching depends on the MRP
 transport's request correlation.
 
@@ -278,7 +279,8 @@ await atv.guide();  // also channelUp, channelDown, pageUp, pageDown, screensave
 
 Root test commands exclude nested worktrees, dependency directories and generated `dist` copies.
 
-MRP requests match the outgoing message UUID and expected response type, so concurrent
+MRP requests match the outgoing message UUID and, when one is given, the expected response type
+(media commands match by UUID only), so concurrent
 same-type replies can arrive out of order. Unsolicited updates remain visible as events;
 the DeviceInfo handshake separately accepts a type-based, identifierless response.
 HTTP/RTSP setup replies have a fixed 5-second timeout; MRP replies default to 5 seconds. RTSP replies match

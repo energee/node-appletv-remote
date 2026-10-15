@@ -24,19 +24,21 @@ describe('media acknowledgments', () => {
       sendMRPMessage: async () => {},
       sendMRPMessageAndWait: async (bytes: Buffer, type: number) => {
         expect((await MRPMessage.decode(bytes)).type).toBe(1);
-        expect(type).toBe(2);
+        // pyatv send_and_receive matches by identifier only.
+        expect(type).toBeUndefined();
         return { type: 2, '.sendCommandResultMessage': { sendError, handlerReturnStatus: 0 } };
       },
     };
     if (sendError === 0) await expect(atv.play()).resolves.toBeUndefined();
     else await expect(atv.play()).rejects.toThrow(`sendError=${sendError}`);
   });
-  it('uses sendError rejection with handler diagnostics and rejects a missing result extension', async () => {
+  it('uses sendError rejection with handler diagnostics and accepts a missing result extension', async () => {
     const atv = device();
     (atv as any).connection = { sendMRPMessage: async () => {}, sendMRPMessageAndWait: async () => ({ '.sendCommandResultMessage': { handlerReturnStatus: 2, sendError: 8 } }) };
     await expect(atv.pause()).rejects.toThrow('handlerReturnStatus=2');
+    // pyatv: no inner SendCommandResultMessage means sendError NoError.
     (atv as any).connection = { sendMRPMessage: async () => {}, sendMRPMessageAndWait: async () => ({ type: 2 }) };
-    await expect(atv.pause()).rejects.toThrow('Malformed');
+    await expect(atv.pause()).resolves.toBeUndefined();
   });
   it('accepts a decoded acknowledgment whose status fields are omitted (pyatv: absent sendError is NoError)', async () => {
     const atv = device();
