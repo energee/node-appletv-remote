@@ -12,7 +12,8 @@ export function audioPacket(pcm: Buffer, sequence: number, timestamp: number, ss
   packet.writeUInt16BE(sequence & 0xffff, 2);
   packet.writeUInt32BE(timestamp >>> 0, 4);
   packet.writeUInt32BE(ssrc >>> 0, 8);
-  for (let offset = 0; offset < pcm.length; offset += 2) packet.writeInt16BE(pcm.readInt16LE(offset), 12 + offset);
+  pcm.copy(packet, 12);
+  packet.subarray(12, 12 + pcm.length).swap16();
   return packet;
 }
 

@@ -347,16 +347,16 @@ export class RaopStream {
         firstSync = false;
       };
       sync(); syncTimer = setInterval(sync, 1000);
-      let tail = Math.ceil(66150 / FRAMES_PER_PACKET); let first = true;
+      let tail = Math.ceil(66150 / FRAMES_PER_PACKET);
       while (payload || tail > 0) {
         const wait = start + sentFrames / SAMPLE_RATE * 1000 - performance.now();
         if (wait > 0) await delay(wait, undefined, { signal: controller.signal });
         controller.signal.throwIfAborted();
         // Fail rather than flood a receiver after a long event-loop stall.
         if (performance.now() - (start + sentFrames / SAMPLE_RATE * 1000) > 100) throw new Error('RAOP sender cannot keep pace');
-        const packet = audioPacket(payload ?? Buffer.alloc(0), this.sequence, this.timestamp, this.ssrc, first);
+        const packet = audioPacket(payload ?? Buffer.alloc(0), this.sequence, this.timestamp, this.ssrc, sentFrames === 0);
         await new Promise<void>((resolve, reject) => audio.send(packet, serverPort, this.address, error => error ? reject(error) : resolve()));
-        history.add(packet); this.sequence = (this.sequence + 1) & 0xffff; this.timestamp = (this.timestamp + FRAMES_PER_PACKET) >>> 0; sentFrames += FRAMES_PER_PACKET; first = false;
+        history.add(packet); this.sequence = (this.sequence + 1) & 0xffff; this.timestamp = (this.timestamp + FRAMES_PER_PACKET) >>> 0; sentFrames += FRAMES_PER_PACKET;
         if (payload) payload = await readPacket(); else tail--;
       }
       await delay(Math.max(0, start + sentFrames / SAMPLE_RATE * 1000 - performance.now()), undefined, { signal: controller.signal });
