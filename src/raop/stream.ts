@@ -306,12 +306,13 @@ export class RaopStream {
         return Number(value);
       };
       const serverPort = remotePort('server_port'); const controlPort = remotePort('control_port');
-      const timingPort = remotePort('timing_port');
+      // pyatv AirPlayV1 defaults an omitted timing_port to 0; then any receiver port may ask for timing.
+      const timingPort = parameters.has('timing_port') ? remotePort('timing_port') : 0;
       // One wall-clock sample anchors every session NTP timestamp to monotonic time.
       const clockStart = performance.now(); const clockEpoch = Date.now();
       const ntpMilliseconds = () => clockEpoch + performance.now() - clockStart;
       timing.on('message', (request, remote) => {
-        if (controller.signal.aborted || remote.address !== this.address || remote.port !== timingPort) return;
+        if (controller.signal.aborted || remote.address !== this.address || (timingPort !== 0 && remote.port !== timingPort)) return;
         const received = ntpMilliseconds(); const response = timingReply(request, received, ntpMilliseconds());
         if (response) timing.send(response, remote.port, remote.address, () => {});
       });
