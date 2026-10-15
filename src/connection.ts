@@ -379,11 +379,7 @@ export class AirPlayConnection extends MRPConnection {
 
       this.rawBuffer = this.rawBuffer.subarray(parsed.totalSize);
 
-      if (this.pendingRawResponse) {
-        const { resolve } = this.pendingRawResponse;
-        this.pendingRawResponse = undefined;
-        resolve(parsed.body);
-      }
+      this.pendingRawResponse?.resolve(parsed.body);
     } catch (err) { this.fail(err); }
   }
 
@@ -778,7 +774,7 @@ export class AirPlayConnection extends MRPConnection {
     this.feedbackInterval = undefined;
     this.pendingRawResponse?.reject(reason);
     for (const reject of this.pendingRTSP.values()) reject(reason);
-    for (const entry of [...this.pendingMRPResolvers]) entry.reject(reason);
+    this.rejectMRPRequests(reason);
     for (const reject of this.pendingWrites) reject(reason);
     for (const socket of [this.dataSocket, this.eventSocket, this.socket]) socket?.destroy();
     this.dataSocket = this.eventSocket = this.socket = undefined;

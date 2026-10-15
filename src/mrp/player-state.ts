@@ -53,15 +53,14 @@ export class PlayerState {
     const identifier = client?.active ?? DEFAULT_PLAYER;
     const player = client?.active === null ? undefined : client?.players.get(identifier);
     const metadata = player?.items[player.location]?.metadata;
-    const fields = metadata ? { ...metadata } : undefined;
     const normalized: Payload = {};
     if (metadata) {
       for (const field of ['title', 'duration', 'elapsedTime', 'playbackRate']) {
-        if (fields?.[field] !== undefined) normalized[field] = fields[field];
+        if (metadata[field] !== undefined) normalized[field] = metadata[field];
       }
-      normalized.artist = fields?.trackArtistName ?? fields?.albumArtistName;
-      normalized.album = fields?.albumName;
-      normalized.timestamp = fields?.elapsedTimeTimestamp;
+      normalized.artist = metadata.trackArtistName ?? metadata.albumArtistName;
+      normalized.album = metadata.albumName;
+      normalized.timestamp = metadata.elapsedTimeTimestamp;
     }
     const info = { ...normalized, ...player?.direct };
     return new NowPlayingInfo({ ...player?.state, displayName: client?.info.displayName ?? player?.state.displayName,
