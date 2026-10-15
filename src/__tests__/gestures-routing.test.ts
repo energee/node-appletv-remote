@@ -341,6 +341,20 @@ it('retains both touch teardown errors and clears registrations', async () => {
   expect((atv as any).touchSession).toBeUndefined();
 });
 
+// A real Apple TV 4K drops the remote-services session when an AirPlay/MRP connection is also open.
+it('treats "Session not found" on _sessionStop as already stopped and still sends _touchStop', async () => {
+  const atv = device(); const { sent, conn } = companion(atv);
+  await atv.touchAction(0, 0, 1);
+  const send = conn.sendRequest.getMockImplementation()!;
+  conn.sendRequest.mockImplementation(async (id, content) => {
+    if (id === '_sessionStop') throw new Error('Companion _sessionStop failed: Session not found');
+    return send(id, content);
+  });
+  await expect(atv.stopTouch()).resolves.toBeUndefined();
+  expect(sent.map(([id]) => id)).toContain('_touchStop');
+  expect((atv as any).touchSession).toBeUndefined();
+});
+
 it('reports missing Companion before starting a touch gesture', async () => {
   await expect(device().touchAction(1, 2, 1)).rejects.toThrow('Companion not connected');
 });

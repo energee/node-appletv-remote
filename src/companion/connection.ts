@@ -262,7 +262,7 @@ export class CompanionConnection extends EventEmitter {
    * Bare content is wrapped as `{ _i, _t: 2, _c: content, _x }`; content that already has
    * `_t`, `_c` or `_x` is treated as a prebuilt envelope; `_i` is set and `_x` is overwritten.
    * @returns the whole reply dict (envelope included), not just its `_c`
-   * @throws if not connected or no request ID is free; rejects on timeout or close()
+   * @throws if not connected or no request ID is free; rejects on timeout, close(), or an `_em` error reply
    */
   async sendRequest(
     identifier: string,
@@ -294,7 +294,9 @@ export class CompanionConnection extends EventEmitter {
       this.pendingRequests.set(tid, {
         resolve: (value) => {
           clearTimeout(timer);
-          resolve(value);
+          // pyatv raises on `_em`; resolving it would report a refused request as an empty result.
+          if (value.has('_em')) reject(new Error(`Companion ${identifier} failed: ${value.get('_em')}`));
+          else resolve(value);
         },
         reject: (err) => {
           clearTimeout(timer);

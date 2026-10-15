@@ -1,10 +1,12 @@
 /** Failed high-level connection setup must not leave command-capable clients. */
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AppleTV } from '../appletv.js';
 import { AirPlayConnection } from '../connection.js';
 import { CompanionConnection } from '../companion/connection.js';
 import { Credentials } from '../credentials.js';
 const credentials = new Credentials({ clientId: 'test', serverId: 'server', clientLTSK: Buffer.alloc(32), clientLTPK: Buffer.alloc(32), serverLTPK: Buffer.alloc(32) });
+// connectCompanion() sends _systemInfo after pair-verify; tests that mock connect() also need it to succeed.
+beforeEach(() => { vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockResolvedValue(new Map([['_c', new Map()]])); });
 afterEach(() => vi.restoreAllMocks());
 it('failed AirPlay setup invalidates the high-level connection', async () => {
   const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test' });
@@ -16,6 +18,27 @@ it('failed Companion setup invalidates the high-level connection', async () => {
   const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test' });
   vi.spyOn(CompanionConnection.prototype, 'connect').mockRejectedValue(new Error('setup failed'));
   await expect(tv.connectCompanion(credentials, 1234)).rejects.toThrow('setup failed');
+  await expect(tv.sendCompanionRequest('test', new Map())).rejects.toThrow('Companion not connected');
+});
+// A real Apple TV 4K answers app/account/power requests with "No request handler" until _systemInfo is sent.
+it('sends pyatv _systemInfo after pair-verify and before companionConnect', async () => {
+  const tv = new AppleTV({ name: 'Family Room', address: 'offline', port: 7000, deviceId: 'AA:BB:CC:DD:EE:FF', model: 'AppleTV6,2', companionPort: 1234 });
+  vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
+  const send = vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockResolvedValue(new Map([['_c', new Map()]]));
+  const connected = vi.fn(() => expect(send).toHaveBeenCalledOnce());
+  tv.on('companionConnect', connected);
+  await tv.connectCompanion(credentials);
+  expect(send).toHaveBeenCalledWith('_systemInfo', new Map<string, string | number>([
+    ['_bf', 0], ['_cf', 512], ['_clFl', 128], ['_i', 'aabbccddeeff'], ['_idsID', 'test'],
+    ['_pubID', 'AA:BB:CC:DD:EE:FF'], ['_sf', 256], ['_sv', '170.18'], ['model', 'AppleTV6,2'], ['name', 'Family Room'],
+  ]));
+  expect(connected).toHaveBeenCalledOnce();
+});
+it('a rejected _systemInfo fails connectCompanion and leaves no Companion connection', async () => {
+  const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test', companionPort: 1234 });
+  vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
+  vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockRejectedValue(new Error('Companion _systemInfo failed: No request handler'));
+  await expect(tv.connectCompanion(credentials)).rejects.toThrow('_systemInfo');
   await expect(tv.sendCompanionRequest('test', new Map())).rejects.toThrow('Companion not connected');
 });
 it('rejects a second AirPlay connect instead of orphaning the first transport', async () => {

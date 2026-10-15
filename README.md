@@ -497,6 +497,8 @@ atv.subscribePowerState();                   // then listen for 'powerState'
 await atv.guide();  // also channelUp, channelDown, pageUp, pageDown, screensaver
 ```
 
+`connectCompanion()` sends pyatv's `_systemInfo` after pair-verify. Without it, a real Apple TV 4K answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on an Apple TV 4K (tvOS, AppleTV6,2).
+
 ### Connection and request lifecycle
 
 Root test commands exclude nested worktrees, dependency directories and generated `dist` copies.
@@ -634,10 +636,11 @@ Wire behavior is pinned to [pyatv 0.18.0 MRP connection](https://github.com/post
 For anything not wrapped yet, send Companion messages yourself:
 
 ```typescript
-const info = await atv.sendCompanionRequest('_systemInfo', new Map([['_bf', 0]]));
+const reply = await atv.sendCompanionRequest('FetchAttentionState', new Map());
 atv.sendCompanionMessage('_interest', new Map([['_regEvents', ['SystemStatus']]]));
 ```
 
+- A reply carrying an `_em` error rejects with `Companion <id> failed: <_em>` (as pyatv raises), instead of resolving with an empty `_c`.
 - Plain content is wrapped as `{ _i, _t, _c, _x }`. `_t` is 2 for a request and 1 for a message. If you pass a prebuilt envelope (with `_t`, `_c` or `_x`), only `_i` and `_x` get filled in.
 - Wrap whole numbers in `new OpackFloat(n)` when the protocol expects a float, such as skip seconds or volume 0/1. Use `bigint` for unsigned 64-bit IDs.
 - Request IDs stay in 1..127, since Apple TVs read larger single-byte IDs as negative. A timed-out ID stays reserved for 30s so a late reply can't resolve the wrong request.

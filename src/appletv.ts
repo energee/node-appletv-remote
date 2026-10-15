@@ -358,8 +358,8 @@ export class AppleTV extends EventEmitter {
   }
 
   /**
-   * Open the Companion connection; emits `companionConnect` once ready.
-   * @throws If no Companion port was given or discovered.
+   * Open the Companion connection and send `_systemInfo`; emits `companionConnect` once ready.
+   * @throws If no Companion port was given or discovered, or the TV rejects `_systemInfo`.
    */
   async connectCompanion(credentials: HAPCredentials, companionPort?: number): Promise<void> {
     if (this.companionConnection) throw new Error('Companion already connected');
@@ -384,6 +384,12 @@ export class AppleTV extends EventEmitter {
 
     try {
       await connection.connect();
+      // Without _systemInfo the TV answers app, account and power requests with "No request handler" (pyatv api.py).
+      await connection.sendRequest('_systemInfo', new Map<OpackValue, OpackValue>([
+        ['_bf', 0], ['_cf', 512], ['_clFl', 128], ['_i', this.deviceId.replaceAll(':', '').toLowerCase()],
+        ['_idsID', credentials.clientId], ['_pubID', this.deviceId], ['_sf', 256], ['_sv', '170.18'],
+        ['model', this.model], ['name', this.name],
+      ]));
       if (this.companionConnection !== connection) throw new Error('Companion closed during setup');
       this.readyTransports.add(connection);
       this.emit('companionConnect');
@@ -922,7 +928,8 @@ export class AppleTV extends EventEmitter {
       if (this.activeTouch) this.sendTouch(this.activeTouch.x, this.activeTouch.y, TouchAction.Release);
       await this.checkedCompanion(session.connection, '_sessionStop', new Map<OpackValue, OpackValue>([['_srvT', 'com.apple.tvremoteservices'], ['_sid', session.sid]]));
     } catch (error) {
-      errors.push(error);
+      // A real TV drops this session once an AirPlay/MRP connection is open; it is already stopped (pyatv also ignores it).
+      if (!(error instanceof Error && error.message.endsWith('Session not found'))) errors.push(error);
     } finally {
       this.touchSession = undefined;
       this.activeTouch = undefined;

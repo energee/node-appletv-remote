@@ -188,4 +188,17 @@ describe('Companion request and event correlation', () => {
       await pending;
     } finally { connection.close(); }
   });
+
+  // Captured from a real Apple TV 4K that had no Companion session started.
+  it('rejects an error reply (_em) instead of resolving it as an empty result', async () => {
+    const { connection, requests, receive } = fixture();
+    try {
+      const pending = connection.sendRequest('FetchLaunchableApplicationsEvent', new Map());
+      receive(new Map<OpackValue, OpackValue>([
+        ['_x', requests[0].get('_x')!], ['_t', 3], ['_c', new Map()],
+        ['_ed', 'RPErrorDomain'], ['_em', 'No request handler'], ['_ec', 58822],
+      ]));
+      await expect(pending).rejects.toThrow('Companion FetchLaunchableApplicationsEvent failed: No request handler');
+    } finally { connection.close(); }
+  });
 });
