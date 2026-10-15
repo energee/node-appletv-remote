@@ -146,7 +146,7 @@ it('pairs through DeviceInfo and CryptoPairing M1-M6 with one controller keypair
   expect(result.serverLTPK).toEqual(Buffer.alloc(32, 9));
   expect(destroy).toHaveBeenCalledOnce();
   expect(vi.mocked(generateKeyPairSync).mock.calls.map(([algorithm]) => algorithm)).toEqual(['ed25519']);
-});
+}, 20000); // Real SRP-3072 math: ~2 s alone, several times that under a parallel full-suite run.
 
 it('does not select disabled legacy MRP advertisements', async () => {
   const legacy = vi.spyOn(LegacyMRPConnection.prototype, 'connect').mockResolvedValue();
