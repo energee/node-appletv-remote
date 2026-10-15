@@ -130,6 +130,30 @@ describe('RtspClient encryption', () => {
   });
 });
 
+describe('RtspClient encryption switch', () => {
+  it('refuses to switch and destroys the socket when plaintext trails the pair-verify reply (#60)', async () => {
+    // An unterminated forged header block rides in the same TCP chunk as the last plaintext
+    // pairing response; without the check it would prefix the first decrypted response.
+    const receiver = await peer(() => Buffer.concat([
+      Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'),
+      Buffer.from('RTSP/1.0 200 OK\r\nCSeq: 1\r\nSession: forged\r\nX-Swallow: '),
+    ]));
+    await receiver.client.request('POST', {}, Buffer.alloc(0), undefined, 5000, '/pair-verify');
+    expect(() => receiver.client.encryptWith(new HAPSession(clientWrite, clientRead))).toThrow(/plaintext/);
+    expect(receiver.client.socket.destroyed).toBe(true);
+    await expect(receiver.client.request('SETUP')).rejects.toThrow(/closed/);
+  });
+
+  it('refuses to switch while a request is pending', async () => {
+    const receiver = await peer(() => undefined);
+    const inFlight = receiver.client.request('OPTIONS');
+    while (!receiver.requests.length) await delay(1);
+    expect(() => receiver.client.encryptWith(new HAPSession(clientWrite, clientRead))).toThrow(/pending/);
+    await expect(inFlight).rejects.toThrow();
+    expect(receiver.client.socket.destroyed).toBe(true);
+  });
+});
+
 describe('RtspClient HTTP pairing requests', () => {
   it('sends /pair-pin-start and /pair-setup as HTTP/1.1 without CSeq, passing X-Apple-HKP through', async () => {
     const receiver = await peer(request => {

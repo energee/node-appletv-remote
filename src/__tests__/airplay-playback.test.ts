@@ -28,7 +28,7 @@ const bplist64 = (data: Record<string, unknown>) => {
 };
 const nonce = (label: string) => { const n = Buffer.alloc(12); n.write(label, 4); return n; };
 
-async function receiver(options: { rejectAuth?: boolean; commandCode?: number; info?: Record<string, unknown>; dropStatus?: boolean; holdStatus?: boolean; badCseq?: boolean; emptyM4?: boolean; oversize?: boolean; duplicateLength?: boolean } = {}) {
+async function receiver(options: { rejectAuth?: boolean; commandCode?: number; info?: Record<string, unknown>; dropStatus?: boolean; holdStatus?: boolean; badCseq?: boolean; emptyM4?: boolean; oversize?: boolean; duplicateLength?: boolean; trailingPlaintext?: boolean } = {}) {
   const serverKeys = generateKeyPairSync('ed25519');
   const clientKeys = generateKeyPairSync('ed25519');
   const credentials = { clientId: 'synthetic-client', serverId: 'synthetic-server', clientLTPK: raw(clientKeys.publicKey), clientLTSK: Buffer.from(clientKeys.privateKey.export({ format: 'der', type: 'pkcs8' }).subarray(-32)), serverLTPK: raw(serverKeys.publicKey) };
@@ -107,6 +107,8 @@ async function receiver(options: { rejectAuth?: boolean; commandCode?: number; i
             const verifiedSession = new HAPSession(await hkdfSha512(secret!, 'Control-Salt', 'Control-Read-Encryption-Key', 32), await hkdfSha512(secret!, 'Control-Salt', 'Control-Write-Encryption-Key', 32));
             eventCipher = new HAPSession(await hkdfSha512(secret!, 'Events-Salt', 'Events-Write-Encryption-Key', 32), await hkdfSha512(secret!, 'Events-Salt', 'Events-Read-Encryption-Key', 32));
             reply(options.emptyM4 ? Buffer.alloc(0) : tlvEncode({ [TlvTag.SeqNo]: Buffer.from([4]) }));
+            // Unterminated forged headers that would otherwise prefix the first decrypted reply (#60).
+            if (options.trailingPlaintext) socket.write('RTSP/1.0 200 OK\r\nCSeq: 1\r\nX-Swallow: ');
             session = verifiedSession;
           }
           continue;
@@ -163,6 +165,13 @@ describe('AirPlay URL playback', () => {
     const fake = await receiver(options); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
     try { await expect(playback.playUrl('https://example.org/movie.mp4')).rejects.toThrow(/CSeq|M4/); }
     finally { playback.close(); await fake.close(); }
+  });
+  it('rejects plaintext left over when switching to encryption (#60)', async () => {
+    const fake = await receiver({ trailingPlaintext: true }); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
+    try {
+      await expect(playback.playUrl('https://example.org/movie.mp4')).rejects.toThrow(/plaintext/);
+      expect(fake.requests.filter(r => r.line.startsWith('SETUP'))).toHaveLength(0);
+    } finally { playback.close(); await fake.close(); }
   });
   it('rejects an oversized response before buffering its body', async () => {
     const fake = await receiver({ oversize: true }); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);

@@ -93,8 +93,18 @@ export class RtspClient {
    * Encrypt every later write with `session` and decrypt every later read before HTTP parsing.
    * Call it after the pair-verify (or transient pairing) response and before the next request.
    * A frame that fails authentication fails the pending request and the client, and destroys the socket.
+   * @throws (and destroys the socket) if unparsed plaintext is buffered or a request is pending:
+   * leftover bytes would otherwise prefix the first decrypted response unauthenticated (#60).
    */
-  encryptWith(session: HAPSession): void { this.cipher = session; }
+  encryptWith(session: HAPSession): void {
+    const problem = this.input.length ? 'unparsed plaintext buffered' : this.pending ? 'a request is pending' : undefined;
+    if (problem) {
+      const error = new Error(`RAOP cannot switch to encryption: ${problem}`);
+      this.socket.destroy(error);
+      throw error;
+    }
+    this.cipher = session;
+  }
   setLocalUri(sessionId: number): void { this.uri = `rtsp://${this.socket.localAddress}/${sessionId}`; }
   request(method: string, headers: Record<string, string> = {}, body: Buffer = Buffer.alloc(0), signal?: AbortSignal, timeout = 5000, uri = this.uri, allowError = false): Promise<Response> {
     const request = this.queue.then(() => new Promise<Response>((resolve, reject) => {

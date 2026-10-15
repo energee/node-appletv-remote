@@ -86,6 +86,8 @@ export class AirPlayPlaybackSession {
         post: async (path, body) => (await this.request('POST', path, 'HTTP/1.1', body, { 'X-Apple-HKP': '3', 'Content-Type': 'application/octet-stream', 'User-Agent': 'AirPlay/320.20' })).body,
         destroy() {}, // Playback owns the socket after verification.
       }).verify();
+      // Leftover plaintext would prefix the first decrypted reply unauthenticated (#60).
+      if (this.plain.length) throw new Error('Playback cannot switch to encryption: unparsed plaintext buffered');
       this.cipher = new HAPSession(keys.outputKey, keys.inputKey);
       if (this.closed) throw new Error('Playback session closed');
       this.timingPeer = { address: socket.remoteAddress! };
