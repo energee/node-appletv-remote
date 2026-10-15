@@ -104,6 +104,8 @@ class RtspClient {
 /** Explicit endpoint plus _raop._tcp TXT capabilities; no discovery or credential access. */
 export class RaopStream {
   private readonly requiresLegacySeed: boolean;
+  /** md=0 advertised at construction; later caller mutations of the TXT record are ignored. */
+  private readonly textMetadata: boolean;
   private active = false;
   private used = false;
   private client?: RtspClient;
@@ -112,9 +114,9 @@ export class RaopStream {
   private sequence = randomBytes(2).readUInt16BE();
   private timestamp = 66150;
   private readonly ssrc = randomBytes(4).readUInt32BE();
-  constructor(private address: string, private port: number, private txt: Readonly<Record<string, string>>) {
-    this.txt = { ...txt };
+  constructor(private address: string, private port: number, txt: Readonly<Record<string, string>>) {
     const has = (name: string, value: string) => txt[name]?.split(',').map(item => item.trim()).includes(value);
+    this.textMetadata = !!has('md', '0');
     if (!isIPv4(address) || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Expected IPv4 RAOP address and valid port');
     const rawFeatures = txt.ft ?? txt.features ?? '0x0';
     const features = /^0x([\da-f]{1,8})(?:,0x([\da-f]{1,8}))?$/i.exec(rawFeatures);
@@ -372,7 +374,7 @@ export class RaopStream {
     return Buffer.from(`volume: ${volume === 0 ? -144 : Number((-30 + volume * 0.3).toFixed(2))}\r\n`);
   }
   private metadataBody(metadata: RaopMetadata): Buffer {
-    if (!this.txt.md?.split(',').includes('0')) throw new Error('Receiver does not support RAOP text metadata');
+    if (!this.textMetadata) throw new Error('Receiver does not support RAOP text metadata');
     const tags: Buffer[] = [];
     for (const [tag, value] of [['minm', metadata.title], ['asal', metadata.album], ['asar', metadata.artist]]) {
       if (value === undefined) continue;

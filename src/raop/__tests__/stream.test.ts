@@ -340,6 +340,13 @@ describe('legacy RAOP streaming', () => {
     await expect(sender.stream(Buffer.alloc(4), { metadata: { title: 'not supported' } })).rejects.toThrow(/metadata/);
   });
 
+  it('accepts text metadata when md lists 0 with surrounding spaces (md=1, 0)', async () => {
+    const module = await load(); const peer = await receiver();
+    useControlledClock();
+    await new module.RaopStream('127.0.0.1', peer.port, { ...txt, md: '1, 0' }).stream(Buffer.alloc(4), { metadata: { title: 'x' } });
+    expect(peer.requests.some(r => r.headers['content-type'] === 'application/x-dmap-tagged')).toBe(true);
+  }, 5000);
+
   it('pulls only the current bounded chunk and returns the iterator when cancelled', async () => {
     const module = await load(); const peer = await receiver(); const cancellation = new AbortController();
     let pulls = 0; let returns = 0;
