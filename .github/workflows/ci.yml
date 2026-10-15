@@ -7,12 +7,21 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Oldest supported (README: Node 18+), previous LTS, and current release.
+        node-version: [18, 20, latest]
     steps:
       - uses: actions/checkout@v4
+      # Install from the committed lockfile: a fresh npm resolve crashed on vitest 4.1.12's peers,
+      # and npm 10 (the newest that runs on Node 18) can't install it at all.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
       - uses: actions/setup-node@v4
         with:
-          node-version: latest
-      # npm 10 crashed resolving vitest 4.1.12's peers; track the newest npm, not the bundled one.
-      - run: npm install -g npm@latest
-      - run: npm install
-      - run: npm test
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
