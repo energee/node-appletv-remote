@@ -211,6 +211,19 @@ describe('sanitized MRP diagnostics', () => {
     conn.close();
   });
 
+  it('asks for volume control capabilities during the handshake', async () => {
+    const conn = connection();
+    const sent: unknown[] = [];
+    vi.mocked(conn.sendMRPMessage).mockImplementation(async data => {
+      const request = await MRPMessage.decode(data);
+      sent.push(request.type);
+      if (request.type === MessageType.DeviceInfo) await reply(conn, undefined, MessageType.DeviceInfo);
+    });
+    await (conn as any).initMRPProtocol();
+    expect(sent).toEqual([15, 38, 16, 24, 62]);
+    conn.close();
+  });
+
   it('captures relevant init sends and identifierless handshake matches', async () => {
     const conn = connection();
     const observed: Record<string, unknown>[] = [];

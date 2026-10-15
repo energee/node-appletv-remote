@@ -84,7 +84,7 @@ it('verifies legacy credentials then sends encrypted MRP over an IPv6 endpoint',
   expect(incoming).toContain(MessageType.SetState);
   expect(connect).toHaveBeenCalledWith('fd00::2', 49152, 5000, expect.any(AbortSignal));
   expect(proofVerified).toBe(true);
-  expect(types).toEqual([15, 34, 34, 38, 16, 24]);
+  expect(types).toEqual([15, 34, 34, 38, 16, 24, 62]);
   expect(writeKey).toHaveLength(32);
   await atv.close();
 });

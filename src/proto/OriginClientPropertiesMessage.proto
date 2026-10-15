@@ -1,0 +1,13 @@
+// Type 105: tvOS 26 pushes one per origin with when it last played. Field 2 is an
+// undocumented UUID string, left undeclared.
+syntax = "proto2";
+
+import "ProtocolMessage.proto";
+
+extend ProtocolMessage {
+  optional OriginClientPropertiesMessage originClientPropertiesMessage = 87;
+}
+
+message OriginClientPropertiesMessage {
+  optional double lastPlayingTimestamp = 1;
+}

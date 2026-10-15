@@ -372,6 +372,19 @@ describe('runtime availability', () => {
     expect((atv as any).featureAvailability('setVolume')).toBe('unavailable');
     expect((atv as any).featureAvailability('up')).toBe('unknown');
   });
+  it.each([
+    // Family Room (AppleTV6,2, tvOS 26.6): available 0, capabilities 0.
+    ['00', 'unavailable', 'unavailable'],
+    // Master Bedroom (AppleTV5,3, tvOS 26.6): available 1, capabilities 1 (relative only).
+    ['11', 'unsupported', 'supported'],
+  ])('reads volume capabilities from the GetVolumeControlCapabilities result %s', async (bits, setVolume, volumeUp) => {
+    const atv = device();
+    deliver(atv, MessageType.DeviceInfo, 'deviceInfoMessage', { deviceUID: 'dev' });
+    const wire = Buffer.from(`083f1202696d9a04060a04080${bits[0]}100${bits[1]}`, 'hex');
+    (atv as any).handleMRPMessage(await MRPMessage.decode(wire));
+    expect(atv.featureAvailability('setVolume')).toBe(setVolume);
+    expect(atv.featureAvailability('volumeUp')).toBe(volumeUp);
+  });
 });
 
 it('rejects a wire-encoded envelope error despite inner success', async () => {

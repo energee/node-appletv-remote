@@ -53,7 +53,8 @@ export abstract class MRPConnection extends EventEmitter {
   abstract sendMRPMessage(data: Buffer): Promise<void>;
   /**
    * MRP handshake on the data channel: DeviceInfo (awaits the reply), SetConnectionState,
-   * ClientUpdatesConfig, GetKeyboardSession, then the optional `settleMs` delay (default 0).
+   * ClientUpdatesConfig, GetKeyboardSession, GetVolumeControlCapabilities, then the optional
+   * `settleMs` delay (default 0).
    * @throws if the DeviceInfo reply does not arrive within 5 s.
    */
   protected async initMRPProtocol(): Promise<void> {
@@ -93,6 +94,12 @@ export abstract class MRPConnection extends EventEmitter {
     const getKeyboard = await MRPMessage.sendCommand(MessageType.GetKeyboardSession);
     await this.diagnoseSend(getKeyboard);
     await this.sendMRPMessage(getKeyboard);
+
+    // 6. GetVolumeControlCapabilities (sent without waiting): tvOS 26 does not always push
+    // VolumeControlAvailability, so ask; the type 63 reply feeds featureAvailability.
+    const getVolumeCapabilities = await MRPMessage.sendCommand(MessageType.GetVolumeControlCapabilities);
+    await this.diagnoseSend(getVolumeCapabilities);
+    await this.sendMRPMessage(getVolumeCapabilities);
 
     // ponytail: fixed settle, 0 by default (was 500 ms). Replace with waiting for the first
     // update message if some Apple TV model turns out to drop the first command.

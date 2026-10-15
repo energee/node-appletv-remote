@@ -49,7 +49,7 @@ Credentials are saved to `~/.atv-credentials.json`. Leave out `deviceId` to use 
 
 Playback commands open only AirPlay/MRP; text/app/account/power commands and extra buttons open only Companion. `command` (alias `cmd`) still accepts `skip_forward` / `skip_backward` for the app's default interval; use the hyphenated commands to specify seconds. Extra Companion buttons are `channel_up`, `channel_down`, `screensaver`, `guide`, `page_up`, and `page_down` (not available in the MRP-only interactive remote).
 
-Numeric values must be finite decimal numbers in the documented range. Required IDs must be nonblank. Quote text to preserve spaces; `atv text set ""` explicitly sets empty text. Invalid arguments fail before reading credentials, discovery, or connection. For one-shot commands, operation and connection failures print an error to stderr and exit nonzero; one-shot operations close their connection even on failure. Absolute volume can fail if the TV does not report its output device. These commands depend on device/app support and do not bypass pairing. Extra positional arguments are rejected instead of ignored. Progress (including `Requesting ...` lines from state, queue and artwork) goes to stderr so results remain clean on stdout. Empty scans and pairing cancellation/no-device selections retain their existing successful exit behavior.
+Numeric values must be finite decimal numbers in the documented range. Required IDs must be nonblank. Quote text to preserve spaces; `atv text set ""` explicitly sets empty text. Invalid arguments fail before reading credentials, discovery, or connection. For one-shot commands, operation and connection failures print an error to stderr and exit nonzero; one-shot operations close their connection even on failure. Absolute volume can fail if the TV does not report its output device, and has no effect when the TV offers only relative or no volume control (see #39 below). These commands depend on device/app support and do not bypass pairing. Extra positional arguments are rejected instead of ignored. Progress (including `Requesting ...` lines from state, queue and artwork) goes to stderr so results remain clean on stdout. Empty scans and pairing cancellation/no-device selections retain their existing successful exit behavior.
 
 Two CLI timing knobs guard HID keys, which the Apple TV never acknowledges. Set either to `0` for faster one-shot commands:
 
@@ -167,10 +167,20 @@ Availability is `supported` (advertised and enabled), `unavailable` (advertised 
 currently disabled), `unsupported` (missing from a received command list), or
 `unknown` (no runtime evidence). Media commands use the active player's command
 list plus client defaults. Volume uses explicit relative/absolute capability
-flags and the known output UID. Other public capabilities remain `unknown` rather
+flags and the known output UID. The flags come from a pushed VolumeControlAvailability
+(type 17) or from the reply (type 63) to the GetVolumeControlCapabilities request the
+handshake sends, since tvOS 26 does not always push type 17. Other public capabilities remain `unknown` rather
 than being guessed from model or service presence. Availability is advisory and
 may change at any time; device errors still reject. The event has no payload:
 re-query the capabilities relevant to your application.
+
+**Volume on tvOS 26 (#39):** `volume` stays `undefined` and the `volume` event never
+fires unless the TV offers absolute volume; `setVolume` sends but nothing changes
+otherwise. Check `featureAvailability('setVolume')` first. On tvOS 26.6 an AppleTV6,2
+whose TV volume is not under its control reports volume control unavailable, and an
+AppleTV5,3 reports relative only (`volumeUp`/`volumeDown` supported, `setVolume`
+unsupported). Both answer a GetVolume request with 0 for every output UID, and their
+UpdateOutputDevice descriptors carry no volume.
 
 **Idle Apple TV state (#10):** when no app has a loaded item, an Apple TV (seen on
 the HD AppleTV5,3 and the 4K AppleTV6,2) answers the queue request with a typeless
@@ -183,8 +193,8 @@ while playing, paused and after `stop`: queue replies and pushed state both work
 once an app has a loaded item. With nothing loaded, the HD sends no reply at all
 to `play`, so that command still times out after 5 s.
 
-The handshake sends ClientUpdatesConfig and GetKeyboardSession without waiting for
-their replies. Media commands and the legacy heartbeat correlate replies by identifier;
+The handshake sends ClientUpdatesConfig, GetKeyboardSession and
+GetVolumeControlCapabilities without waiting for their replies. Media commands and the legacy heartbeat correlate replies by identifier;
 queue requests additionally require the SetState type, except that a same-identifier
 error reply also settles them (#10).
 
@@ -583,6 +593,14 @@ atv.on('close', () => {});
 atv.on('error', (err) => {});
 ```
 
+`Message.type` is the numeric discriminator exactly as sent, even when `MessageType`
+does not name it, so `toString()` shows `Unknown(n)` with the real number. tvOS 26
+also sends `PlayerClientProperties` (104, extension 86), `OriginClientProperties`
+(105, extension 87), `UpdateOutputDevice` (65, extension 69, identity and volume
+descriptor fields only) and a `uniqueIdentifier` UUID on every envelope (field 85).
+A type 0 message with only `identifier` and `uniqueIdentifier` also arrives on
+connect; its meaning is unknown.
+
 ## How it works
 
 1. **Discovery:** independent AirPlay, Companion, standalone MRP, and legacy DMAP services.
@@ -651,4 +669,4 @@ npm test             # or npm run test:watch
 
 The MRP schema is compiled into `src/mrp/schema.ts`, so no `.proto` files are read at run time and the package bundles cleanly. After editing a `.proto` (or adding one to `PROTO_FILES` in `scripts/gen-proto.mjs`), run `npm run gen:proto` and commit the result.
 
-Use `protobufjs >=8.8.1` within major 8; the manifest and pnpm lockfile exclude older vulnerable releases. Fresh npm installs and pnpm's locked installs must both pass. Patched protobufjs enforces proto2 closed enums, so every supported message discriminator must be declared in `ProtocolMessage.Type`, not just in the TypeScript `MessageType` enum. The bare HID flush is `GENERIC_MESSAGE = 42`. `SendButtonEvent` is message type 39 with payload extension field 43, not message type 43. Independent wire fixtures test these values in addition to builder/decoder round trips.
+Use `protobufjs >=8.8.1` within major 8; the manifest and pnpm lockfile exclude older vulnerable releases. Fresh npm installs and pnpm's locked installs must both pass. Patched protobufjs enforces proto2 closed enums and drops undeclared values, so `ProtocolMessage.type` is declared `int32`: every discriminator, known or not, decodes as its number (#40). `ProtocolMessage.Type` remains as the reference list; add new values there and to the TypeScript `MessageType` enum. The bare HID flush is `GENERIC_MESSAGE = 42`. `SendButtonEvent` is message type 39 with payload extension field 43, not message type 43. Independent wire fixtures test these values in addition to builder/decoder round trips.

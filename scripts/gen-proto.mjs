@@ -48,6 +48,10 @@ const PROTO_FILES = [
   'ModifyOutputContextRequestMessage.proto',
   'SetVolumeMessage.proto',
   'VolumeDidChangeMessage.proto',
+  'GetVolumeControlCapabilitiesResultMessage.proto',
+  'UpdateOutputDeviceMessage.proto',
+  'PlayerClientPropertiesMessage.proto',
+  'OriginClientPropertiesMessage.proto',
 ];
 
 const root = new protobuf.Root();

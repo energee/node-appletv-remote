@@ -244,7 +244,7 @@ export class AppleTV extends EventEmitter {
   private activeTouch?: { x: number; y: number };
   private gestureController?: AbortController;
   private gestureBusy = false;
-  /** Last absolute volume (0..100) reported by VolumeDidChange; undefined until one arrives. */
+  /** Last absolute volume (0..100) reported by VolumeDidChange; undefined until one arrives, which never happens when `featureAvailability('setVolume')` is not `supported`. */
   volume?: number;
   /** Last power state from fetchPowerState() or a SystemStatus event. */
   powerState: PowerState = PowerState.Unknown;
@@ -518,7 +518,7 @@ export class AppleTV extends EventEmitter {
     await this.sendMediaCommand(46, { repeatMode: state, sendOptions: 0 });
   }
 
-  /** Set absolute volume, 0..100. Needs the output device the Apple TV reported on connect. */
+  /** Set absolute volume, 0..100. Needs the output device the Apple TV reported on connect; ignored by a TV without absolute volume (check `featureAvailability('setVolume')`). */
   async setVolume(level: number): Promise<void> {
     const conn = this.requireConnection();
     if (!this.outputDeviceUID) throw new Error('No output device known for volume control');
@@ -1005,8 +1005,11 @@ export class AppleTV extends EventEmitter {
     const field = PLAYER_STATE_FIELDS[msg.type as MessageType];
     const payload = field ? msg[field] as Record<string, unknown> | undefined : undefined;
     if (payload && this.playerState.update(msg.type as number, payload)) this.publishNowPlaying();
-    if (msg.type === MessageType.VolumeControlAvailability) {
-      const volume = msg['.volumeControlAvailabilityMessage'] as Record<string, unknown> | undefined;
+    // Volume capabilities arrive pushed (type 17) or as the reply to our handshake request (type 63).
+    if (msg.type === MessageType.VolumeControlAvailability || msg.type === MessageType.GetVolumeControlCapabilitiesResult) {
+      const volume = msg.type === MessageType.VolumeControlAvailability
+        ? msg['.volumeControlAvailabilityMessage'] as Record<string, unknown> | undefined
+        : (msg['.getVolumeControlCapabilitiesResultMessage'] as { capabilities?: Record<string, unknown> } | undefined)?.capabilities;
       this.volumeAvailability = volume ? { ...this.volumeAvailability, ...volume } : undefined;
       this.emit('featureAvailability');
     }

@@ -8,7 +8,10 @@ import protobuf from 'protobufjs';
 import { randomUUID } from 'node:crypto';
 import { MRP_SCHEMA } from './schema.js';
 
-/** ProtocolMessage.type discriminators, not extension IDs; declare each value in ProtocolMessage.proto too. */
+/**
+ * ProtocolMessage.type discriminators, not extension IDs. Decoding keeps any number, so a value
+ * missing here still reaches listeners; list it in the ProtocolMessage Type enum too, for reference.
+ */
 export enum MessageType {
   SendCommand = 1,
   SendCommandResult = 2,
@@ -58,9 +61,13 @@ export enum MessageType {
   RemovePlayer = 54,
   UpdateClient = 55,
   UpdateContentItem = 56,
+  GetVolumeControlCapabilities = 62,
+  GetVolumeControlCapabilitiesResult = 63,
   UpdateOutputDevice = 65,
   RemoveOutputDevices = 66,
   SetDefaultSupportedCommands = 72,
+  PlayerClientProperties = 104,
+  OriginClientProperties = 105,
 }
 
 /** Player-state extension fields shared by normalization and sanitized routing diagnostics. */
