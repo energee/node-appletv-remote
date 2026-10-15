@@ -71,7 +71,7 @@ Oh, No! Where is my Mouth? by Pit & Penny Stories [Playing] 0.00% (YouTube)
 npm install node-appletv-remote
 ```
 
-Requires Node.js 18+ (ESM).
+Requires Node.js 18+ (ESM). On Node 18, npm prints an `EBADENGINE` warning because `bplist-parser` declares Node >=20.19; it is expected and harmless (CI tests Node 18), but `engine-strict=true` turns it into an install error.
 
 ### Find and pair
 
