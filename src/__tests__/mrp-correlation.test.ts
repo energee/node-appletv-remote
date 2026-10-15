@@ -142,6 +142,16 @@ describe('sanitized MRP diagnostics', () => {
     conn.close();
   });
 
+  it('bounds the token map while keeping tokens unique', async () => {
+    const conn = connection();
+    const tokens = new Set<unknown>();
+    conn.on('mrp-diagnostic', diagnostic => tokens.add(diagnostic.identifier));
+    for (let i = 0; i < 1500; i++) (conn as any).emitDiagnostic('send', { type: MessageType.SetConnectionState, identifier: `id-${i}` });
+    expect(tokens.size).toBe(1500);
+    expect((conn as any).diagnosticIds.size).toBeLessThanOrEqual(1024);
+    conn.close();
+  });
+
   it('excludes auth and unrelated message types entirely', async () => {
     const conn = connection();
     const observed: unknown[] = [];

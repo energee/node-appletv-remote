@@ -19,8 +19,9 @@ export interface MRPDiagnostic {
 export abstract class MRPConnection extends EventEmitter {
   protected closed = false;
   protected mrpGeneration = 0;
-  /** In-memory equality tokens for a bounded capture; discarded with this connection, never persisted. */
+  /** In-memory equality tokens, capped at the 1024 most recent values; discarded with this connection, never persisted. */
   private diagnosticIds = new Map<string, string>();
+  private diagnosticCount = 0;
   protected pendingMRPResolvers: Array<{
     /** Undefined matches any type (identifier-only correlation, as pyatv send_and_receive). */
     type?: number;
@@ -168,8 +169,14 @@ export abstract class MRPConnection extends EventEmitter {
     const token = (kind: string, value: unknown): string | undefined => {
       if (typeof value !== 'string' || !value) return undefined;
       const key = JSON.stringify([kind, value]);
-      if (!this.diagnosticIds.has(key)) this.diagnosticIds.set(key, `${kind}-${this.diagnosticIds.size + 1}`);
-      return this.diagnosticIds.get(key);
+      let id = this.diagnosticIds.get(key);
+      if (!id) {
+        id = `${kind}-${++this.diagnosticCount}`;
+        this.diagnosticIds.set(key, id);
+        // ponytail: FIFO cap; an evicted value gets a fresh token if it reappears much later.
+        if (this.diagnosticIds.size > 1024) this.diagnosticIds.delete(this.diagnosticIds.keys().next().value!);
+      }
+      return id;
     };
     const identifier = token('request', msg.identifier);
     if (identifier) diagnostic.identifier = identifier;
@@ -179,7 +186,7 @@ export abstract class MRPConnection extends EventEmitter {
     if (client) diagnostic.client = client;
     if (player) diagnostic.player = player;
     if (direction === 'receive') diagnostic.matchedRequest = this.pendingMRPResolvers.some(
-      entry => entry.type === type && (entry.identifier === undefined || entry.identifier === msg.identifier),
+      entry => (entry.type === undefined || entry.type === type) && (entry.identifier === undefined || entry.identifier === msg.identifier),
     );
     try { this.emit('mrp-diagnostic', diagnostic); }
     catch { this.log('MRP diagnostic observer failed'); }

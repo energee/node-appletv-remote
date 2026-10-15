@@ -231,6 +231,14 @@ describe('cache-first normalized state reads', () => {
     await expect(atv.getNowPlaying()).rejects.toThrow('No active-player state received');
   });
 
+  it('a decoded empty queue reply cannot validate an earlier unrouted push', async () => {
+    const atv = device();
+    // Wire type 4 with an empty SetStateMessage extension: no playbackState or playerPath on the wire.
+    (atv as any).connection = { sendMRPMessageAndWait: async () => MRPMessage.decode(Buffer.from('08044a00', 'hex')) };
+    deliver(atv, MessageType.SetState, 'setStateMessage', { nowPlayingInfo: { title: 'Stale push' } });
+    await expect(atv.getNowPlaying()).rejects.toThrow('No active-player state received');
+  });
+
   it('rejects disconnected reads even if public nowPlaying was retained by a caller', async () => {
     const atv = device();
     deliver(atv, MessageType.SetState, 'setStateMessage', { nowPlayingInfo: { title: 'Pushed' } });

@@ -187,7 +187,7 @@ are unchanged pending device evidence.
 
 Register `mrpDiagnostic` **before** `connect()` on an existing `AppleTV` instance.
 Import `MRPDiagnostic` as a type from `node-appletv-remote` when annotating listeners.
-Use a bounded capture connection; its in-memory token map grows with unique observed identifiers.
+Use a bounded capture connection; its in-memory token map keeps the 1024 most recent identifiers.
 The event emits only relevant init/state message types, direction, opaque
 connection-local request/client/player tokens, and `matchedRequest` on receives
 (type plus identifier match before dispatch). Missing identifiers remain omitted;
