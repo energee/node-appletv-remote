@@ -1,6 +1,9 @@
 # node-appletv-remote
 
+[![CI](https://github.com/energee/node-appletv-remote/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/energee/node-appletv-remote/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/node-appletv-remote)](https://www.npmjs.com/package/node-appletv-remote)
+[![downloads](https://img.shields.io/npm/dm/node-appletv-remote)](https://www.npmjs.com/package/node-appletv-remote)
+[![node](https://img.shields.io/node/v/node-appletv-remote)](./package.json)
 [![license](https://img.shields.io/npm/l/node-appletv-remote)](./LICENSE)
 
 Control an Apple TV from Node.js, as a library or a CLI. It speaks AirPlay 2, MRP (Media Remote Protocol) and Companion Link over your local network, with no native dependencies.

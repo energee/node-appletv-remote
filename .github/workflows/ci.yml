@@ -1,6 +1,9 @@
 name: CI
 
 on:
+  # push to main keeps the README CI badge current.
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
 
