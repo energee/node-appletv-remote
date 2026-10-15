@@ -36,7 +36,7 @@ export class PlayerState {
   private clients = new Map<string, Client>();
   private activeClient?: string;
   private selected = false;
-  private routingSelected = false;
+  private routed = false;
 
   /** Current active-player commands; undefined means no advertisement has arrived. */
   get commands(): SupportedCommand[] | undefined {
@@ -46,12 +46,17 @@ export class PlayerState {
     return [...player.commands, ...(client?.commands ?? []).filter(cmd => !player.commands!.some(p => p.command === cmd.command))];
   }
 
+  /** A SetNowPlayingClient/SetNowPlayingPlayer routing selection chose the current client (not the legacy first-state fallback). */
+  get routingSelected(): boolean {
+    return this.routed;
+  }
+
   /**
    * Cache bypass requires a device routing selection, not the legacy first-state fallback.
    * A selected empty client (idle TV) with no selected player is itself a definitive nothing-playing snapshot.
    */
   get hasSelectedSnapshot(): boolean {
-    return this.routingSelected && (this.hasSnapshot ||
+    return this.routed && (this.hasSnapshot ||
       (this.activeClient === EMPTY_CLIENT && this.clients.get(EMPTY_CLIENT)?.active === undefined));
   }
 
@@ -98,7 +103,7 @@ export class PlayerState {
     client.info = { ...client.info, ...clientInfo };
     const identifier = path.player?.identifier ?? DEFAULT_PLAYER;
     if (type === MessageType.SetNowPlayingClient) {
-      this.routingSelected = true;
+      this.routed = true;
       this.selected = true;
       // pyatv: an empty client is the EMPTY_CLIENT bundle, a normal active client with no players.
       this.activeClient = bundle;
@@ -113,7 +118,7 @@ export class PlayerState {
     if (type === MessageType.SetNowPlayingPlayer) {
       client.active = path.player?.identifier || null;
       if (!this.selected) { this.activeClient = bundle; this.selected = true; }
-      if (this.activeClient === bundle) this.routingSelected = true;
+      if (this.activeClient === bundle) this.routed = true;
       return this.activeClient === bundle;
     }
     if (type === MessageType.RemovePlayer) {

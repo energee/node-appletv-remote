@@ -294,6 +294,20 @@ describe('cache-first normalized state reads', () => {
     await expect(atv.getNowPlaying()).rejects.toThrow('No active-player state received');
   });
 
+  it.each([
+    ['without playerPath', { playbackState: 1 }],
+    ['for another player', { playerPath: path('app', 'other'), playbackState: 1 }],
+  ])('resolves the routed player snapshot when a valid queue reply arrives %s', async (_label, reply) => {
+    const atv = device();
+    (atv as any).connection = { sendMRPMessageAndWait: async () => {
+      const response = { type: 4, '.setStateMessage': reply };
+      (atv as any).handleMRPMessage(response);
+      return response;
+    } };
+    deliver(atv, MessageType.SetNowPlayingClient, 'setNowPlayingClientMessage', { client: { bundleIdentifier: 'app' } });
+    await expect(atv.getNowPlaying()).resolves.toMatchObject({ hasPlayback: false, appBundleIdentifier: 'app' });
+  });
+
   it('a decoded empty queue reply cannot validate an earlier unrouted push', async () => {
     const atv = device();
     // Wire type 4 with an empty SetStateMessage extension: no playbackState or playerPath on the wire.

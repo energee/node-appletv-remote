@@ -648,7 +648,8 @@ export class AppleTV extends EventEmitter {
    * Return the received active-player snapshot used by nowPlaying events after device routing selection.
    * A selected empty client (idle TV) with no selected player resolves as nothing playing without a queue request.
    * Without selected state evidence, request a queue reply; its timeout/error still rejects.
-   * A reply without active-player state rejects rather than inventing absent playback.
+   * After a routing selection, a successful reply resolves with the selected player's snapshot (nothing playing if it has no state).
+   * Without one, a reply lacking state for the model's current player rejects rather than inventing absent playback.
    * Requires an open connection and does not extrapolate position or force a refresh.
    */
   async getNowPlaying(): Promise<NowPlayingInfo> {
@@ -656,6 +657,7 @@ export class AppleTV extends EventEmitter {
     if (!this.playerState.hasSelectedSnapshot) {
       // The transport delivers replies through mrp-message before resolving its waiter.
       const response = await this.getState();
+      if (this.playerState.routingSelected) return this.nowPlaying;
       const state = response['.setStateMessage'] as Record<string, unknown> | undefined;
       const path = state?.playerPath as { client?: { bundleIdentifier?: string }; player?: { identifier?: string } } | undefined;
       const replyHasState = state && (typeof state.playbackState === 'number' || state.playbackQueue !== undefined ||
@@ -663,7 +665,7 @@ export class AppleTV extends EventEmitter {
       const replyMatchesPlayer = this.nowPlaying.appBundleIdentifier === (path?.client?.bundleIdentifier ?? '') &&
         this.nowPlaying.playerIdentifier === (path?.player?.identifier ?? 'MediaRemote-DefaultPlayer');
       // A real reply may establish legacy unrouted state; an empty/unrelated reply cannot validate an earlier push.
-      if (!this.playerState.hasSelectedSnapshot && !(replyHasState && replyMatchesPlayer && this.playerState.hasSnapshot)) {
+      if (!(replyHasState && replyMatchesPlayer && this.playerState.hasSnapshot)) {
         throw new Error('No active-player state received');
       }
     }

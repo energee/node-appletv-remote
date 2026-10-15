@@ -133,8 +133,10 @@ in this connection; the legacy first-state fallback does not qualify for cache b
 Client/player identity and supported commands alone do not qualify, except that a selected
 empty client (an idle TV's empty SetNowPlayingClient) with no selected player resolves as nothing playing. If no selected-player
 state has arrived, it still requests a queue reply and propagates the 10 s timeout
-or transport error; a reply without selected-player state rejects with
-`No active-player state received`, not "nothing playing." It does not force a refresh
+or transport error. After a routing selection, a successful reply resolves with the
+selected player's snapshot (nothing playing if that player has no state), even when the
+reply lands on another player. Without a routing selection, a reply without state for the
+model's current player rejects with `No active-player state received`. It does not force a refresh
 or wait for a future push, and a push during a pending request does not hide that
 request's timeout. A successful queue reply may still establish legacy unrouted state
 for compatibility, but it must contain state for the model's current player; an
