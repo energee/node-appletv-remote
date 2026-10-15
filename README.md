@@ -51,10 +51,10 @@ Playback/text commands open only AirPlay/MRP; app/account/power commands and ext
 
 Numeric values must be finite decimal numbers in the documented range. Required IDs must be nonblank. Quote text to preserve spaces; `atv text set ""` explicitly sets empty text. Invalid arguments fail before reading credentials, discovery, or connection. For one-shot commands, operation and connection failures print an error to stderr and exit nonzero; one-shot operations close their connection even on failure. Absolute volume can fail if the TV does not report its output device. These commands depend on device/app support and do not bypass pairing. Extra positional arguments are rejected instead of ignored. Progress goes to stderr so app/account list and power results remain clean on stdout. Empty scans and pairing cancellation/no-device selections retain their existing successful exit behavior.
 
-Two timing knobs exist for older or slower Apple TVs. Both default to `0`:
+Two CLI timing knobs guard HID keys, which the Apple TV never acknowledges. Set either to `0` for faster one-shot commands:
 
-- `ATV_SETTLE_MS`: pause after the MRP handshake before sending anything (previously a fixed 500 ms). Library equivalent: `atv.connect(credentials, { settleMs: 500 })`.
-- `ATV_POST_SEND_MS`: pause after a one-shot key/playback/text/Companion operation, before disconnecting (previously a fixed 1000 ms).
+- `ATV_SETTLE_MS` (default 500): pause after the MRP handshake before sending anything. The library defaults to `0`; opt in with `atv.connect(credentials, { settleMs: 500 })`.
+- `ATV_POST_SEND_MS` (default 1000): pause after a one-shot key/playback/text/Companion operation, before disconnecting.
 
 ```
 $ atv state
@@ -417,7 +417,7 @@ classes emit `error` only when a listener exists; pending work still rejects and
 still fires without one. There is no automatic reconnect or retry.
 
 `await atv.close()` shuts down local sockets without RTSP TEARDOWN. If touch was started,
-it first cancels the gesture and attempts Companion touch/session cleanup; cleanup failure
+it first cancels the gesture and attempts Companion touch/session cleanup (an unfinished touch startup is abandoned, not awaited); cleanup failure
 still closes both transports and rejects (both teardown failures are retained in an AggregateError). Without touch registrations, socket shutdown is immediate. Explicit close resets runtime availability once and notifies after both transports are cleared.
 Repeated close is safe. A second connect on
 an open or connecting connection rejects. Close cancels pending TCP setup as well as
@@ -432,8 +432,8 @@ Intentional close suppresses late write errors. Synchronous Companion write fail
 as well as terminating the session. Invalid HTTP/RTSP
 Content-Length values, headers over 64 KiB, bodies or DataStream frames over 16 MiB, and acknowledgment encryption/write failures terminate the session
 rather than hanging or escaping socket callbacks. DataStream sizes smaller than the 32-byte
-header reject instead of leaving a non-progressing receive loop. `close` (or `companionClose`) may fire
-during failed setup before the corresponding connect event. Failed setup
+header reject instead of leaving a non-progressing receive loop. `close` (or `companionClose`) fires only
+after the matching `connect` (or `companionConnect`); a failed or canceled setup reports only through its rejected promise. Failed setup
 does not leave a command-capable AppleTV connection. Receiver compatibility (including
 Apple TV HD state responses) still requires device evidence; a timeout is not proof that
 nothing is playing.

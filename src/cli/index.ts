@@ -23,6 +23,15 @@ const CREDS_FILE = join(process.env.HOME ?? '.', '.atv-credentials.json');
 /** Last-known address of each paired device, so commands can skip the mDNS scan. */
 const DEVICES_FILE = join(process.env.HOME ?? '.', '.atv-devices.json');
 
+/** Non-negative ms from an env var, or `fallback` when unset/invalid; `0` disables the wait. */
+function envMs(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return process.env[name]?.trim() && Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+// HID keys get no device acknowledgment, so the CLI waits before trusting a send (old fixed values).
+const settleMs = (): number => envMs('ATV_SETTLE_MS', 500);
+const postSendMs = (): number => envMs('ATV_POST_SEND_MS', 1000);
+
 /** Ask one question on stdin and resolve with the raw answer. */
 function prompt(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -151,7 +160,7 @@ async function connectToDevice(deviceId?: string): Promise<AppleTV> {
     const atv = new AppleTV(device);
     atv.on('error', (err: Error) => console.error(`AirPlay error: ${err.message}`));
     try {
-      await atv.connect(credentials, { settleMs: Number(process.env.ATV_SETTLE_MS) || 0 });
+      await atv.connect(credentials, { settleMs: settleMs() });
     } catch (e) {
       await atv.close();
       throw e;
@@ -196,7 +205,7 @@ async function cmdCommand(command: string, deviceId?: string) {
     if (button) await atv[button]();
     else await atv.sendKeyCommand(command as Key);
     console.log(`Sent: ${command}`);
-    await delay(Number(process.env.ATV_POST_SEND_MS) || 0);
+    await delay(postSendMs());
   } finally {
     await atv.close();
   }
@@ -556,7 +565,7 @@ export async function main(argv: string[]): Promise<void> {
     if (Array.isArray(result)) {
       for (const item of result) console.log(`${'bundleId' in item ? item.bundleId : item.id}\t${item.name}`);
     } else if (result !== undefined) console.log(result);
-    await delay(Number(process.env.ATV_POST_SEND_MS) || 0);
+    await delay(postSendMs());
   } finally {
     await atv.close();
   }

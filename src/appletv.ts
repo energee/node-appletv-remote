@@ -181,6 +181,7 @@ export interface CompanionEvent {
  * Events: `connect`, `close`, `error`, `message`, `nowPlaying`, `supportedCommands`,
  * `playbackQueue`, `featureAvailability`, `keyboard`, `textInput`, `volume`, `powerState`, `companionConnect`,
  * `companionClose`, `companionError`, `companionEvent`, `outputDevices`.
+ * `close`/`companionClose` fire only after the matching connect event; failed setup only rejects.
  */
 export class AppleTV extends EventEmitter {
   readonly name: string;
@@ -232,6 +233,8 @@ export class AppleTV extends EventEmitter {
   /** Output device for SetVolume, from the Apple TV's DeviceInfo reply (clusterID or deviceUID). */
   private outputDeviceUID?: string;
   private reportedOutputs: OutputDevice[] = [];
+  /** Transports that emitted connect/companionConnect; only these report close events. */
+  private readyTransports = new WeakSet<object>();
   /** Identifier of the reporting device when it leads the group; not a routable output in `set`. */
   private reportedLeader?: string;
   private pendingRouting?: { identifier: string; check: () => void; reject: (error: Error) => void };
@@ -280,7 +283,6 @@ export class AppleTV extends EventEmitter {
       ? new AirPlayConnection(this.address, this.port, credentials, options.settleMs)
       : new LegacyMRPConnection(this.mrpAddress, this.mrpPort!, credentials, options.settleMs);
     this.airPlayErrorSource = connection;
-    let ready = false;
     connection.on('close', () => {
       if (this.connection !== connection) return;
       this.connection = undefined;
@@ -289,7 +291,7 @@ export class AppleTV extends EventEmitter {
       this.reportedLeader = undefined;
       this.resetRuntimeState();
       // A failed setup reports through connect()'s rejection, never as `close`.
-      if (ready) this.emit('close');
+      if (this.readyTransports.has(connection)) this.emit('close');
     });
     connection.on('error', (err) => { if (this.airPlayErrorSource === connection && this.listenerCount('error')) this.emit('error', err); });
     connection.on('mrp-message', (msg: Record<string, unknown>) => {
@@ -300,7 +302,7 @@ export class AppleTV extends EventEmitter {
     try {
       await connection.connect();
       if (this.connection !== connection) throw new Error('Connection closed during setup');
-      ready = true;
+      this.readyTransports.add(connection);
       this.emit('connect');
     } catch (err) {
       connection.close();
@@ -333,8 +335,8 @@ export class AppleTV extends EventEmitter {
       this.reportedOutputs = [];
       this.reportedLeader = undefined;
       this.resetRuntimeState();
-      if (companion) this.emit('companionClose');
-      if (connection) this.emit('close');
+      if (companion && this.readyTransports.has(companion)) this.emit('companionClose');
+      if (connection && this.readyTransports.has(connection)) this.emit('close');
     }
   }
 
@@ -363,14 +365,13 @@ export class AppleTV extends EventEmitter {
 
     const connection = this.companionConnection = new CompanionConnection(this.companionAddress, port, credentials);
     this.companionErrorSource = connection;
-    let ready = false;
     connection.on('close', () => {
       if (this.companionConnection !== connection) return;
       this.gestureController?.abort();
       this.touchSession = undefined;
       this.activeTouch = undefined;
       this.companionConnection = undefined;
-      if (ready) this.emit('companionClose');
+      if (this.readyTransports.has(connection)) this.emit('companionClose');
     });
     connection.on('error', (err) => { if (this.companionErrorSource === connection) this.emit('companionError', err); });
     connection.on('event', (event: CompanionEvent) => {
@@ -381,7 +382,7 @@ export class AppleTV extends EventEmitter {
     try {
       await connection.connect();
       if (this.companionConnection !== connection) throw new Error('Companion closed during setup');
-      ready = true;
+      this.readyTransports.add(connection);
       this.emit('companionConnect');
     } catch (err) {
       connection.close();
