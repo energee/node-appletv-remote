@@ -8,15 +8,14 @@
 
 import type { Socket } from 'node:net';
 import { connectSocket } from '../connection.js';
-import { generateKeyPairSync, sign, createPrivateKey, randomUUID } from 'node:crypto';
+import { generateKeyPairSync, sign, randomUUID } from 'node:crypto';
 import { TlvTag, tlvEncode, tlvDecode } from '../util/tlv.js';
-import { hkdfSha512, encryptChaCha20, decryptChaCha20, ED25519_PKCS8_PREFIX } from '../util/crypto.js';
+import { hkdfSha512, encryptChaCha20, decryptChaCha20, ed25519PrivateKeyFromSeed } from '../util/crypto.js';
 import { SRPClient } from '../auth/srp.js';
 import { FrameType, encodeFrame, parseFrames, type Frame } from './framing.js';
 import { opackEncode, opackDecode, type OpackDict, type OpackValue } from './opack.js';
 import type { HAPCredentials } from '../auth/types.js';
 
-/** DER prefix that turns a raw 32-byte Ed25519 seed into PKCS#8 for node:crypto import. */
 
 /**
  * One pair-setup attempt over its own TCP connection. Call start(), show the user the
@@ -202,11 +201,7 @@ export class CompanionPairSetup {
     const clientIdBuf = Buffer.from(this.clientId);
     const deviceInfo = Buffer.concat([signingKey, clientIdBuf, this.edPublicKeyRaw]);
 
-    const edKey = createPrivateKey({
-      key: Buffer.concat([ED25519_PKCS8_PREFIX, this.edPrivateKeyRaw]),
-      format: 'der',
-      type: 'pkcs8',
-    });
+    const edKey = ed25519PrivateKeyFromSeed(this.edPrivateKeyRaw);
     const signature = sign(null, deviceInfo, edKey);
 
     const subTlv = tlvEncode({

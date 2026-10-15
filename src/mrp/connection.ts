@@ -107,9 +107,7 @@ export abstract class MRPConnection extends EventEmitter {
       this.emit('mrp-message', msg);
     } finally {
       if (!this.closed && generation === this.mrpGeneration) {
-        const idx = this.pendingMRPResolvers.findIndex(
-          (r) => (r.type === undefined || r.type === msg.type) && (r.identifier === undefined || r.identifier === msg.identifier),
-        );
+        const idx = this.pendingMRPResolvers.findIndex(entry => this.matchesWaiter(entry, msg));
         if (idx >= 0) this.pendingMRPResolvers.splice(idx, 1)[0].resolve(msg);
       }
     }
@@ -133,6 +131,11 @@ export abstract class MRPConnection extends EventEmitter {
       this.pendingMRPResolvers.find(entry => entry.identifier === identifier)?.reject(err);
     });
     return waitPromise;
+  }
+
+  /** A waiter matches when its type (if set) and identifier (if set) equal the message's. */
+  protected matchesWaiter(entry: { type?: number; identifier?: string }, msg: Record<string, unknown>): boolean {
+    return (entry.type === undefined || entry.type === msg.type) && (entry.identifier === undefined || entry.identifier === msg.identifier);
   }
 
   /** Reject all waiters and release their timers on transport loss. */

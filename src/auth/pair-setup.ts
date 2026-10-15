@@ -4,9 +4,9 @@
  * credentials that PairVerify / AirPlayConnection use on later connections.
  */
 
-import { generateKeyPairSync, sign, createPrivateKey, randomUUID } from 'node:crypto';
+import { generateKeyPairSync, sign, randomUUID } from 'node:crypto';
 import { TlvTag, tlvEncode, tlvDecode } from '../util/tlv.js';
-import { hkdfSha512, encryptChaCha20, decryptChaCha20, ED25519_PKCS8_PREFIX } from '../util/crypto.js';
+import { hkdfSha512, encryptChaCha20, decryptChaCha20, ed25519PrivateKeyFromSeed } from '../util/crypto.js';
 import { SRPClient } from './srp.js';
 import { PersistentHttp } from '../util/http.js';
 import type { HAPCredentials } from './types.js';
@@ -141,15 +141,7 @@ export class PairSetup {
     const clientIdBuf = Buffer.from(this.clientId);
     const deviceInfo = Buffer.concat([signingKey, clientIdBuf, this.edPublicKeyRaw]);
 
-    // Sign with Ed25519 (raw 32-byte seed wrapped in a PKCS#8 DER prefix)
-    const edKey = createPrivateKey({
-      key: Buffer.concat([
-        ED25519_PKCS8_PREFIX,
-        this.edPrivateKeyRaw,
-      ]),
-      format: 'der',
-      type: 'pkcs8',
-    });
+    const edKey = ed25519PrivateKeyFromSeed(this.edPrivateKeyRaw);
     const signature = sign(null, deviceInfo, edKey);
 
     // Build sub-TLV for encrypted data

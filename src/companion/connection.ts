@@ -12,12 +12,9 @@ import {
   diffieHellman,
   sign,
   verify as cryptoVerify,
-  createPublicKey,
-  createPrivateKey,
-  type KeyObject,
 } from 'node:crypto';
 import { TlvTag, tlvEncode, tlvDecode } from '../util/tlv.js';
-import { hkdfSha512, encryptChaCha20, decryptChaCha20, X25519_SPKI_PREFIX, ED25519_SPKI_PREFIX, ED25519_PKCS8_PREFIX } from '../util/crypto.js';
+import { hkdfSha512, encryptChaCha20, decryptChaCha20, x25519PublicKeyFromRaw, ed25519PublicKeyFromRaw, ed25519PrivateKeyFromSeed } from '../util/crypto.js';
 import { FrameType, encodeFrame, parseFrames, type Frame } from './framing.js';
 import { CompanionSession } from './companion-session.js';
 import {
@@ -25,34 +22,6 @@ import {
 } from './opack.js';
 import type { HAPCredentials } from '../auth/types.js';
 
-// DER prefixes that turn raw 32-byte keys into SPKI/PKCS#8 for node:crypto import.
-
-/** Import a raw 32-byte X25519 public key. */
-function x25519PublicKeyFromRaw(raw: Buffer): KeyObject {
-  return createPublicKey({
-    key: Buffer.concat([X25519_SPKI_PREFIX, raw]),
-    format: 'der',
-    type: 'spki',
-  });
-}
-
-/** Import a raw 32-byte Ed25519 public key. */
-function ed25519PublicKeyFromRaw(raw: Buffer): KeyObject {
-  return createPublicKey({
-    key: Buffer.concat([ED25519_SPKI_PREFIX, raw]),
-    format: 'der',
-    type: 'spki',
-  });
-}
-
-/** Import an Ed25519 private key from its 32-byte seed. */
-function ed25519PrivateKeyFromSeed(seed: Buffer): KeyObject {
-  return createPrivateKey({
-    key: Buffer.concat([ED25519_PKCS8_PREFIX, seed]),
-    format: 'der',
-    type: 'pkcs8',
-  });
-}
 
 /** Largest request ID an Apple TV echoes unchanged (one-byte OPACK integers are signed). */
 const MAX_TRANSFER_ID = 127;

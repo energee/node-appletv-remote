@@ -5,7 +5,7 @@ import { randomBytes, createPrivateKey, createPublicKey, diffieHellman, createHa
 import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { audioPacket, timingReply, syncPacket, PacketHistory, FRAMES_PER_PACKET, SAMPLE_RATE, PACKET_BYTES } from './packets.js';
-import { X25519_SPKI_PREFIX, X25519_PKCS8_PREFIX, ED25519_PKCS8_PREFIX } from '../util/crypto.js';
+import { x25519PublicKeyFromRaw, X25519_PKCS8_PREFIX, ED25519_PKCS8_PREFIX } from '../util/crypto.js';
 
 /** Finite raw PCM chunks; streamed chunks are Buffers of at most 65,536 bytes. */
 export type RaopPcmSource = Buffer | AsyncIterable<Buffer>;
@@ -275,7 +275,7 @@ export class RaopStream {
         const response = await client.request('POST', authHeaders, Buffer.concat([Buffer.from([1, 0, 0, 0]), curvePublic, signingPublic]), controller.signal, 5000, '/pair-verify');
         if (response.body.length !== 96) throw new Error('Invalid legacy pair-verify response: expected 96 bytes');
         const receiverPublic = response.body.subarray(0, 32);
-        const shared = diffieHellman({ privateKey: curveKey, publicKey: createPublicKey({ format: 'der', type: 'spki', key: Buffer.concat([X25519_SPKI_PREFIX, receiverPublic]) }) });
+        const shared = diffieHellman({ privateKey: curveKey, publicKey: x25519PublicKeyFromRaw(receiverPublic) });
         let key: Buffer | undefined;
         let iv: Buffer | undefined;
         let signed: Buffer | undefined;
