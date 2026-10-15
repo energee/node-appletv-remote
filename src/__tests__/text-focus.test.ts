@@ -2,13 +2,15 @@
  * Keyboard text-focus state from Companion RTI: the `_tiStart` reply carries `_tiD` only when a
  * text field is focused, and a started session then receives `_tiStarted`/`_tiStopped` events.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppleTV, KeyboardFocusState } from '../appletv.js';
 import type { CompanionEvent } from '../appletv.js';
 import { CompanionConnection } from '../companion/connection.js';
 import { Credentials } from '../credentials.js';
 import type { OpackDict, OpackValue } from '../companion/opack.js';
 
+const credentials = new Credentials({ clientId: 'test', serverId: 'server', clientLTSK: Buffer.alloc(32), clientLTPK: Buffer.alloc(32), serverLTPK: Buffer.alloc(32) });
+const liveDevice = () => new AppleTV({ name: 'TV', address: '127.0.0.1', port: 7000, deviceId: 'test', model: 'test', companionPort: 1234 });
 const device = () => new AppleTV({ name: 'TV', address: '127.0.0.1', port: 7000, deviceId: 'test', model: 'test' });
 
 /** Companion fake whose `_tiStart` reply is focused (`_tiD` present) or unfocused (empty `_c`). */
@@ -31,6 +33,8 @@ const event = (identifier: string, content: OpackDict): CompanionEvent =>
   ({ identifier, data: new Map<OpackValue, OpackValue>([['_i', identifier], ['_t', 1], ['_c', content]]) });
 
 describe('text focus state', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it('starts unknown', () => {
     expect(device().textFocusState).toBe(KeyboardFocusState.Unknown);
   });
@@ -77,15 +81,51 @@ describe('text focus state', () => {
   it('reads events from the live Companion connection and resets when it closes', async () => {
     vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
     vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockResolvedValue(new Map([['_c', new Map()]]));
-    const atv = new AppleTV({ name: 'TV', address: '127.0.0.1', port: 7000, deviceId: 'test', model: 'test', companionPort: 1234 });
-    const credentials = new Credentials({ clientId: 'test', serverId: 'server', clientLTSK: Buffer.alloc(32), clientLTPK: Buffer.alloc(32), serverLTPK: Buffer.alloc(32) });
+    const atv = liveDevice();
     await atv.connectCompanion(credentials);
     const conn = (atv as any).companionConnection as CompanionConnection;
     conn.emit('event', event('_tiStarted', new Map([['_tiD', Buffer.alloc(0)]])));
     expect(atv.textFocusState).toBe(KeyboardFocusState.Focused);
     conn.emit('close');
     expect(atv.textFocusState).toBe(KeyboardFocusState.Unknown);
-    vi.restoreAllMocks();
+  });
+
+  // The TV pushes _tiStarted/_tiStopped only to clients with an open RTI session, so connect opens one.
+  it('connectCompanion opens an RTI session and records focus from its _tiStart reply', async () => {
+    vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
+    const send = vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockImplementation(async (id: string) =>
+      new Map([['_c', id === '_tiStart' ? new Map([['_tiD', Buffer.alloc(0)]]) : new Map()]]));
+    const atv = liveDevice();
+    const seenAtConnect: KeyboardFocusState[] = [];
+    atv.on('companionConnect', () => seenAtConnect.push(atv.textFocusState));
+    await atv.connectCompanion(credentials);
+    expect(send.mock.calls.map(([id]) => id)).toEqual(['_systemInfo', '_tiStart']);
+    expect(seenAtConnect).toEqual([KeyboardFocusState.Focused]);
+  });
+
+  it('a rejected _tiStart at connect leaves focus unknown but keeps Companion connected', async () => {
+    vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
+    vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockImplementation(async (id: string) => {
+      if (id === '_tiStart') throw new Error('Companion _tiStart failed: No request handler');
+      return new Map([['_c', new Map()]]);
+    });
+    const atv = liveDevice();
+    await atv.connectCompanion(credentials);
+    expect(atv.textFocusState).toBe(KeyboardFocusState.Unknown);
+    expect((atv as any).companionConnection).toBeDefined();
+  });
+
+  // Every path agrees: only a Buffer `_tiD` (the archive editText needs) means focused.
+  it('a non-Buffer _tiD counts as unfocused in replies and events', async () => {
+    const atv = device();
+    (atv as any).companionConnection = {
+      sendRequest: vi.fn(async (id: string) => new Map<OpackValue, OpackValue>([['_c', id === '_tiStart' ? new Map([['_tiD', null]]) : new Map()]])),
+      sendMessage: vi.fn(),
+    };
+    await expect(atv.getText()).rejects.toThrow('No text field is focused');
+    expect(atv.textFocusState).toBe(KeyboardFocusState.Unfocused);
+    (atv as any).handleCompanionEvent(event('_tiStarted', new Map([['_tiD', null]])));
+    expect(atv.textFocusState).toBe(KeyboardFocusState.Unfocused);
   });
 
   it('fetchTextFocusState requires Companion', async () => {

@@ -489,14 +489,15 @@ await atv.insertText(' remote');             // 'apple tv remote'
 await atv.getText();                         // read without editing
 await atv.clearText();                       // ''
 
-// Is a text field focused? KeyboardFocusState.Focused / Unfocused / Unknown
-await atv.fetchTextFocusState();             // also cached as atv.textFocusState
-atv.on('textFocusState', (state) => {});     // fires when focus changes
+// Is a text field focused? import { KeyboardFocusState } from 'node-appletv-remote'
+atv.textFocusState;                          // KeyboardFocusState.Focused / Unfocused / Unknown
+atv.on('textFocusState', (state) => {});     // fires when focus changes (session opened by connectCompanion)
+await atv.fetchTextFocusState();             // re-ask the TV; also updates atv.textFocusState
 ```
 
 Text input uses Companion RTI: restart the text session (`_tiStop`/`_tiStart`), read the session UUID and current text from the reply, then send `_tiC` edits. A real Apple TV 4K ignored the older MRP `TextInputMessage`, so text input now needs `connectCompanion()`, and it rejects with `No text field is focused` instead of silently succeeding. `deleteText()` still sends the MRP Delete action.
 
-Text focus comes from the same RTI session: a `_tiStart` reply carries `_tiD` only while a text field is focused. Every `_tiStart` this library sends (from `fetchTextFocusState()` or a text edit) updates `textFocusState`; afterwards the TV can push `_tiStarted`/`_tiStopped` events, which update it and emit `textFocusState` only on change. It starts as `unknown` and returns to `unknown` when Companion closes. This is fixture-tested only; whether a given tvOS version pushes these events to this client is not hardware-verified. The MRP `keyboard` event is separate and only fires on devices that still send KeyboardMessage.
+Text focus comes from the same RTI session: a `_tiStart` reply carries a `_tiD` archive only while a text field is focused. `connectCompanion()` sends `_tiStart` right after `_systemInfo`, because the TV pushes `_tiStarted`/`_tiStopped` events only to clients with an open RTI session; a TV that rejects it just emits `companionError` and leaves the state `unknown`. Every `_tiStart` reply (from connect, `fetchTextFocusState()` or a text edit) and every `_tiStarted`/`_tiStopped` event updates `textFocusState`, which emits only on change. It starts as `unknown` and returns to `unknown` when Companion closes. This is fixture-tested only; whether a given tvOS version pushes these events to this client is not hardware-verified (tracked in #30). The MRP `keyboard` event is separate and only fires on devices that still send KeyboardMessage.
 
 `connectCompanion()` sends `_systemInfo` after pair-verify. Without it, a real Apple TV 4K answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on an Apple TV 4K (tvOS, AppleTV6,2).
 
@@ -584,7 +585,7 @@ atv.on('powerState', (state) => {});       // after subscribePowerState()
 atv.on('supportedCommands', (cmds) => {}); // SupportedCommand[]
 atv.on('playbackQueue', (queue) => {});
 atv.on('keyboard', (kb) => {});            // MRP KeyboardMessage focus (older tvOS)
-atv.on('textFocusState', (state) => {});   // Companion RTI focus; see fetchTextFocusState()
+atv.on('textFocusState', (state) => {});   // Companion RTI focus; KeyboardFocusState, after connectCompanion()
 atv.on('message', (msg) => {});            // every raw MRP message; not sanitized
 atv.on('mrpDiagnostic', (d: MRPDiagnostic) => {}); // opt in before connect; safe routing tokens
 atv.on('close', () => {});
