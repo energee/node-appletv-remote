@@ -1,6 +1,8 @@
 /**
- * One-shot legacy RAOP PCM streaming; supports legacy PIN verification but not HAP/AirPlay 2 audio.
- * The RTSP control client can already switch to HAP-encrypted framing for the AirPlay 2 profile (#22).
+ * One-shot RAOP PCM streaming. Legacy receivers stream L16 with optional legacy PIN verification.
+ * AirPlay 2 receivers (features bit 38 or 48) are classified and their credentials checked, but
+ * AirPlay 2 audio setup is not implemented yet, so `stream()` rejects them before taking the source.
+ * The RTSP control client can already switch to HAP-encrypted framing for that profile (#22).
  */
 import { isIPv4, type Socket } from 'node:net';
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram';
@@ -12,6 +14,7 @@ import { x25519PublicKeyFromRaw, X25519_PKCS8_PREFIX, ed25519PrivateKeyFromSeed 
 import { connectSocket, parseHTTPMessage } from '../connection.js';
 import { encodeDmap } from '../dmap/codec.js';
 import type { HAPSession } from '../util/hap-session.js';
+import type { HAPCredentials } from '../auth/types.js';
 
 /** Finite raw PCM chunks; streamed chunks are Buffers of at most 65,536 bytes. */
 export type RaopPcmSource = Buffer | AsyncIterable<Buffer>;
@@ -24,8 +27,10 @@ export interface RaopStreamOptions {
   volume?: number;
   /** Text metadata requires the receiver's md=0 advertisement. */
   metadata?: RaopMetadata;
-  /** Previously paired legacy AirPlay seed (32 bytes), NOT HAP credentials. No pairing/storage access. */
+  /** Previously paired legacy AirPlay seed (32 bytes), NOT HAP credentials. Legacy receivers only. No pairing/storage access. */
   legacySeed?: Buffer;
+  /** HAP credentials from `PairSetup` (as stored by `atv pair`). Required for, and only accepted by, AirPlay 2 receivers. */
+  credentials?: HAPCredentials;
 }
 interface Response { headers: Record<string, string>; code: number; body: Buffer }
 
@@ -131,6 +136,8 @@ export class RtspClient {
 
 /** Explicit endpoint plus _raop._tcp TXT capabilities; no discovery or credential access. */
 export class RaopStream {
+  /** `airplay2` when features bit 38 (unified media control) or 48 (CoreUtils pairing) is set, else `legacy`. */
+  private readonly profile: 'legacy' | 'airplay2';
   private readonly requiresLegacySeed: boolean;
   /** md=0 advertised at construction; later caller mutations of the TXT record are ignored. */
   private readonly textMetadata: boolean;
@@ -152,10 +159,16 @@ export class RaopStream {
     if (!features || flags.some(value => !/^(?:0x)?[\da-f]{1,8}$/i.test(value))) throw new Error('Unsupported RAOP receiver flags');
     const status = flags.reduce((value, flag) => value | Number.parseInt(flag, 16), 0);
     const featureBits = BigInt('0x' + features[1]) | (BigInt('0x' + (features[2] ?? '0')) << 32n);
-    this.requiresLegacySeed = !!(status & 0x208);
-    // These advertisements select modern setup/encryption, not legacy PIN verification.
-    const modern = featureBits & ((1n << 38n) | (1n << 40n) | (1n << 43n) | (1n << 48n));
-    if (!has('cn', '0') || !has('et', '0') || !has('tp', 'UDP') || txt.sr !== '44100' || txt.ss !== '16' || txt.ch !== '2' || (txt.pw !== undefined && txt.pw !== 'false') || (status & 0x80) || modern || txt.act === '2' || txt.acl === '1') {
+    this.profile = featureBits & ((1n << 38n) | (1n << 48n)) ? 'airplay2' : 'legacy';
+    // Password and access control fail closed for both profiles.
+    if ((txt.pw !== undefined && txt.pw !== 'false') || (status & 0x80) || txt.act === '2' || txt.acl === '1') {
+      throw new Error('Unsupported RAOP receiver: password or access control required');
+    }
+    // Legacy-only rules. Apple TVs advertise flags=0x244 (includes 0x200), so the PIN rule must not apply to AirPlay 2.
+    this.requiresLegacySeed = this.profile === 'legacy' && !!(status & 0x208);
+    // Bits 40 (buffered audio) and 43 (system pairing) without 38/48 need setup legacy RAOP cannot do.
+    const modernOnly = featureBits & ((1n << 40n) | (1n << 43n));
+    if (this.profile === 'legacy' && (!has('cn', '0') || !has('et', '0') || !has('tp', 'UDP') || txt.sr !== '44100' || txt.ss !== '16' || txt.ch !== '2' || modernOnly)) {
       throw new Error('Unsupported RAOP receiver: requires legacy UDP unencrypted PCM16 stereo 44100 Hz');
     }
   }
@@ -170,10 +183,15 @@ export class RaopStream {
     if (Buffer.isBuffer(pcm) ? pcm.length === 0 || pcm.length % 4 : !pcm || typeof pcm[Symbol.asyncIterator] !== 'function') throw new Error('Expected non-empty complete PCM16 stereo frames or an async Buffer source');
     if (options.volume !== undefined) this.volumeBody(options.volume);
     if (options.metadata) this.metadataBody(options.metadata);
+    if (this.profile === 'airplay2' && !options.credentials) throw new Error('AirPlay 2 RAOP receiver requires HAP credentials');
+    if (this.profile === 'airplay2' && options.legacySeed !== undefined) throw new Error('RAOP legacy seed is not used by AirPlay 2 receivers');
+    if (this.profile === 'legacy' && options.credentials !== undefined) throw new Error('HAP credentials are not used by legacy RAOP receivers');
     if (this.requiresLegacySeed && !options.legacySeed) throw new Error('RAOP receiver requires a previously paired legacy seed');
     if (options.legacySeed !== undefined && (!Buffer.isBuffer(options.legacySeed) || options.legacySeed.length !== 32)) throw new Error('RAOP legacy seed must contain 32 bytes');
     if (options.signal !== undefined && !(options.signal instanceof AbortSignal)) throw new Error('RAOP signal must be an AbortSignal');
     if (options.signal?.aborted) throw new Error('RAOP aborted');
+    // Fails closed before ownership until AirPlay 2 audio setup lands (#22).
+    if (this.profile === 'airplay2') throw new Error('AirPlay 2 audio streaming is not implemented yet');
     if (this.used) throw new Error('RAOP stream is one-shot');
     this.used = true;
     const legacySeed = options.legacySeed ? Buffer.from(options.legacySeed) : undefined;
