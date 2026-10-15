@@ -113,8 +113,18 @@ export enum PowerState {
   On = 'on',
 }
 
+/** Every button action mode, in documentation order. */
+export const INPUT_ACTIONS = ['singleTap', 'doubleTap', 'hold'] as const;
+
+/** Text-field focus from Companion RTI (`_tiStart` reply, `_tiStarted`/`_tiStopped` events). */
+export enum KeyboardFocusState {
+  Unknown = 'unknown',
+  Unfocused = 'unfocused',
+  Focused = 'focused',
+}
+
 /** Button action timing: tap retains existing defaults; hold lasts one second. */
-export type InputAction = 'singleTap' | 'doubleTap' | 'hold';
+export type InputAction = typeof INPUT_ACTIONS[number];
 /** Companion touch phase values. */
 export enum TouchAction { Press = 1, Hold = 3, Release = 4, Click = 5 }
 /** A currently selected output, not a discovered/available AirPlay receiver. */
@@ -122,7 +132,7 @@ export interface OutputDevice { name: string; identifier: string }
 
 /** Reject invalid actions before any input is sent. */
 function validateAction(action: InputAction): void {
-  if (!['singleTap', 'doubleTap', 'hold'].includes(action)) throw new Error(`Unsupported input action: ${action}`);
+  if (!INPUT_ACTIONS.includes(action)) throw new Error(`Unsupported input action: ${action}`);
 }
 /** Touch coordinates are integral device units, inclusive 0..1000. */
 function validateCoordinates(...coordinates: number[]): void {
@@ -160,6 +170,11 @@ function powerStateFromStatus(state: unknown): PowerState {
   return PowerState.Unknown;
 }
 
+/** RTI focus from a `_tiStart` reply or `_tiStarted`/`_tiStopped` content: focused only with a `_tiD` archive (a Buffer, as text edits need). */
+function textFocusFrom(content: OpackDict): KeyboardFocusState {
+  return Buffer.isBuffer(content.get('_tiD')) ? KeyboardFocusState.Focused : KeyboardFocusState.Unfocused;
+}
+
 /** The `contentItems` of a SetState reply from requestPlaybackQueue/getState (empty if none). */
 export function contentItems(response: Record<string, unknown>): Record<string, unknown>[] {
   const setState = response['.setStateMessage'] as { playbackQueue?: { contentItems?: unknown } } | undefined;
@@ -180,7 +195,7 @@ export interface CompanionEvent {
  * for Companion features; methods throw if their connection is not open.
  *
  * Events: `connect`, `close`, `error`, `message`, `mrpDiagnostic`, `nowPlaying`, `supportedCommands`,
- * `playbackQueue`, `featureAvailability`, `keyboard`, `textInput`, `volume`, `powerState`, `companionConnect`,
+ * `playbackQueue`, `featureAvailability`, `keyboard`, `textInput`, `textFocusState`, `volume`, `powerState`, `companionConnect`,
  * `companionClose`, `companionError`, `companionEvent`, `outputDevices`.
  * `close`/`companionClose` fire only after the matching connect event; failed setup only rejects.
  */
@@ -201,6 +216,30 @@ export class AppleTV extends EventEmitter {
   private volumeAvailability?: Record<string, unknown>;
   /** Last normalized active-player snapshot; also emitted as nowPlaying. */
   nowPlaying = new NowPlayingInfo({ hasPlayback: false }, {});
+
+  /**
+   * Volume capabilities arrive pushed (type 17), as the reply to our handshake request (type 63),
+   * or as a later change for one output device (type 64, applied only for ours). A pushed type 17
+   * without fields clears them; a type 63 or 64 without capabilities leaves earlier evidence alone.
+   */
+  private handleVolumeCapabilities(msg: Record<string, unknown>): void {
+    let volume: Record<string, unknown> | undefined;
+    if (msg.type === MessageType.VolumeControlAvailability) {
+      volume = msg['.volumeControlAvailabilityMessage'] as Record<string, unknown> | undefined;
+      this.volumeAvailability = volume ? { ...this.volumeAvailability, ...volume } : undefined;
+      this.emit('featureAvailability');
+      return;
+    }
+    if (msg.type === MessageType.GetVolumeControlCapabilitiesResult) {
+      volume = (msg['.getVolumeControlCapabilitiesResultMessage'] as { capabilities?: Record<string, unknown> } | undefined)?.capabilities;
+    } else if (msg.type === MessageType.VolumeControlCapabilitiesDidChange) {
+      const change = msg['.volumeControlCapabilitiesDidChangeMessage'] as { capabilities?: Record<string, unknown>; outputDeviceUID?: string } | undefined;
+      if (change?.outputDeviceUID && change.outputDeviceUID === this.outputDeviceUID) volume = change.capabilities;
+    }
+    if (!volume) return;
+    this.volumeAvailability = { ...this.volumeAvailability, ...volume };
+    this.emit('featureAvailability');
+  }
 
   /** Advertised command: missing = unsupported, disabled = temporarily unavailable. */
   featureAvailability(feature: Feature): FeatureAvailability {
@@ -244,10 +283,12 @@ export class AppleTV extends EventEmitter {
   private activeTouch?: { x: number; y: number };
   private gestureController?: AbortController;
   private gestureBusy = false;
-  /** Last absolute volume (0..100) reported by VolumeDidChange; undefined until one arrives. */
+  /** Last absolute volume (0..100) reported by VolumeDidChange for our output device; undefined until one arrives. A TV that reports no absolute volume control (`setVolume` unavailable or unsupported) has not been seen to send one. */
   volume?: number;
   /** Last power state from fetchPowerState() or a SystemStatus event. */
   powerState: PowerState = PowerState.Unknown;
+  /** Last text-field focus from Companion RTI; set by connectCompanion()'s `_tiStart` reply, then `_tiStarted`/`_tiStopped` events; unknown before Companion connects and after it closes. */
+  textFocusState: KeyboardFocusState = KeyboardFocusState.Unknown;
 
   constructor(info: DiscoveredDeviceInfo) {
     super();
@@ -340,6 +381,7 @@ export class AppleTV extends EventEmitter {
     this.reportedOutputs = [];
     this.reportedLeader = undefined;
     this.resetRuntimeState();
+    this.updateTextFocusState(KeyboardFocusState.Unknown);
     if (companion && this.readyTransports.has(companion)) this.emit('companionClose');
     if (connection && this.readyTransports.has(connection)) this.emit('close');
   }
@@ -359,7 +401,9 @@ export class AppleTV extends EventEmitter {
   }
 
   /**
-   * Open the Companion connection and send `_systemInfo`; emits `companionConnect` once ready.
+   * Open the Companion connection, send `_systemInfo`, then open an RTI session (`_tiStart`) so
+   * `textFocusState` is known and `_tiStarted`/`_tiStopped` events can arrive; emits `companionConnect` once ready.
+   * A rejected `_tiStart` only emits `companionError` and leaves `textFocusState` unknown.
    * @throws If no Companion port was given or discovered, or the TV rejects `_systemInfo`.
    */
   async connectCompanion(credentials: HAPCredentials, companionPort?: number): Promise<void> {
@@ -375,6 +419,7 @@ export class AppleTV extends EventEmitter {
       this.touchSession = undefined;
       this.activeTouch = undefined;
       this.companionConnection = undefined;
+      this.updateTextFocusState(KeyboardFocusState.Unknown);
       if (this.readyTransports.has(connection)) this.emit('companionClose');
     });
     connection.on('error', (err) => { if (this.companionErrorSource === connection) this.emit('companionError', err); });
@@ -391,6 +436,9 @@ export class AppleTV extends EventEmitter {
         ['_idsID', credentials.clientId], ['_pubID', this.deviceId], ['_sf', 256], ['_sv', '170.18'],
         ['model', this.model], ['name', this.name],
       ]));
+      // The TV pushes _tiStarted/_tiStopped only to clients with an open RTI session.
+      // Best effort: a TV that rejects _tiStart still serves every other Companion request.
+      await this.startTextSession().catch((err: Error) => this.emit('companionError', err));
       if (this.companionConnection !== connection) throw new Error('Companion closed during setup');
       this.readyTransports.add(connection);
       this.emit('companionConnect');
@@ -518,7 +566,7 @@ export class AppleTV extends EventEmitter {
     await this.sendMediaCommand(46, { repeatMode: state, sendOptions: 0 });
   }
 
-  /** Set absolute volume, 0..100. Needs the output device the Apple TV reported on connect. */
+  /** Set absolute volume, 0..100. Needs the output device the Apple TV reported on connect; ignored by a TV without absolute volume (check `featureAvailability('setVolume')`). */
   async setVolume(level: number): Promise<void> {
     const conn = this.requireConnection();
     if (!this.outputDeviceUID) throw new Error('No output device known for volume control');
@@ -634,20 +682,42 @@ export class AppleTV extends EventEmitter {
   async getText(): Promise<string> { return this.editText('', false); }
 
   /**
+   * Re-ask whether a text field is focused (Companion RTI) and cache it as `textFocusState`.
+   * connectCompanion() already opens the RTI session that receives `_tiStarted`/`_tiStopped`;
+   * this restarts it (`_tiStop`/`_tiStart`) for a fresh answer.
+   */
+  async fetchTextFocusState(): Promise<KeyboardFocusState> {
+    await this.restartTextSession();
+    return this.textFocusState;
+  }
+
+  /**
    * Restart the RTI session for fresh state, then send `_tiC` edits.
    * Modern tvOS ignores the MRP TextInputMessage, so text input needs connectCompanion().
    * @throws If no text field is focused (the `_tiStart` reply has no `_tiD`).
    */
   private async editText(text: string, clear: boolean): Promise<string> {
     const conn = this.requireCompanion();
-    await conn.sendRequest('_tiStop', new Map());
-    const archive = (await this.companionContent('_tiStart')).get('_tiD');
+    const archive = await this.restartTextSession();
     if (!Buffer.isBuffer(archive)) throw new Error('No text field is focused');
     const { sessionUUID, text: current } = readTextSession(archive);
     const send = (payload: Buffer) => conn.sendMessage('_tiC', new Map<OpackValue, OpackValue>([['_tiV', 1], ['_tiD', payload]]));
     if (clear) send(rtiClearTextPayload(sessionUUID));
     if (text) send(rtiInputTextPayload(sessionUUID, text));
     return (clear ? '' : current) + text;
+  }
+
+  /** `_tiStop` then `_tiStart`, so the reply reflects the current field; see startTextSession(). */
+  private async restartTextSession(): Promise<OpackValue | undefined> {
+    await this.requireCompanion().sendRequest('_tiStop', new Map());
+    return this.startTextSession();
+  }
+
+  /** Send `_tiStart`, record focus from its reply, and return the reply's `_tiD` archive. */
+  private async startTextSession(): Promise<OpackValue | undefined> {
+    const content = await this.companionContent('_tiStart');
+    this.updateTextFocusState(textFocusFrom(content));
+    return content.get('_tiD');
   }
 
   /** Send a Delete text-input action to the focused text field. */
@@ -964,12 +1034,22 @@ export class AppleTV extends EventEmitter {
     this.emit('powerState', state);
   }
 
-  /** Re-emit every Companion event and update power state from SystemStatus/TVSystemStatus. */
+  /** Cache a text-focus state and emit `textFocusState` only when it changes. */
+  private updateTextFocusState(state: KeyboardFocusState): void {
+    if (state === this.textFocusState) return;
+    this.textFocusState = state;
+    this.emit('textFocusState', state);
+  }
+
+  /** Re-emit every Companion event; update power state from SystemStatus/TVSystemStatus and text focus from `_tiStarted`/`_tiStopped`. */
   private handleCompanionEvent(event: CompanionEvent): void {
     this.emit('companionEvent', event);
+    const content = event.data.get('_c');
     if (event.identifier === 'SystemStatus' || event.identifier === 'TVSystemStatus') {
-      const content = event.data.get('_c');
       if (content instanceof Map) this.updatePowerState(powerStateFromStatus(content.get('state')));
+    }
+    if (event.identifier === '_tiStarted' || event.identifier === '_tiStopped') {
+      this.updateTextFocusState(content instanceof Map ? textFocusFrom(content) : KeyboardFocusState.Unfocused);
     }
   }
 
@@ -1005,11 +1085,7 @@ export class AppleTV extends EventEmitter {
     const field = PLAYER_STATE_FIELDS[msg.type as MessageType];
     const payload = field ? msg[field] as Record<string, unknown> | undefined : undefined;
     if (payload && this.playerState.update(msg.type as number, payload)) this.publishNowPlaying();
-    if (msg.type === MessageType.VolumeControlAvailability) {
-      const volume = msg['.volumeControlAvailabilityMessage'] as Record<string, unknown> | undefined;
-      this.volumeAvailability = volume ? { ...this.volumeAvailability, ...volume } : undefined;
-      this.emit('featureAvailability');
-    }
+    this.handleVolumeCapabilities(msg);
     this.handleOutputMessage(msg);
 
     // DeviceInfo (type 15): remember the output device for SetVolume (clusterID or deviceUID)

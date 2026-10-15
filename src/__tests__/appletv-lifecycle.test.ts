@@ -25,7 +25,8 @@ it('sends _systemInfo after pair-verify and before companionConnect', async () =
   const tv = new AppleTV({ name: 'Family Room', address: 'offline', port: 7000, deviceId: 'AA:BB:CC:DD:EE:FF', model: 'AppleTV6,2', companionPort: 1234 });
   vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
   const send = vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockResolvedValue(new Map([['_c', new Map()]]));
-  const connected = vi.fn(() => expect(send).toHaveBeenCalledOnce());
+  // _systemInfo goes first; connect then opens an RTI session (_tiStart) before companionConnect.
+  const connected = vi.fn(() => expect(send.mock.calls.map(([id]) => id)).toEqual(['_systemInfo', '_tiStart']));
   tv.on('companionConnect', connected);
   await tv.connectCompanion(credentials);
   expect(send).toHaveBeenCalledWith('_systemInfo', new Map<string, string | number>([

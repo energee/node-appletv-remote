@@ -1,0 +1,14 @@
+// Type 104: tvOS 26 pushes one per now-playing player with when it last played.
+syntax = "proto2";
+
+import "ProtocolMessage.proto";
+import "PlayerPath.proto";
+
+extend ProtocolMessage {
+  optional PlayerClientPropertiesMessage playerClientPropertiesMessage = 86;
+}
+
+message PlayerClientPropertiesMessage {
+  optional PlayerPath playerPath = 1;
+  optional double lastPlayingTimestamp = 2;
+}

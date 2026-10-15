@@ -74,9 +74,17 @@ export class DmapPairing {
     finally { this.starting = false; }
   }
 
-  /** Return the legacy GUID only after a verified callback (does not close the server). */
+  /**
+   * Return the legacy GUID only after a verified callback (does not close the server).
+   * @throws "DMAP remote is not paired" while waiting; a distinct error once five wrong PINs locked
+   * pairing or the five-minute window expired, since neither can still succeed.
+   */
   finish(): string {
-    if (!this.paired) throw new Error('DMAP remote is not paired');
+    if (!this.paired) {
+      if (this.failures >= 5) throw new Error('DMAP pairing locked after five wrong PINs; restart pairing');
+      if (this.deadline && Date.now() > this.deadline) throw new Error('DMAP pairing expired after five minutes; restart pairing');
+      throw new Error('DMAP remote is not paired');
+    }
     return '0x' + this.guid;
   }
 

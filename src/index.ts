@@ -4,7 +4,7 @@
  */
 
 export { scan } from './discovery.js';
-export { AppleTV, Key, TextInputActionType, ShuffleState, RepeatState, PowerState, TouchAction } from './appletv.js';
+export { AppleTV, Key, TextInputActionType, ShuffleState, RepeatState, PowerState, KeyboardFocusState, TouchAction, INPUT_ACTIONS } from './appletv.js';
 export type { KeyboardInfo, TextInputEvent, CompanionEvent, App, UserAccount, ConnectOptions, Feature, FeatureAvailability, InputAction, OutputDevice } from './appletv.js';
 export { CompanionConnection } from './companion/connection.js';
 export { PairSetup } from './auth/pair-setup.js';
