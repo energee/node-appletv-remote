@@ -5,6 +5,7 @@ import { MessageType } from './messages.js';
 
 type Payload = Record<string, any>;
 interface Player {
+  /** Only the SetState fields snapshot() reads (playbackState, displayName); never queue/artwork payloads. */
   state: Payload;
   direct: Payload;
   items: Payload[];
@@ -101,9 +102,12 @@ export class PlayerState {
     }
     if (!this.selected) { this.activeClient = bundle; this.selected = true; client.active = identifier; }
     if (type === MessageType.SetState) {
-      player.state = { ...player.state, ...payload };
+      for (const field of ['playbackState', 'displayName']) {
+        if (payload[field] !== undefined) player.state[field] = payload[field];
+      }
       if (payload.playbackQueue) {
-        player.items = (payload.playbackQueue.contentItems ?? []).map((item: Payload) => ({ ...item, metadata: item.metadata ? { ...item.metadata } : undefined }));
+        // Keep only what snapshots and item updates read, so artwork buffers are not retained.
+        player.items = (payload.playbackQueue.contentItems ?? []).map((item: Payload) => ({ identifier: item.identifier, metadata: item.metadata ? { ...item.metadata } : undefined }));
         player.location = payload.playbackQueue.location ?? 0;
         // Replaced queues must not inherit metadata from a previous track.
         player.direct = {};

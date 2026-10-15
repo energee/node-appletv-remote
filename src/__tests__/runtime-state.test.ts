@@ -131,6 +131,15 @@ describe('unified player state', () => {
     deliver(atv, MessageType.SetState, 'setStateMessage', { playbackState: 3 });
     expect(atv.nowPlaying).toMatchObject({ hasPlayback: false, playbackState: PlaybackState.Stopped });
   });
+  it('retains only snapshot state fields, not queue artwork, from SetState', () => {
+    const atv = device();
+    deliver(atv, MessageType.SetState, 'setStateMessage', { playerPath: path('app'), playbackState: 1, displayName: 'App',
+      playbackQueue: { contentItems: [{ identifier: 'x', artworkData: Buffer.alloc(1024), metadata: { title: 'T' } }] } });
+    const player = (atv as any).playerState.clients.get('app').players.get('MediaRemote-DefaultPlayer');
+    expect(player.state).toEqual({ playbackState: 1, displayName: 'App' });
+    expect(player.items[0].artworkData).toBeUndefined();
+    expect(atv.nowPlaying).toMatchObject({ title: 'T', playbackState: PlaybackState.Playing, appDisplayName: 'App' });
+  });
   it('uses the same snapshot for getNowPlaying and events', async () => {
     const atv = device();
     let emitted: unknown;
