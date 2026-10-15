@@ -131,7 +131,7 @@ unknown/stopped), a queue (including an empty queue), or direct now-playing fiel
 A SetNowPlayingClient/SetNowPlayingPlayer routing selection must also have arrived
 in this connection; the legacy first-state fallback does not qualify for cache bypass.
 Client/player identity and supported commands alone do not qualify, except that a selected
-empty client (an idle TV's empty SetNowPlayingClient) resolves as nothing playing. If no selected-player
+empty client (an idle TV's empty SetNowPlayingClient) with no selected player resolves as nothing playing. If no selected-player
 state has arrived, it still requests a queue reply and propagates the 10 s timeout
 or transport error; a reply without selected-player state rejects with
 `No active-player state received`, not "nothing playing." It does not force a refresh

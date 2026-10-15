@@ -48,10 +48,11 @@ export class PlayerState {
 
   /**
    * Cache bypass requires a device routing selection, not the legacy first-state fallback.
-   * A selected empty client (idle TV) is itself a definitive nothing-playing snapshot.
+   * A selected empty client (idle TV) with no selected player is itself a definitive nothing-playing snapshot.
    */
   get hasSelectedSnapshot(): boolean {
-    return this.routingSelected && (this.hasSnapshot || this.activeClient === EMPTY_CLIENT);
+    return this.routingSelected && (this.hasSnapshot ||
+      (this.activeClient === EMPTY_CLIENT && this.clients.get(EMPTY_CLIENT)?.active === undefined));
   }
 
   /** Received state for the model's current player (also the legacy first-state fallback). Identity/commands alone are not state. */

@@ -218,6 +218,17 @@ describe('cache-first normalized state reads', () => {
     expect(getState).not.toHaveBeenCalled();
   });
 
+  it('requests a queue once the empty client selects a specific player with no state', async () => {
+    const atv = device();
+    (atv as any).connection = {};
+    const error = new Error('Timeout waiting for MRP message type 4');
+    const getState = vi.spyOn(atv, 'getState').mockRejectedValue(error);
+    deliver(atv, MessageType.SetNowPlayingClient, 'setNowPlayingClientMessage', {});
+    deliver(atv, MessageType.SetNowPlayingPlayer, 'setNowPlayingPlayerMessage', { playerPath: { player: { identifier: 'p' } } });
+    await expect(atv.getNowPlaying()).rejects.toBe(error);
+    expect(getState).toHaveBeenCalledOnce();
+  });
+
   it('does not bypass the queue for the first pushed player before any active routing selection', async () => {
     const atv = device();
     (atv as any).connection = {};
