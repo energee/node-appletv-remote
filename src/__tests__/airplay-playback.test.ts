@@ -260,3 +260,17 @@ it.each(['encrypt', 'write'])('cleans a synchronous playback %s failure immediat
     expect(state.pending).toBeUndefined(); expect(state.closed).toBe(true);
   } finally { playback.close(); }
 });
+it('binds IPv6 timing and brackets IPv6 Host and RTSP URI', async () => {
+  const playback = new Playback('::1', 7000, {} as api.HAPCredentials);
+  const state = playback as any;
+  try {
+    await state.openTiming('::1');
+    expect(state.timing.address().family).toBe('IPv6');
+    let sent = '';
+    state.socket = { localAddress: 'fe80::2%en0', write: (data: Buffer) => { sent = data.toString(); }, destroy: vi.fn() };
+    expect(state.uri).toMatch(/^rtsp:\/\/\[fe80::2%25en0\]\//);
+    void state.request('POST', '/feedback', 'RTSP/1.0').catch(() => {});
+    await new Promise(resolve => setImmediate(resolve));
+    expect(sent).toContain('Host: [::1]:7000\r\n');
+  } finally { playback.close(); }
+});

@@ -193,13 +193,15 @@ export class MRPMessage {
     return encodeMessage(type);
   }
 
-  /** Decode a ProtocolMessage; extensions appear as '.fooMessage' keys on the result. */
-  static async decode(
-    buffer: Buffer,
-  ): Promise<protobuf.Message & Record<string, unknown>> {
+  /**
+   * Decode a ProtocolMessage into a plain object; extensions appear as '.fooMessage' keys.
+   * Only fields present on the wire are set: no proto2 defaults (e.g. `playbackState: 0`)
+   * and no empty repeated fields, so `'field' in msg` means the device sent it (pyatv HasField).
+   * Enums stay numeric, int64 become numbers and bytes stay Buffers.
+   */
+  static async decode(buffer: Buffer): Promise<Record<string, unknown>> {
     const ProtocolMessage = lookupType('ProtocolMessage');
-    const decoded = ProtocolMessage.decode(buffer);
-    return decoded as protobuf.Message & Record<string, unknown>;
+    return ProtocolMessage.toObject(ProtocolMessage.decode(buffer), { longs: Number });
   }
 
   /**

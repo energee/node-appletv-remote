@@ -22,7 +22,8 @@ export abstract class MRPConnection extends EventEmitter {
   /** In-memory equality tokens for a bounded capture; discarded with this connection, never persisted. */
   private diagnosticIds = new Map<string, string>();
   protected pendingMRPResolvers: Array<{
-    type: number;
+    /** Undefined matches any type (identifier-only correlation, as pyatv send_and_receive). */
+    type?: number;
     identifier?: string;
     reject: (err: Error) => void;
     resolve: (msg: Record<string, unknown>) => void;
@@ -85,7 +86,7 @@ export abstract class MRPConnection extends EventEmitter {
    * Resolve with the next MRP message of `type` from the data channel.
    * @throws (rejects) after `timeoutMs` with no matching message.
    */
-  protected waitForMRPMessage(type: number, timeoutMs = 5000, identifier?: string): Promise<Record<string, unknown>> {
+  protected waitForMRPMessage(type: number | undefined, timeoutMs = 5000, identifier?: string): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
       if (this.closed) { reject(new Error('Connection closed')); return; }
       const remove = (): void => {
@@ -98,7 +99,7 @@ export abstract class MRPConnection extends EventEmitter {
         resolve: (msg: Record<string, unknown>): void => { remove(); resolve(msg); },
         reject: (err: Error): void => { remove(); reject(err); },
       };
-      const timer = setTimeout(() => entry.reject(new Error(`Timeout waiting for MRP message type ${type}`)), timeoutMs);
+      const timer = setTimeout(() => entry.reject(new Error(`Timeout waiting for MRP message type ${type ?? 'any'}`)), timeoutMs);
       this.pendingMRPResolvers.push(entry);
     });
   }
@@ -125,7 +126,7 @@ export abstract class MRPConnection extends EventEmitter {
     } finally {
       if (!this.closed && generation === this.mrpGeneration) {
         const idx = this.pendingMRPResolvers.findIndex(
-          (r) => r.type === msg.type && (r.identifier === undefined || r.identifier === msg.identifier),
+          (r) => (r.type === undefined || r.type === msg.type) && (r.identifier === undefined || r.identifier === msg.identifier),
         );
         if (idx >= 0) this.pendingMRPResolvers.splice(idx, 1)[0].resolve(msg);
       }
@@ -133,12 +134,12 @@ export abstract class MRPConnection extends EventEmitter {
   }
 
   /**
-   * Send an MRP message and match its existing UUID plus `responseType`.
+   * Send an MRP message and match its existing UUID plus `responseType` (undefined: any type).
    * The waiter is registered before sending so a fast reply is not missed.
    */
   async sendMRPMessageAndWait(
     protobufData: Buffer,
-    responseType: number,
+    responseType: number | undefined,
     timeoutMs = 5000,
   ): Promise<Record<string, unknown>> {
     const request = await MRPMessage.decode(protobufData);
