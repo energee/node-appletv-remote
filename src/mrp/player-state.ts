@@ -20,6 +20,13 @@ interface Client {
 }
 const DEFAULT_PLAYER = 'MediaRemote-DefaultPlayer';
 
+/** Shallow copy whose bytes fields are copied: protobufjs decodes bytes as views of the frame, which can pin a large artwork frame. */
+function detach(fields: Payload): Payload {
+  const copy: Payload = {};
+  for (const [key, value] of Object.entries(fields)) copy[key] = value instanceof Uint8Array ? Buffer.from(value) : value;
+  return copy;
+}
+
 /** Keeps inactive-player updates separate until the device selects that client/player. */
 export class PlayerState {
   private clients = new Map<string, Client>();
@@ -106,14 +113,14 @@ export class PlayerState {
         if (payload[field] !== undefined) player.state[field] = payload[field];
       }
       if (payload.playbackQueue) {
-        // Keep only what snapshots and item updates read, so artwork buffers are not retained.
-        player.items = (payload.playbackQueue.contentItems ?? []).map((item: Payload) => ({ identifier: item.identifier, metadata: item.metadata ? { ...item.metadata } : undefined }));
+        // Keep only what snapshots and item updates read; detach() copies bytes fields so artwork frames are not retained.
+        player.items = (payload.playbackQueue.contentItems ?? []).map((item: Payload) => ({ identifier: item.identifier, metadata: item.metadata ? detach(item.metadata) : undefined }));
         player.location = payload.playbackQueue.location ?? 0;
         // Replaced queues must not inherit metadata from a previous track.
         player.direct = {};
       }
       if (payload.nowPlayingInfo) {
-        const fields = { ...payload.nowPlayingInfo };
+        const fields = detach(payload.nowPlayingInfo);
         if (fields.uniqueIdentifier !== undefined && player.direct.uniqueIdentifier !== undefined && String(fields.uniqueIdentifier) !== String(player.direct.uniqueIdentifier)) {
           player.direct = {};
           player.items = [];
@@ -125,7 +132,7 @@ export class PlayerState {
       for (const item of payload.contentItems ?? []) {
         const existing = player.items.find(candidate => candidate.identifier === item.identifier);
         if (existing && item.metadata) {
-          const changes = { ...item.metadata };
+          const changes = detach(item.metadata);
           existing.metadata = { ...existing.metadata, ...changes };
           if (existing === player.items[player.location]) {
             for (const field of ['title', 'duration', 'elapsedTime', 'playbackRate']) {

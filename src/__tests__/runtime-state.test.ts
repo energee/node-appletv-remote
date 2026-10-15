@@ -140,6 +140,21 @@ describe('unified player state', () => {
     expect(player.items[0].artworkData).toBeUndefined();
     expect(atv.nowPlaying).toMatchObject({ title: 'T', playbackState: PlaybackState.Playing, appDisplayName: 'App' });
   });
+  it('does not retain Buffer views of the frame in nowPlayingInfo or item metadata', () => {
+    const atv = device();
+    const frame = Buffer.alloc(4096);
+    const view = () => frame.subarray(0, 8);
+    deliver(atv, MessageType.SetState, 'setStateMessage', { playerPath: path('app'),
+      nowPlayingInfo: { title: 'D', artworkDataDigest: view() },
+      playbackQueue: { contentItems: [{ identifier: 'x', metadata: { title: 'T', nowPlayingInfoData: view() } }] } });
+    deliver(atv, MessageType.SetState, 'setStateMessage', { playerPath: path('app'), nowPlayingInfo: { title: 'D', artworkDataDigest: view() } });
+    deliver(atv, MessageType.UpdateContentItem, 'updateContentItemMessage', { playerPath: path('app'),
+      contentItems: [{ identifier: 'x', metadata: { artworkURLTemplatesData: view() } }] });
+    const player = (atv as any).playerState.clients.get('app').players.get('MediaRemote-DefaultPlayer');
+    const stored = [...Object.values(player.direct), ...player.items.flatMap((item: any) => Object.values(item.metadata ?? {}))];
+    expect(stored.filter(value => Buffer.isBuffer(value) && value.buffer === frame.buffer)).toEqual([]);
+    expect(atv.nowPlaying.title).toBe('D');
+  });
   it('uses the same snapshot for getNowPlaying and events', async () => {
     const atv = device();
     let emitted: unknown;
