@@ -5,7 +5,7 @@ import { randomBytes, createPrivateKey, createPublicKey, diffieHellman, createHa
 import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { audioPacket, timingReply, syncPacket, PacketHistory, FRAMES_PER_PACKET, SAMPLE_RATE, PACKET_BYTES } from './packets.js';
-import { x25519PublicKeyFromRaw, X25519_PKCS8_PREFIX, ED25519_PKCS8_PREFIX } from '../util/crypto.js';
+import { x25519PublicKeyFromRaw, X25519_PKCS8_PREFIX, ed25519PrivateKeyFromSeed } from '../util/crypto.js';
 import { connectSocket, parseHTTPMessage } from '../connection.js';
 import { encodeDmap } from '../dmap/codec.js';
 
@@ -238,13 +238,12 @@ export class RaopStream {
         // Pinned pyatv LegacySRPAuthHandler uses the seed for BOTH key types.
         // This proves the client key only and does not turn on HAP transport encryption.
         const curveDer = Buffer.concat([X25519_PKCS8_PREFIX, legacySeed]);
-        const signingDer = Buffer.concat([ED25519_PKCS8_PREFIX, legacySeed]);
         let curveKey: ReturnType<typeof createPrivateKey>;
         let signingKey: ReturnType<typeof createPrivateKey>;
         try {
           curveKey = createPrivateKey({ format: 'der', type: 'pkcs8', key: curveDer });
-          signingKey = createPrivateKey({ format: 'der', type: 'pkcs8', key: signingDer });
-        } finally { curveDer.fill(0); signingDer.fill(0); legacySeed.fill(0); }
+          signingKey = ed25519PrivateKeyFromSeed(legacySeed);
+        } finally { curveDer.fill(0); legacySeed.fill(0); }
         const curvePublic = createPublicKey(curveKey).export({ format: 'der', type: 'spki' }).subarray(-32);
         const signingPublic = createPublicKey(signingKey).export({ format: 'der', type: 'spki' }).subarray(-32);
         const authHeaders = { 'Content-Type': 'application/octet-stream', Connection: 'keep-alive' };
