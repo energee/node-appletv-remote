@@ -460,6 +460,7 @@ const OUTPUT_METHODS = { add: 'addOutputDevices', remove: 'removeOutputDevices',
 const DMAP_COMMANDS = {
   up: 'up', down: 'down', left: 'left', right: 'right', select: 'select', menu: 'menu', top_menu: 'topMenu',
   play: 'play', pause: 'pause', stop: 'stop', play_pause: 'playPause', next: 'next', previous: 'previous',
+  volume_up: 'volumeUp', volume_down: 'volumeDown',
 } as const;
 
 /**
@@ -580,6 +581,7 @@ function help(): void {
   atv volume <0..100> [device]
   atv text <set|append> <text> [device] Quote text, including "" for empty text
   atv text clear [device]
+  atv text focus [device]              Print focused, unfocused, or unknown
   atv app list [device]
   atv app launch <bundle-id-or-url> [device]
   atv account list [device]
@@ -717,12 +719,16 @@ export async function main(argv: string[]): Promise<void> {
       if (action === 'clear') {
         argumentsFor(values, 0, 'text clear [device]');
         device = values[0]; operation = (atv) => atv.clearText();
+      } else if (action === 'focus') {
+        argumentsFor(values, 0, 'text focus [device]');
+        device = values[0]; acknowledged = true;
+        operation = (atv) => atv.fetchTextFocusState();
       } else if (action === 'set' || action === 'append') {
         // Empty text is valid; unlike identifiers it must not be trimmed or rejected.
         if (values.length < 1 || values.length > 2 || (values[1] !== undefined && !values[1].trim())) throw new Error(`Usage: atv text ${action} <text> [device]`);
         device = values[1];
         operation = (atv) => action === 'set' ? atv.setText(values[0]) : atv.insertText(values[0]);
-      } else throw new Error('Usage: atv text <set|append|clear> ...');
+      } else throw new Error('Usage: atv text <set|append|clear|focus> ...');
       break;
     }
     case 'app': case 'account': {

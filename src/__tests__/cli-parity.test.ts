@@ -157,7 +157,7 @@ describe('output routing', () => {
 
 describe('DMAP', () => {
   it.each([
-    ['up', 'up'], ['top_menu', 'topMenu'], ['play_pause', 'playPause'], ['next', 'next'], ['stop', 'stop'],
+    ['up', 'up'], ['top_menu', 'topMenu'], ['play_pause', 'playPause'], ['next', 'next'], ['stop', 'stop'], ['volume_up', 'volumeUp'], ['volume_down', 'volumeDown'],
   ] as const)('sends %s with the stored pairing GUID', async (command, method) => {
     const call = vi.spyOn(DmapClient.prototype, method).mockResolvedValue(undefined);
     await run(['dmap', command, 'device']);

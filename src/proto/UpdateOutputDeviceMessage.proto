@@ -1,0 +1,25 @@
+// Type 65: the device's output-device descriptors. Only the identity and volume fields are
+// declared; other descriptor fields stay undecoded.
+syntax = "proto2";
+
+import "ProtocolMessage.proto";
+
+extend ProtocolMessage {
+  optional UpdateOutputDeviceMessage updateOutputDeviceMessage = 69;
+}
+
+message AVOutputDeviceDescriptor {
+  optional string name = 1;
+  optional string uniqueIdentifier = 2;
+  optional string groupID = 3;
+  optional string modelID = 4;
+  optional float volume = 24;
+  optional bool isVolumeControlAvailable = 25;
+  optional int32 volumeCapabilities = 37; // 0 None, 1 Relative, 2 Absolute, 3 Both
+}
+
+message UpdateOutputDeviceMessage {
+  repeated AVOutputDeviceDescriptor outputDevices = 1;
+  optional string endpointUID = 2;
+  repeated AVOutputDeviceDescriptor clusterAwareOutputDevices = 3;
+}

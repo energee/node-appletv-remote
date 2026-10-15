@@ -38,7 +38,7 @@ describe('CLI timing defaults', () => {
     expect(AppleTV.prototype.connect).toHaveBeenCalledWith(expect.anything(), { settleMs: 500 });
     expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
   });
-  it.each([[['power'], 'fetchPowerState', 'on'], [['app', 'list'], 'appList', []], [['account', 'list'], 'accountList', []]] as const)(
+  it.each([[['power'], 'fetchPowerState', 'on'], [['text', 'focus'], 'fetchTextFocusState', 'focused'], [['app', 'list'], 'appList', []], [['account', 'list'], 'accountList', []]] as const)(
     'skips the post-send wait for read-only %j', async (args, method, result) => {
       vi.unstubAllEnvs();
       vi.useFakeTimers();
@@ -105,13 +105,13 @@ describe('CLI operations', () => {
   it.each([
     [['app', 'list'], 'appList', []], [['app', 'launch', 'com.example.app'], 'launchApp', ['com.example.app']],
     [['account', 'list'], 'accountList', []], [['account', 'switch', 'user-id'], 'switchAccount', ['user-id']],
-    [['power'], 'fetchPowerState', []], [['command', 'channel_up'], 'channelUp', [undefined]],
+    [['power'], 'fetchPowerState', []], [['text', 'focus'], 'fetchTextFocusState', []], [['command', 'channel_up'], 'channelUp', [undefined]],
     [['cmd', 'channel_down'], 'channelDown', [undefined]], [['command', 'screensaver'], 'screensaver', [undefined]],
     [['command', 'guide'], 'guide', [undefined]], [['command', 'page_up'], 'pageUp', [undefined]], [['command', 'page_down'], 'pageDown', [undefined]],
     // Modern tvOS ignores the MRP TextInputMessage; text input uses Companion RTI.
     [['text', 'set', ''], 'setText', ['']], [['text', 'append', 'hello world'], 'insertText', ['hello world']], [['text', 'clear'], 'clearText', []],
   ] as const)('dispatches %j over Companion only', async (args, method, values) => {
-    const result = method === 'appList' ? [{ name: 'App', bundleId: 'com.example.app' }] : method === 'accountList' ? [{ name: 'User', id: 'user-id' }] : method === 'fetchPowerState' ? 'on' : method === 'insertText' ? 'hello world' : undefined;
+    const result = method === 'appList' ? [{ name: 'App', bundleId: 'com.example.app' }] : method === 'accountList' ? [{ name: 'User', id: 'user-id' }] : method === 'fetchPowerState' ? 'on' : method === 'fetchTextFocusState' ? 'focused' : method === 'insertText' ? 'hello world' : undefined;
     const call = vi.spyOn(AppleTV.prototype, method).mockResolvedValue(result as never);
     await run([...args, 'device']);
     expect(call).toHaveBeenCalledWith(...values);
@@ -121,13 +121,14 @@ describe('CLI operations', () => {
     if (method === 'appList') expect(console.log).toHaveBeenCalledWith('com.example.app\tApp');
     if (method === 'accountList') expect(console.log).toHaveBeenCalledWith('user-id\tUser');
     if (method === 'fetchPowerState') expect(console.log).toHaveBeenCalledWith('on');
+    if (method === 'fetchTextFocusState') expect(console.log).toHaveBeenCalledWith('focused');
     if (method === 'insertText') expect(console.log).toHaveBeenCalledWith('hello world');
   });
   it.each([
     ['text', 'append'], ['seek', ''], ['seek', ' '], ['volume', '-1'], ['volume', '1e2'], ['shuffle', '__proto__'], ['repeat', 'constructor'], ['artwork', 'a', 'b', 'c'], ['scan', 'extra'], ['stop', ''], ['text', 'set', 'hi', ' '], ['seek'], ['seek', '-1'], ['seek', 'NaN'], ['seek', 'Infinity'], ['seek', '12junk'],
     ['skip-forward', '0'], ['skip-backward', '-3'], ['volume', '101'], ['volume', ''],
     ['shuffle', 'bad'], ['repeat', 'bad'], ['text', 'set'], ['text', 'clear', 'device', 'extra'],
-    ['app', 'launch', ' '], ['account', 'switch'], ['app', 'bad'], ['power', 'device', 'extra'],
+    ['app', 'launch', ' '], ['text', 'focus', 'device', 'extra'], ['account', 'switch'], ['app', 'bad'], ['power', 'device', 'extra'],
     ['command'], ['command', 'bad'], ['command', '__proto__'], ['command', 'constructor'], ['stop', 'device', 'extra'], ['unknown'],
   ])('rejects %j before connecting', async (...args) => {
     await expect(run(args)).rejects.toThrow();

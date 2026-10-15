@@ -13,7 +13,10 @@ export class Message {
   readonly identifier: string;
   readonly payload: Record<string, unknown>;
 
-  /** Missing `type` defaults to 0 and missing `identifier` to the empty string. */
+  /**
+   * Missing `type` defaults to 0 and missing `identifier` to the empty string. A typeless
+   * message is therefore indistinguishable from type 0 here; check `'type' in payload`.
+   */
   constructor(decoded: Record<string, unknown>) {
     this.type = (decoded.type as MessageType) ?? 0;
     this.identifier = (decoded.identifier as string) ?? '';
