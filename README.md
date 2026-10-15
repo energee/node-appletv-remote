@@ -564,9 +564,10 @@ requires HAP-encrypted control, plist base/audio SETUP, an event
 channel and per-packet ChaCha20-Poly1305 with audio AAD and nonce; none is claimed
 by this legacy L16 implementation. Internally, the RTSP control client can already
 switch to HAP-encrypted framing and send the CSeq-less HTTP pairing requests
-(`/pair-verify`, `/pair-pin-start`, `/pair-setup`) that this profile needs, but
-`RaopStream` does not use it yet (loopback-tested only). Physical interoperability
-remains unverified.
+(`/pair-verify`, `/pair-pin-start`, `/pair-setup`) that this profile needs, and an
+internal setup step (`src/raop/airplay2.ts`) runs HAP pair-verify, the plist base and
+audio-stream SETUPs and the encrypted event channel, but `RaopStream` does not use
+them yet (loopback-tested only). Physical interoperability remains unverified.
 
 ### Apps, accounts and power (Companion)
 
