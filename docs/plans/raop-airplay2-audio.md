@@ -241,6 +241,11 @@ upstream project name.
 
 ### Phase 2 — Inputs, discovery and legacy pairing
 
+**Status: merged** (#64 task 8, #65 task 9, #66 task 10, #68 task 11). Deviation from task 10/11
+text: `SRP.params[2048]` in fast-srp-hap is SHA-256, and fast-srp-hap pads A and S to 256 bytes,
+so `LegacyPairSetup` uses `{ ...SRP.params[2048], hash: 'sha1' }` and computes K and M1 inline
+from unpadded A, B and S (pinned by `src/auth/__tests__/legacy-srp.test.ts`). H3 is pending.
+
 **8. WAV input**
 - Files: new `src/raop/wav.ts` (module comment), `src/index.ts`, `README.md`.
 - Types: `export function wavPcm(source: Readable): AsyncIterable<Buffer>` — validates the

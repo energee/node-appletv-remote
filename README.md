@@ -438,21 +438,31 @@ one-shot API, not `AppleTV`/MRP playback. Two profiles are supported, chosen fro
 receiver's TXT record: **legacy** receivers accepting unencrypted PCM/L16 over IPv4
 UDP, with optional legacy PIN pair-verification, and **AirPlay 2 realtime** audio to
 HAP-paired receivers (current Apple TVs), described below.
-No hardware verification has been performed for this API; the existing Apple TV
-4K status does not apply. HomePods and other receivers needing transient pairing,
+Hardware status: AirPlay 2 realtime audio is audible on an Apple TV 4K (details
+below); legacy receivers, legacy PIN pairing and RAOP discovery are verified only
+against loopback tests. HomePods and other receivers needing transient pairing,
 AirPlay 2 buffered audio, RSA/FairPlay/MFi authentication, password digest auth,
 ALAC, transcoding, multiroom, live sources, artwork,
 and progress are excluded. `atv raop-stream` wraps this API
 for PIN-less legacy receivers (it supplies neither a `legacySeed` nor HAP credentials).
 
 `scan()` browses `_raop._tcp` and fills `raopAddress`, `raopPort` and `raopTxt` (see
-[Discovery](#discovery-and-transport-selection)):
+[Discovery](#discovery-and-transport-selection)). End to end, discovering a receiver and
+playing a WAV file takes only library calls:
 
 ```typescript
-import { scan, RaopStream } from 'node-appletv-remote';
+import { createReadStream } from 'node:fs';
+import { scan, RaopStream, wavPcm } from 'node-appletv-remote';
 
-const device = (await scan()).find(d => d.name === 'Living Room' && d.raopPort);
-const sender = new RaopStream(device!.raopAddress!, device!.raopPort!, device!.raopTxt!);
+const device = (await scan({ until: d => d.name === 'Living Room' && !!d.raopPort }))
+  .find(d => d.name === 'Living Room' && d.raopPort);
+if (!device) throw new Error('No RAOP receiver named Living Room');
+
+// AirPlay 2 receivers (features bit 38/48, e.g. Apple TV): { credentials } from PairSetup / atv pair.
+// Legacy PIN receivers (sf 0x8/0x200): { legacySeed } from LegacyPairSetup. PIN-less legacy: {}.
+const auth = { credentials };
+const sender = new RaopStream(device.raopAddress!, device.raopPort!, device.raopTxt!);
+await sender.stream(wavPcm(createReadStream('tone.wav')), { ...auth, volume: 50 });
 ```
 
 mDNS associations are not authenticated: a spoofed advertisement can supply any
