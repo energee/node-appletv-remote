@@ -144,6 +144,16 @@ it.each(['AirPlay', 'Companion'])('a failed %s setup that closes its transport e
   expect(closed).not.toHaveBeenCalled();
 });
 
+it.each(['AirPlay', 'Companion'])('close() during a pending %s setup emits no close event', async transport => {
+  const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test', companionPort: 1234 });
+  vi.spyOn(transport === 'AirPlay' ? AirPlayConnection.prototype : CompanionConnection.prototype, 'connect').mockReturnValue(new Promise(() => {}));
+  const closed = vi.fn();
+  tv.on(transport === 'AirPlay' ? 'close' : 'companionClose', closed);
+  void (transport === 'AirPlay' ? tv.connect(credentials) : tv.connectCompanion(credentials)).catch(() => {});
+  await tv.close();
+  expect(closed).not.toHaveBeenCalled();
+});
+
 it('does not throw a facade error when a current transport fails without an error observer', async () => {
   const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test' });
   vi.spyOn(AirPlayConnection.prototype, 'connect').mockResolvedValue();

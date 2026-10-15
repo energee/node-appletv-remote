@@ -14,13 +14,36 @@ import { scan } from '../discovery.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Explicit zero must disable both CLI waits (and keeps these tests fast).
+  vi.stubEnv('ATV_SETTLE_MS', '0');
+  vi.stubEnv('ATV_POST_SEND_MS', '0');
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(AppleTV.prototype, 'connect').mockResolvedValue(undefined);
   vi.spyOn(AppleTV.prototype, 'connectCompanion').mockResolvedValue(undefined);
   vi.spyOn(AppleTV.prototype, 'close').mockResolvedValue(undefined);
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers(); });
+
+describe('CLI timing defaults', () => {
+  it('settles 500 ms after connect and waits 1000 ms before disconnecting unless overridden', async () => {
+    vi.unstubAllEnvs();
+    vi.useFakeTimers();
+    vi.spyOn(AppleTV.prototype, 'sendKeyCommand').mockResolvedValue(undefined);
+    const done = run(['command', 'select']);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(AppleTV.prototype.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await done;
+    expect(AppleTV.prototype.connect).toHaveBeenCalledWith(expect.anything(), { settleMs: 500 });
+    expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
+  });
+  it('honors explicit zero for both waits', async () => {
+    vi.spyOn(AppleTV.prototype, 'sendKeyCommand').mockResolvedValue(undefined);
+    await run(['command', 'select']);
+    expect(AppleTV.prototype.connect).toHaveBeenCalledWith(expect.anything(), { settleMs: 0 });
+  });
+});
 
 describe('CLI operations', () => {
   it.each([PlaybackState.Playing, PlaybackState.Paused, PlaybackState.Interrupted])('preserves metadata-free normalized playback state %s', async state => {
