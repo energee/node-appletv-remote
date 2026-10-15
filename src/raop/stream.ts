@@ -303,7 +303,7 @@ export class RaopStream {
       });
       const headers = { Session: this.session, 'RTP-Info': `seq=${this.sequence};rtptime=${this.timestamp}` };
       const record = await client.request('RECORD', { ...headers, Range: 'npt=0-' }, undefined, controller.signal);
-      // Only accept the fixed upstream legacy latency; a different negotiated latency needs a separate profile.
+      // Only accept the fixed 66150-frame legacy latency; a different negotiated latency needs a separate profile.
       if (record.headers['audio-latency'] !== undefined && record.headers['audio-latency'] !== '66150') throw new Error('Unsupported RAOP audio latency');
       await client.request('FLUSH', headers, undefined, controller.signal);
       this.active = true;

@@ -528,7 +528,7 @@ describe('legacy RAOP streaming', () => {
     } finally { cancellation.abort(); await settled; }
   });
 
-  it('matches the pinned upstream legacy verification byte vectors', async () => {
+  it('matches the fixed legacy verification byte vectors', async () => {
     const module = await load(); const peer = await receiver('legacy-fixture'); const cancellation = new AbortController();
     const seed = Buffer.from('8f06696f2542d70df59286c761695c485f815be3d152849e1361282d46ab1493', 'hex');
     const sender = new module.RaopStream('127.0.0.1', peer.port, { ...txt, sf: '0x200' });
@@ -539,7 +539,7 @@ describe('legacy RAOP streaming', () => {
     expect(seed.toString('hex')).toBe('8f06696f2542d70df59286c761695c485f815be3d152849e1361282d46ab1493');
   });
 
-  it('rejects an unpaired legacy seed against the independent upstream receiver vectors', async () => {
+  it('rejects an unpaired legacy seed against the fixed receiver vectors', async () => {
     const module = await load(); const peer = await receiver('legacy-fixture');
     const sender = new module.RaopStream('127.0.0.1', peer.port, { ...txt, sf: '0x200' });
     await expect(sender.stream(Buffer.alloc(4), { legacySeed: Buffer.alloc(32) })).rejects.toThrow(/403/);
