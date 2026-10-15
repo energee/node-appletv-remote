@@ -1,25 +1,35 @@
 #!/usr/bin/env node
 /**
- * `atv` command-line tool: scan, pair, control playback/text and Companion, and inspect now-playing,
- * keyboard, and Companion events. A thin consumer of the public AppleTV API;
- * credentials are stored as JSON in ~/.atv-credentials.json keyed by device ID.
+ * `atv` command-line tool: scan, pair, control playback/text, touch, output routing and Companion,
+ * inspect now-playing, keyboard, and Companion events, control legacy DMAP Apple TVs, and stream raw
+ * PCM to legacy RAOP receivers (experimental). A thin consumer of the public library APIs;
+ * credentials are stored as JSON in ~/.atv-credentials.json keyed by device ID, DMAP pairing GUIDs
+ * in ~/.atv-dmap.json.
  */
-import { scan, type DiscoveredDeviceInfo } from '../discovery.js';
+import { scan, normalizeTxt, type DiscoveredDeviceInfo } from '../discovery.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { AppleTV, Key, ShuffleState, RepeatState, contentItems } from '../appletv.js';
 import { PlaybackState } from '../now-playing-info.js';
-import { MessageType } from '../mrp/messages.js';
+import { MessageType, HID_KEY_MAP } from '../mrp/messages.js';
 import { Credentials } from '../credentials.js';
-import { readFileSync, writeFileSync, existsSync, realpathSync } from 'node:fs';
+import { DmapClient } from '../dmap/client.js';
+import { DmapPairing } from '../dmap/pairing.js';
+import { RaopStream } from '../raop/stream.js';
+import { Bonjour, type Service } from 'bonjour-service';
+import { readFileSync, writeFileSync, existsSync, realpathSync, createReadStream } from 'node:fs';
+import { isIPv4 } from 'node:net';
+import { randomInt } from 'node:crypto';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { withCachedDevice } from './device-cache.js';
 import { createInterface } from 'node:readline';
 import type { Message } from '../message.js';
-import type { KeyboardInfo, TextInputEvent, CompanionEvent, App, UserAccount } from '../appletv.js';
+import type { KeyboardInfo, TextInputEvent, CompanionEvent, App, UserAccount, InputAction, OutputDevice } from '../appletv.js';
 
 /** Where paired credentials are stored (falls back to the current directory if HOME is unset). */
 const CREDS_FILE = join(process.env.HOME ?? '.', '.atv-credentials.json');
+/** Legacy DMAP pairing GUIDs, kept apart so a DMAP pairing never becomes the default modern device. */
+const DMAP_FILE = join(process.env.HOME ?? '.', '.atv-dmap.json');
 /** Last-known address of each paired device, so commands can skip the mDNS scan. */
 const DEVICES_FILE = join(process.env.HOME ?? '.', '.atv-devices.json');
 
@@ -94,22 +104,25 @@ async function cmdPair() {
   console.log(`Paired! Credentials saved to ${CREDS_FILE}`);
 }
 
+/** Button action modes accepted after a key, Companion button, or `click`. */
+const ACTIONS: readonly string[] = ['singleTap', 'doubleTap', 'hold'] satisfies InputAction[];
+
 /** Every Key value; these strings are the accepted CLI command names. */
 const COMMAND_NAMES = Object.values(Key);
 /** Fast membership check for COMMAND_NAMES. */
 const COMMAND_SET = new Set<string>(COMMAND_NAMES);
 
 /**
- * Load stored credentials for the first device ID containing `deviceId`
+ * Load the stored value for the first device ID in `file` containing `deviceId`
  * (case-insensitive), or the most recently added device only if no selector is given.
- * @throws if credentials are missing/empty or an explicit selector is blank or unmatched.
+ * @throws if the file is missing/empty or an explicit selector is blank or unmatched.
  */
-function loadCredentials(deviceId?: string): { id: string; credentials: Credentials } {
+function loadStored(file: string, pairCommand: string, deviceId?: string): { id: string; value: string } {
   if (deviceId !== undefined && !deviceId.trim()) throw new Error('Device selector must be nonblank');
-  if (!existsSync(CREDS_FILE)) {
-    throw new Error('No credentials found. Run "atv pair" first.');
+  if (!existsSync(file)) {
+    throw new Error(`No credentials found. Run "atv ${pairCommand}" first.`);
   }
-  const stored = JSON.parse(readFileSync(CREDS_FILE, 'utf-8'));
+  const stored = JSON.parse(readFileSync(file, 'utf-8'));
   const entries = Object.entries(stored);
   if (entries.length === 0) {
     throw new Error('No paired devices.');
@@ -118,16 +131,20 @@ function loadCredentials(deviceId?: string): { id: string; credentials: Credenti
   const entry = deviceId === undefined ? entries[entries.length - 1]
     : entries.find(([k]) => k.toLowerCase().includes(deviceId.toLowerCase()));
   if (!entry) throw new Error(`No paired device matches "${deviceId}"`);
-  const [id, credsJson] = entry;
+  return { id: entry[0], value: entry[1] as string };
+}
 
-  return { id, credentials: Credentials.deserialize(credsJson as string) };
+/** Load modern (AirPlay/Companion) credentials; see loadStored for selector rules. */
+function loadCredentials(deviceId?: string): { id: string; credentials: Credentials } {
+  const { id, value } = loadStored(CREDS_FILE, 'pair', deviceId);
+  return { id, credentials: Credentials.deserialize(value) };
 }
 
 /**
  * Scan (stopping early once found) and return the device whose ID equals or contains `id`, or whose name contains it (case-insensitive).
  * @throws if nothing matches; the message lists the devices that were found.
  */
-async function findDevice(id: string, needCompanion: boolean): Promise<DiscoveredDeviceInfo> {
+async function findDevice(id: string, need: 'mrp' | 'companion' | 'dmap'): Promise<DiscoveredDeviceInfo> {
   console.error('Finding device...');
   const idLower = id.toLowerCase();
   const matches = (d: DiscoveredDeviceInfo) =>
@@ -136,7 +153,8 @@ async function findDevice(id: string, needCompanion: boolean): Promise<Discovere
     d.name.toLowerCase().includes(idLower) ||
     d.deviceId.toLowerCase().includes(idLower);
   // Stop as soon as the device (and, if needed, its Companion port) has arrived.
-  const devices = await scan({ timeout: 5000, until: (d) => matches(d) && (needCompanion ? !!d.companionPort : !!d.port || !!d.mrpPort && d.mrpEnabled !== false) });
+  const devices = await scan({ timeout: 5000, until: (d) => matches(d) && (need === 'companion' ? !!d.companionPort :
+    need === 'dmap' ? !!d.dmapPort : !!d.port || !!d.mrpPort && d.mrpEnabled !== false) });
   const device = devices.find(matches);
   if (!device) {
     throw new Error(`Device not found on network (looking for "${id}"). Found: ${devices.map((d) => `${d.name} [${d.deviceId}]`).join(', ')}`);
@@ -147,16 +165,16 @@ async function findDevice(id: string, needCompanion: boolean): Promise<Discovere
 /** Run `connect` against the device's cached address, rescanning once if that fails. */
 function connectCached<T>(
   id: string,
-  needCompanion: boolean,
+  need: 'mrp' | 'companion' | 'dmap',
   connect: (device: DiscoveredDeviceInfo) => Promise<T>,
 ): Promise<T> {
-  return withCachedDevice(DEVICES_FILE, id, () => findDevice(id, needCompanion), connect);
+  return withCachedDevice(DEVICES_FILE, id, () => findDevice(id, need), connect);
 }
 
 /** Load credentials, locate the device (cache first, then mDNS), and open an AirPlay/MRP connection. */
 async function connectToDevice(deviceId?: string): Promise<AppleTV> {
   const { id, credentials } = loadCredentials(deviceId);
-  return connectCached(id, false, async (device) => {
+  return connectCached(id, 'mrp', async (device) => {
     console.error(`Connecting to ${device.name} (${device.address}:${device.port})...`);
     const atv = new AppleTV(device);
     atv.on('error', (err: Error) => console.error(`AirPlay error: ${err.message}`));
@@ -176,7 +194,7 @@ async function connectToCompanion(deviceId?: string): Promise<AppleTV> {
   if (!credentials.companionCredentials) {
     throw new Error('No companion credentials. Run "atv companion-pair" first.');
   }
-  return connectCached(id, true, async (device) => {
+  return connectCached(id, 'companion', async (device) => {
     if (!device.companionPort) throw new Error('Device has no companion-link port');
     const atv = new AppleTV(device);
     console.error(`Connecting companion to ${device.name} (${device.address}:${device.companionPort})...`);
@@ -196,15 +214,21 @@ const COMPANION_BUTTONS = {
   guide: 'guide', page_up: 'pageUp', page_down: 'pageDown',
 } as const;
 
-/** Send a validated key or Companion button, then close even if sending fails. */
-async function cmdCommand(command: string, deviceId?: string) {
+/**
+ * Send a validated key or Companion button, optionally with an action mode, then close even if
+ * sending fails. Only HID keys and Companion buttons accept an action; media keys, wake/suspend,
+ * skips and `home_hold` are rejected before connecting.
+ */
+async function cmdCommand(command: string, action?: InputAction, deviceId?: string) {
   const button = Object.hasOwn(COMPANION_BUTTONS, command)
     ? COMPANION_BUTTONS[command as keyof typeof COMPANION_BUTTONS] : undefined;
   if (!button && !COMMAND_SET.has(command)) throw new Error(`Unknown command: ${command}. Run "atv --help".`);
+  if (action && !button && !HID_KEY_MAP[command]) throw new Error(`Action modes are not supported for ${command}`);
   const atv = await (button ? connectToCompanion(deviceId) : connectToDevice(deviceId));
   try {
-    if (button) await atv[button]();
-    else await atv.sendKeyCommand(command as Key);
+    // Omit an unspecified action so the library default applies unchanged.
+    if (button) await (action ? atv[button](action) : atv[button]());
+    else await (action ? atv.sendKeyCommand(command as Key, action) : atv.sendKeyCommand(command as Key));
     console.log(`Sent: ${command}`);
     await delay(postSendMs());
   } finally {
@@ -438,11 +462,130 @@ async function cmdKeyboard(deviceId?: string) {
   });
 }
 
+/** DMAP CLI command names mapped to DmapClient methods (`state` is handled separately). */
+const DMAP_COMMANDS = {
+  up: 'up', down: 'down', left: 'left', right: 'right', select: 'select', menu: 'menu', top_menu: 'topMenu',
+  play: 'play', pause: 'pause', stop: 'stop', play_pause: 'playPause', next: 'next', previous: 'previous',
+} as const;
+
+/**
+ * `atv dmap-pair <local-ipv4>`: advertise this computer as a Remote on the given local IPv4 interface,
+ * show a random PIN to enter on the selected legacy Apple TV, and store the resulting pairing GUID.
+ */
+async function cmdDmapPair(localAddress: string) {
+  console.log('Scanning for legacy (DMAP) Apple TVs...');
+  const devices = (await scan({ timeout: 5000 })).filter((d) => d.dmapPort);
+  if (devices.length === 0) {
+    console.log('No DMAP devices found.');
+    return;
+  }
+  devices.forEach((d, i) => console.log(`  ${i + 1}. ${d.name} (${d.dmapAddress ?? d.address}:${d.dmapPort}) [${d.deviceId}]`));
+  const device = devices[parseInt(await prompt('Select device number: ')) - 1];
+  if (!device) {
+    console.log('Invalid selection.');
+    return;
+  }
+
+  const pin = String(randomInt(10000)).padStart(4, '0');
+  const pairing = new DmapPairing({ name: 'atv CLI', address: localAddress, pin });
+  let guid: string;
+  try {
+    await pairing.start();
+    console.log(`On ${device.name}, open Settings > General > Remotes, choose "atv CLI" and enter PIN ${pin}.`);
+    // DmapPairing has no completion event; poll until its five-minute pairing window ends.
+    const deadline = Date.now() + 300_000;
+    for (;;) {
+      try { guid = pairing.finish(); break; } catch (error) {
+        if (Date.now() > deadline) throw error;
+        await delay(500);
+      }
+    }
+  } finally {
+    await pairing.close();
+  }
+
+  const stored: Record<string, string> = existsSync(DMAP_FILE) ? JSON.parse(readFileSync(DMAP_FILE, 'utf-8')) : {};
+  stored[device.deviceId] = guid;
+  writeFileSync(DMAP_FILE, JSON.stringify(stored, null, 2));
+  console.log(`Paired! Pairing GUID saved to ${DMAP_FILE}`);
+}
+
+/** `atv dmap <command|state> [device]`: log in with the stored GUID, run one DMAP request, then close. */
+async function cmdDmap(command: keyof typeof DMAP_COMMANDS | 'state', deviceId?: string) {
+  const { id, value: guid } = loadStored(DMAP_FILE, 'dmap-pair', deviceId);
+  const client = await connectCached(id, 'dmap', async (device) => {
+    console.error(`Connecting DMAP to ${device.name} (${device.dmapAddress ?? device.address}:${device.dmapPort})...`);
+    const dmap = new DmapClient(device);
+    try {
+      await dmap.connect(guid);
+    } catch (error) {
+      dmap.close();
+      throw error;
+    }
+    return dmap;
+  });
+  try {
+    // Every DMAP request is an HTTP round trip, so no post-send wait is needed.
+    if (command === 'state') console.log((await client.getState()).toString());
+    else {
+      await client[DMAP_COMMANDS[command]]();
+      console.log(`Sent: ${command}`);
+    }
+  } finally {
+    client.close();
+  }
+}
+
+/** Browse `_raop._tcp` for up to 5 s and return the port and normalized TXT of the service at `address`. */
+function findRaopService(address: string): Promise<{ port: number; txt: Record<string, string> }> {
+  return new Promise((resolve, reject) => {
+    const bonjour = new Bonjour();
+    let found: Service | undefined;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      browser.stop();
+      bonjour.destroy();
+      if (found) resolve({ port: found.port, txt: normalizeTxt(found.txt) });
+      else reject(new Error(`No _raop._tcp service found at ${address}`));
+    };
+    // Stop on the next tick so a callback fired during find() never touches an unassigned browser.
+    const browser = bonjour.find({ type: 'raop', protocol: 'tcp' }, (service: Service) => {
+      if (!found && service.port && service.addresses?.includes(address)) { found = service; setImmediate(finish); }
+    });
+    const timer = setTimeout(finish, 5000);
+  });
+}
+
+/**
+ * `atv raop-stream <ipv4> <file.pcm>` (experimental): stream raw PCM16LE stereo 44.1 kHz to a legacy
+ * RAOP receiver via RaopStream. Ctrl+C cancels and tears the session down.
+ */
+async function cmdRaopStream(address: string, file: string) {
+  if (!existsSync(file)) throw new Error(`No such file: ${file}`);
+  console.error(`Resolving _raop._tcp at ${address}...`);
+  const { port, txt } = await findRaopService(address);
+  const sender = new RaopStream(address, port, txt);
+  const cancellation = new AbortController();
+  const cancel = () => cancellation.abort(new Error('RAOP aborted'));
+  process.once('SIGINT', cancel);
+  try {
+    console.error(`Streaming ${file} to ${address}:${port} (Ctrl+C to stop)...`);
+    await sender.stream(createReadStream(file, { highWaterMark: 65536 }), { signal: cancellation.signal });
+    console.log('Stream complete.');
+  } finally {
+    process.removeListener('SIGINT', cancel);
+  }
+}
+
 /** Print the CLI syntax; no discovery or credential loading occurs. */
 function help(): void {
   console.log(`Usage:
   atv scan | pair | companion-pair
-  atv command <key> [device]           Send an MRP key or Companion button (alias: cmd)
+  atv command <key> [action] [device]  Send an MRP key or Companion button (alias: cmd);
+                                       action: singleTap (default), doubleTap, hold
   atv stop [device]
   atv seek <seconds> [device]          Absolute position, >= 0
   atv skip-forward <seconds> [device]  Positive interval
@@ -457,6 +600,17 @@ function help(): void {
   atv account list [device]
   atv account switch <account-id> [device]
   atv power [device]                   Print on, off, or unknown
+  atv click [action] [device]          Companion touch click; action as for command
+  atv swipe <x1> <y1> <x2> <y2> <ms> [device]
+                                       Companion swipe; integer coordinates 0..1000, 1..60000 ms
+  atv output list [device]             Selected outputs (tab-separated ID and name)
+  atv output <add|remove|set> <id[,id...]> [device]
+                                       ID = the receiver's AirPlay "psi" UUID from its _airplay._tcp
+                                       TXT record; its deviceid (MAC) or pi will time out
+  atv dmap-pair <local-ipv4>           Pair a legacy (DMAP) Apple TV; address is THIS computer's
+  atv dmap <command|state> [device]    Legacy DMAP control: ${Object.keys(DMAP_COMMANDS).join(', ')}
+  atv raop-stream <ipv4> <file.pcm>    Experimental: stream raw PCM16LE stereo 44.1 kHz to a legacy
+                                       RAOP receiver (no WAV header, no PIN/HAP receivers)
   atv remote | state | queue | messages | keyboard | companion-test [device]
   atv artwork [device] [output.jpg]
   atv help | --help | -h
@@ -491,11 +645,61 @@ export async function main(argv: string[]): Promise<void> {
   // Queries get a reply; every other operation ends with an unacknowledged send (HID key, `_tiC`, ...).
   let acknowledged = false;
   let device: string | undefined;
-  let operation: (atv: AppleTV) => Promise<void | string | App[] | UserAccount[]>;
+  let operation: (atv: AppleTV) => Promise<void | string | App[] | UserAccount[] | OutputDevice[]>;
   switch (cmd) {
-    case 'command': case 'cmd':
-      argumentsFor(args, 1, 'command <key> [device]');
-      return cmdCommand(args[0], args[1]);
+    case 'command': case 'cmd': {
+      // An optional action precedes the optional device selector.
+      const action = ACTIONS.includes(args[1]) ? args[1] as InputAction : undefined;
+      argumentsFor(action ? args.filter((_, i) => i !== 1) : args, 1, 'command <key> [action] [device]');
+      return cmdCommand(args[0], action, action ? args[2] : args[1]);
+    }
+    case 'click': {
+      const action = ACTIONS.includes(args[0]) ? args[0] as InputAction : undefined;
+      argumentsFor(action ? args.slice(1) : args, 0, 'click [action] [device]');
+      device = action ? args[1] : args[0]; companion = true;
+      operation = (atv) => action ? atv.click(action) : atv.click();
+      break;
+    }
+    case 'swipe': {
+      argumentsFor(args, 5, 'swipe <x1> <y1> <x2> <y2> <ms> [device]');
+      const [x1, y1, x2, y2, ms] = args.slice(0, 5).map((value, i) => {
+        const number = numberArgument(value, i < 4 ? 0 : 1, i < 4 ? 1000 : 60000);
+        if (!Number.isInteger(number)) throw new Error(`Invalid numeric argument: ${value}`);
+        return number;
+      });
+      device = args[5]; companion = true;
+      operation = (atv) => atv.swipe(x1, y1, x2, y2, ms);
+      break;
+    }
+    case 'output': {
+      const [action, ...values] = args;
+      // Routing resolves only once the TV reports the new group, so no post-send wait is needed.
+      acknowledged = true;
+      if (action === 'list') {
+        argumentsFor(values, 0, 'output list [device]');
+        device = values[0];
+        operation = async (atv) => atv.outputDevices;
+      } else if (action === 'add' || action === 'remove' || action === 'set') {
+        argumentsFor(values, 1, `output ${action} <id[,id...]> [device]`);
+        const ids = values[0].split(',');
+        if (ids.some((id) => !id.trim())) throw new Error(`Usage: atv output ${action} <id[,id...]> [device]`);
+        device = values[1];
+        const modify = { add: 'addOutputDevices', remove: 'removeOutputDevices', set: 'setOutputDevices' } as const;
+        operation = async (atv) => { await atv[modify[action]](ids); return atv.outputDevices; };
+      } else throw new Error(`Invalid output operation: ${action ?? '(missing)'}`);
+      break;
+    }
+    case 'dmap': {
+      argumentsFor(args, 1, 'dmap <command|state> [device]');
+      if (args[0] !== 'state' && !Object.hasOwn(DMAP_COMMANDS, args[0])) throw new Error(`Unknown DMAP command: ${args[0]}`);
+      return cmdDmap(args[0] as keyof typeof DMAP_COMMANDS | 'state', args[1]);
+    }
+    case 'dmap-pair':
+      if (args.length !== 1 || !isIPv4(args[0])) throw new Error('Usage: atv dmap-pair <local-ipv4>');
+      return cmdDmapPair(args[0]);
+    case 'raop-stream':
+      if (args.length !== 2 || !isIPv4(args[0]) || !args[1].trim()) throw new Error('Usage: atv raop-stream <ipv4> <file.pcm>');
+      return cmdRaopStream(args[0], args[1]);
     case 'stop': case 'power':
       argumentsFor(args, 0, `${cmd} [device]`);
       device = args[0]; companion = acknowledged = cmd === 'power';
@@ -569,7 +773,7 @@ export async function main(argv: string[]): Promise<void> {
   try {
     const result = await operation(atv);
     if (Array.isArray(result)) {
-      for (const item of result) console.log(`${'bundleId' in item ? item.bundleId : item.id}\t${item.name}`);
+      for (const item of result) console.log(`${'bundleId' in item ? item.bundleId : 'identifier' in item ? item.identifier : item.id}\t${item.name}`);
     } else if (result !== undefined) console.log(result);
     // Give unacknowledged sends time to reach the TV before close() destroys the socket.
     if (!acknowledged) await delay(postSendMs());

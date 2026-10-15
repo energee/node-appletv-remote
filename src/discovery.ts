@@ -27,6 +27,11 @@ export function parseAirPlayTxt(txt: Record<string, string>): AirPlayTxtRecord {
   };
 }
 
+/** Lowercase TXT keys and stringify values, as every Bonjour consumer here expects. */
+export function normalizeTxt(txt: Record<string, unknown> | undefined): Record<string, string> {
+  return Object.fromEntries(Object.entries(txt ?? {}).map(([k, v]) => [k.toLowerCase(), String(v)]));
+}
+
 /** Plain connection details for a device; accepted by DiscoveredDevice and AppleTV constructors. */
 export interface DiscoveredDeviceInfo {
   name: string;
@@ -213,7 +218,7 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
         if (done) return;
         const addresses = usableAddresses(service);
         if (!addresses.length || !service.port) return;
-        const txt = Object.fromEntries(Object.entries(service.txt ?? {}).map(([k, v]) => [k.toLowerCase(), String(v)]));
+        const txt = normalizeTxt(service.txt);
         if (type === 'companion-link' && txt.rpmd && !txt.rpmd.startsWith('AppleTV')) return;
         const legacy = type === 'touch-able' || type === 'appletv-v2';
         const ids = (type === 'airplay' ? [txt.deviceid] : type === 'companion-link' ? [txt.rpmrtid] : type === 'mediaremotetv' ? [txt.uniqueidentifier, txt.macaddress] : [service.name ? `dmap:${service.name}` : undefined]).filter((id): id is string => !!id);

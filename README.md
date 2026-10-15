@@ -16,7 +16,8 @@ atv scan                          # find Apple TVs on the network
 atv pair                          # AirPlay pairing (enter the PIN shown on the TV)
 atv companion-pair                # Companion pairing, needed for apps/accounts/power
 
-atv command <command> [deviceId]  # send one command, e.g. `atv command play`
+atv command <command> [action] [deviceId]  # send one command, e.g. `atv command play`
+atv command up doubleTap [deviceId]  # action: singleTap (default), doubleTap, hold
 atv remote [deviceId]             # interactive remote; type `help` for commands
 atv state [deviceId]              # what's playing
 atv queue [deviceId]              # playback queue
@@ -32,6 +33,8 @@ atv skip-forward 30 [deviceId]    # positive seconds; skip-backward also support
 atv shuffle songs [deviceId]      # off, albums, songs
 atv repeat all [deviceId]         # off, track, all
 atv volume 40 [deviceId]          # absolute volume, 0..100
+atv output list [deviceId]        # selected outputs, tab-separated ID and name
+atv output add <psi-uuid>[,<psi-uuid>...] [deviceId]  # also remove, set
 
 # Companion only (requires atv companion-pair)
 atv text set "search words" [deviceId]  # prints the new text; fails if no field is focused
@@ -43,18 +46,34 @@ atv account list [deviceId]       # tab-separated account ID and name
 atv account switch <account-id> [deviceId]
 atv power [deviceId]             # on, off, or unknown
 atv command guide [deviceId]      # extra Companion button
+atv click [action] [deviceId]     # touch click; same actions as command
+atv swipe 100 500 900 500 250 [deviceId]  # x1 y1 x2 y2 (0..1000) and duration ms (1..60000)
+
+# Legacy Apple TV 2/3 (DMAP, experimental; see below)
+atv dmap-pair 192.168.1.10        # this computer's LAN IPv4; enter the shown PIN on the TV
+atv dmap play [deviceId]          # up down left right select menu top_menu play pause stop play_pause next previous
+atv dmap state [deviceId]         # title, artist, album, play state
+
+# Legacy RAOP audio (experimental; see below)
+atv raop-stream 192.168.1.20 track.pcm  # raw PCM16LE stereo 44.1 kHz, no WAV header
 ```
 
 Credentials are saved to `~/.atv-credentials.json`. Leave out `deviceId` to use the most recently paired device. An explicit selector matches a paired device ID case-insensitively; blank or unmatched selectors fail instead of silently selecting the last device. Each device's last working address is cached in `~/.atv-devices.json`, so commands skip the network scan. If the TV has moved, the CLI rescans automatically.
 
-Playback commands open only AirPlay/MRP; text/app/account/power commands and extra buttons open only Companion. `command` (alias `cmd`) still accepts `skip_forward` / `skip_backward` for the app's default interval; use the hyphenated commands to specify seconds. Extra Companion buttons are `channel_up`, `channel_down`, `screensaver`, `guide`, `page_up`, and `page_down` (not available in the MRP-only interactive remote).
+Playback and output commands open only AirPlay/MRP; text/app/account/power/click/swipe commands and extra buttons open only Companion. `command` (alias `cmd`) still accepts `skip_forward` / `skip_backward` for the app's default interval; use the hyphenated commands to specify seconds. An optional action (`singleTap`, `doubleTap`, `hold`) may follow navigation/HID keys and Companion buttons; media keys, `wake`, `suspend`, skips and `home_hold` reject it before connecting.
+
+Output IDs must be the receiver's AirPlay **`psi`** UUID from its `_airplay._tcp` TXT record (for example `dns-sd -L <name> _airplay._tcp`); its `deviceid` (MAC) and `pi` are ignored by the TV and time out after five seconds. `output add/remove/set` print the confirmed selected outputs afterward; `atv output set ""` is rejected, so the CLI cannot clear all outputs.
+
+`atv dmap-pair` advertises this computer as a Remote on the given local IPv4 interface, prints a random PIN, waits up to five minutes for the TV, and stores the pairing GUID in `~/.atv-dmap.json` (separate from modern credentials, keyed by the `dmap:` device ID). `atv dmap` logs in with that GUID; `[deviceId]` selects among DMAP pairings the same way. Its address is cached like the others. DMAP has no push updates, so `state` is a snapshot.
+
+`atv raop-stream` resolves the receiver's `_raop._tcp` TXT record by browsing mDNS for up to five seconds at the given IPv4 address, then streams the file with `RaopStream`. It supports only receivers that accept unencrypted legacy PCM without a PIN (receivers requiring a legacy seed, password or HAP fail before streaming). Ctrl+C cancels and tears the session down. Extra Companion buttons are `channel_up`, `channel_down`, `screensaver`, `guide`, `page_up`, and `page_down` (not available in the MRP-only interactive remote).
 
 Numeric values must be finite decimal numbers in the documented range. Required IDs must be nonblank. Quote text to preserve spaces; `atv text set ""` explicitly sets empty text. Invalid arguments fail before reading credentials, discovery, or connection. For one-shot commands, operation and connection failures print an error to stderr and exit nonzero; one-shot operations close their connection even on failure. Absolute volume can fail if the TV does not report its output device. These commands depend on device/app support and do not bypass pairing. Extra positional arguments are rejected instead of ignored. Progress (including `Requesting ...` lines from state, queue and artwork) goes to stderr so results remain clean on stdout. Empty scans and pairing cancellation/no-device selections retain their existing successful exit behavior.
 
 Two CLI timing knobs guard HID keys, which the Apple TV never acknowledges. Set either to `0` for faster one-shot commands:
 
 - `ATV_SETTLE_MS` (default 500): pause after the MRP handshake before sending anything, for every MRP command (a request sent before the device is ready may be dropped; for a query that would mean waiting out its 10 s timeout). Companion-only commands do not use it. The library defaults to `0`; opt in with `atv.connect(credentials, { settleMs: 500 })`.
-- `ATV_POST_SEND_MS` (default 1000): pause after a one-shot key/playback/text/volume/Companion-button/app-launch/account-switch operation, before disconnecting. Read-only queries (`power`, `app list`, `account list`, `state`, `queue`, `artwork`) disconnect as soon as their reply arrives.
+- `ATV_POST_SEND_MS` (default 1000): pause after a one-shot key/playback/text/volume/Companion-button/click/swipe/app-launch/account-switch operation, before disconnecting. Read-only queries (`power`, `app list`, `account list`, `state`, `queue`, `artwork`) and `output` commands (which wait for the TV to report the new group) disconnect as soon as their reply arrives. `dmap` commands are HTTP request/response and never wait.
 
 ```
 $ atv state
@@ -311,8 +330,8 @@ replacement connection.
 support, not hardware verification), media commands as `unknown` (app-dependent),
 and metadata as `available` only after its tag appears. Apps, accounts, power,
 keyboard, artwork, volume, seek, shuffle, repeat and push updates are
-`unsupported` in this minimal implementation. There is no DMAP CLI pairing/control
-flow; the existing CLI remains modern-only, although scan includes legacy TVs.
+`unsupported` in this minimal implementation. The CLI wraps pairing (`atv dmap-pair`),
+these commands and the state snapshot (`atv dmap`).
 
 Fixture and loopback-server tests cover codec bounds, auth, commands, metadata,
 pairing callbacks and selection. **No Apple TV 2/3 hardware validation has been
@@ -351,7 +370,8 @@ No hardware verification has been performed for this API; the existing Apple TV
 4K status does not apply. Modern HAP-authenticated Apple TVs, HomePods, AirPlay 2
 buffered/encrypted audio, RSA/FairPlay/MFi authentication, password digest auth,
 legacy PIN pair-setup, ALAC, transcoding, multiroom, live sources, artwork,
-progress, automatic RAOP discovery, and CLI streaming are excluded.
+progress, and automatic RAOP discovery are excluded. `atv raop-stream` wraps this API
+for PIN-less receivers (it does not supply a `legacySeed`).
 
 Supply an explicit IPv4 endpoint and its actual `_raop._tcp` TXT record. Required
 capabilities are `cn` containing `0` (PCM), `et` containing `0` (unencrypted), `tp`
@@ -538,7 +558,7 @@ nothing is playing; only the device's error 35 reply is (#10).
 
 ### Button actions, gestures, and audio routing
 
-These library APIs are protocol-tested, not yet hardware-verified here. The CLI has no action-mode, touch, swipe, or output-routing commands.
+These library APIs are protocol-tested; MRP button modes, touch swipes and output add/remove were exercised on an Apple TV 4K (#30). The CLI exposes them as `command <key> [action]`, `click`, `swipe` and `output`; routing IDs must be the receiver's AirPlay `psi` UUID (its `deviceid` and `pi` time out).
 
 ```typescript
 await atv.up('doubleTap');
@@ -555,9 +575,10 @@ await atv.stopTouch(); // close() also releases and stops registrations
 
 console.log(atv.outputDevices); // current selected outputs [{ name, identifier }]
 atv.on('outputDevices', devices => console.log(devices));
-await atv.addOutputDevices(['speaker-uid']);
-await atv.removeOutputDevices(['speaker-uid']);
-await atv.setOutputDevices(['speaker-uid']);
+// IDs are each receiver's AirPlay `psi` TXT UUID; its deviceid (MAC) and pi time out.
+await atv.addOutputDevices(['psi-uuid']);
+await atv.removeOutputDevices(['psi-uuid']);
+await atv.setOutputDevices(['psi-uuid']);
 ```
 
 Import `TouchAction` from the package; `InputAction` and `OutputDevice` are exported types. HID button methods accept `'singleTap'` (default), `'doubleTap'`, or `'hold'`. MRP taps preserve the existing 50ms press and flush; each double tap repeats that complete sequence, and hold lasts 1000ms. Existing Companion button taps release immediately; touch clicks use 20ms taps or 1000ms holds and phase 5. Media commands, wake/suspend, skip commands, and the fixed `home_hold` alias reject non-default action arguments to `sendKeyCommand`.
