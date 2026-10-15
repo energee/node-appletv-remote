@@ -32,6 +32,10 @@ export interface ReceiverOptions {
   baseReply?: Buffer;
   /** Sent as the `Audio-Latency` header on the RECORD reply. */
   recordLatency?: string;
+  /** Like an Apple TV: before replying to the base SETUP, send an NTP timing request to its `timingPort` and wait for the answer. */
+  timingFirst?: boolean;
+  /** Close the event channel when TEARDOWN arrives, before replying to it (an Apple TV does this). */
+  closeEventsOnTeardown?: boolean;
 }
 
 const raw = (key: KeyObject) => Buffer.from(key.export({ format: 'der', type: 'spki' }).subarray(-32));
@@ -44,7 +48,7 @@ export async function airplay2Receiver(options: ReceiverOptions = {}) {
   const requests: ReceivedRequest[] = [];
   const sockets = new Set<Socket>();
   const audioPackets: Buffer[] = []; const controlPackets: Buffer[] = [];
-  const state = { eventConnected: false, eventAcknowledged: false, eventClosed: false, controlClosed: false, senderControlPort: 0 };
+  const state = { eventConnected: false, eventAcknowledged: false, eventClosed: false, controlClosed: false, timingAnswered: false, senderControlPort: 0 };
   let eventCipher: HAPSession | undefined;
   const eventSockets = new Set<Socket>();
 
@@ -55,7 +59,7 @@ export async function airplay2Receiver(options: ReceiverOptions = {}) {
     // Like the legacy receiver, request one retransmission of the first packet immediately.
     if (audioPackets.length === 1) control.send(Buffer.from([0x80, 0xd5, 0, 1, packet[2], packet[3], 0, 1]), state.senderControlPort, '127.0.0.1');
   });
-  control.on('message', packet => controlPackets.push(packet));
+  control.on('message', packet => { if (packet[1] !== 0xd3) controlPackets.push(packet); });
 
   const events = createServer(socket => {
     state.eventConnected = true; sockets.add(socket); eventSockets.add(socket); socket.on('error', () => {});
@@ -120,6 +124,12 @@ export async function airplay2Receiver(options: ReceiverOptions = {}) {
         if (options.holdFeedback && uri === '/feedback') continue;
         if (method === 'SETUP') {
           const plist = parseBuffer(body)[0] as Record<string, unknown>;
+          if (!plist.streams && options.timingFirst) {
+            const request = Buffer.alloc(32); request[0] = 0x80; request[1] = 0xd2; request.writeUInt16BE(7, 2);
+            const answered = once(control, 'message');
+            control.send(request, plist.timingPort as number, '127.0.0.1');
+            await answered; state.timingAnswered = true;
+          }
           if (!plist.streams) { reply(options.baseReply ?? bplistCreator({ eventPort: options.eventPort ?? (events.address() as { port: number }).port }), 'Content-Type: application/x-apple-binary-plist\r\n'); continue; }
           state.senderControlPort = ((plist.streams as Record<string, unknown>[])[0].controlPort as number);
           // bplist-creator cannot encode undefined, so an undefined override removes the field.
@@ -127,6 +137,7 @@ export async function airplay2Receiver(options: ReceiverOptions = {}) {
           reply(bplistCreator({ streams: [stream] }), `Content-Type: application/x-apple-binary-plist\r\n${options.session ? `Session: ${options.session}\r\n` : ''}`);
           continue;
         }
+        if (method === 'TEARDOWN' && options.closeEventsOnTeardown) for (const socket of eventSockets) socket.destroy();
         if (method === 'RECORD' && options.recordLatency) { reply(undefined, `Audio-Latency: ${options.recordLatency}\r\n`); continue; }
         reply();
       }

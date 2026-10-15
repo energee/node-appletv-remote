@@ -461,8 +461,9 @@ it; password and access-control bits still fail closed. `stream()` requires
 `credentials` on legacy receivers and `legacySeed` on AirPlay 2, all before taking
 ownership of the source.
 
-**AirPlay 2 realtime audio** (unverified on hardware; checked only against a loopback
-receiver). Pass the HAP `Credentials` that `PairSetup` (or `atv pair`) produced for
+**AirPlay 2 realtime audio** (audible on an Apple TV 4K, AppleTV6,2, tvOS 26.6, with
+volume changes; text metadata, other receivers and the details marked unverified below
+are untested on hardware). Pass the HAP `Credentials` that `PairSetup` (or `atv pair`) produced for
 the receiver:
 
 ```typescript
@@ -470,7 +471,9 @@ const sender = new RaopStream(address, raopPort, raopTxt); // TXT with features 
 await sender.stream(createReadStream('track.pcm', { highWaterMark: 65536 }), { credentials, volume: 50 });
 ```
 
-On the same RTSP connection the sender runs HAP pair-verify (HTTP/1.1
+The sender answers NTP timing requests on its timing port from the start, because an
+Apple TV queries it before replying to the base SETUP. On the same RTSP connection the
+sender runs HAP pair-verify (HTTP/1.1
 `/pair-verify` with `X-Apple-HKP: 3`, no CSeq), then encrypts all RTSP traffic with
 the `Control-Salt` keys. A binary-plist base SETUP (`timingProtocol: NTP`, the
 local timing port) returns `eventPort`; the sender connects the event channel with
@@ -748,7 +751,8 @@ connect. Typeless messages that carry our identifier are usually replies to our 
 
 Checked on an Apple TV 4K (AppleTV6,2) and an Apple TV HD (AppleTV5,3), both tvOS 26.6, in #30.
 
-**Verified:** button tap/double-tap/hold; touch swipes, and finger release when a swipe is cancelled; Companion apps, accounts and power; app launch by URL; media commands; IPv6 (global, ULA and link-local) for MRP and Companion; output add/remove through a receiver's `psi`; volume capability reporting (#39); MRP message types 104/105 (#40).
+**Verified:** button tap/double-tap/hold; touch swipes, and finger release when a swipe is cancelled; Companion apps, accounts and power; app launch by URL; media commands; IPv6 (global, ULA and link-local) for MRP and Companion; output add/remove through a receiver's `psi`; volume capability reporting (#39); MRP message types 104/105 (#40); AirPlay 2 realtime PCM audio and `setVolume` through `RaopStream` on the Apple TV 4K (#22 phase 1).
+An Apple TV closes the AirPlay 2 event channel while handling TEARDOWN, so the TEARDOWN reply is not read; teardown is best effort and the stream still completes.
 
 **Not verified** (protocol- or fixture-tested only; reports from real devices welcome):
 
@@ -757,7 +761,7 @@ Checked on an Apple TV 4K (AppleTV6,2) and an Apple TV HD (AppleTV5,3), both tvO
 - Companion-only devices, legacy Apple TV 2/3 (DMAP) and standalone MRP on tvOS < 15. No such devices were available.
 - Text entry and text-focus events. They need someone watching the screen.
 - Legacy RAOP audio streaming. No legacy RAOP receiver was available.
-- AirPlay 2 realtime audio through `RaopStream` (#22). Hardware check pending.
+- AirPlay 2 text metadata on screen, HomePods and the Apple TV HD (#22).
 
 ## How it works
 

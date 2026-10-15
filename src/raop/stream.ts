@@ -326,7 +326,18 @@ export class RaopStream {
           await client.request('POST', authHeaders, Buffer.concat([Buffer.alloc(4), signature]), controller.signal, 5000, '/pair-verify');
         } finally { shared.fill(0); key?.fill(0); iv?.fill(0); signed?.fill(0); }
       }
-      let serverPort: number; let controlPort: number; let timingPort: number;
+      let serverPort: number; let controlPort: number;
+      // 0 until a legacy SETUP names one: any receiver port may ask for timing.
+      let timingPort = 0;
+      // One wall-clock sample anchors every session NTP timestamp to monotonic time.
+      const clockStart = performance.now(); const clockEpoch = Date.now();
+      const ntpMilliseconds = () => clockEpoch + performance.now() - clockStart;
+      // Answer timing before SETUP: AirPlay 2 receivers query the timing port before replying to the base SETUP.
+      timing.on('message', (request, remote) => {
+        if (controller.signal.aborted || remote.address !== this.address || (timingPort !== 0 && remote.port !== timingPort)) return;
+        const received = ntpMilliseconds(); const response = timingReply(request, received, ntpMilliseconds());
+        if (response) timing.send(response, remote.port, remote.address, () => {});
+      });
       if (this.profile === 'airplay2') {
         airplay2 = await setupAirPlay2Audio(client, this.address, options.credentials!, this.ssrc,
           { timing: timing.address().port, control: control.address().port }, controller.signal);
@@ -334,7 +345,6 @@ export class RaopStream {
         if (airplay2.session !== undefined && !/^[\w.-]+$/.test(airplay2.session)) throw new Error('Invalid RAOP session');
         this.session = airplay2.session ?? '0';
         serverPort = airplay2.serverPort; controlPort = airplay2.controlPort;
-        timingPort = 0; // No timing port is negotiated; answer timing requests from any receiver port.
       } else {
         const sdp = `v=0\r\no=iTunes ${this.ssrc} 0 IN IP4 ${client.socket.localAddress}\r\ns=iTunes\r\nc=IN IP4 ${this.address}\r\nt=0 0\r\nm=audio 0 RTP/AVP 96\r\na=rtpmap:96 L16/44100/2\r\na=fmtp:96 352 0 16 40 10 14 2 255 0 0 44100\r\n`;
         await client.request('ANNOUNCE', { 'Content-Type': 'application/sdp' }, Buffer.from(sdp), controller.signal);
@@ -354,14 +364,6 @@ export class RaopStream {
         // An omitted or explicit timing_port=0 is treated as 0; then any receiver port may ask for timing.
         timingPort = parameters.has('timing_port') && parameters.get('timing_port') !== '0' ? remotePort('timing_port') : 0;
       }
-      // One wall-clock sample anchors every session NTP timestamp to monotonic time.
-      const clockStart = performance.now(); const clockEpoch = Date.now();
-      const ntpMilliseconds = () => clockEpoch + performance.now() - clockStart;
-      timing.on('message', (request, remote) => {
-        if (controller.signal.aborted || remote.address !== this.address || (timingPort !== 0 && remote.port !== timingPort)) return;
-        const received = ntpMilliseconds(); const response = timingReply(request, received, ntpMilliseconds());
-        if (response) timing.send(response, remote.port, remote.address, () => {});
-      });
       let resendWindow = performance.now(); let resendBudget = 100;
       control.on('message', (request, remote) => {
         if (controller.signal.aborted || remote.address !== this.address || remote.port !== controlPort) return;

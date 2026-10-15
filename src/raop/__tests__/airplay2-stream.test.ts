@@ -178,6 +178,20 @@ describe('RaopStream AirPlay 2 realtime profile', () => {
     expect(receiver.requests.at(-1)!.method).toBe('TEARDOWN');
   });
 
+  // Found on an Apple TV 4K (H1): it sends NTP timing requests before replying to the base SETUP.
+  it('answers timing requests before the base SETUP reply', async () => {
+    const { receiver, stream } = await start({ timingFirst: true });
+    await stream.stream(Buffer.alloc(1408), { credentials: receiver.credentials });
+    expect(receiver.state.timingAnswered).toBe(true);
+  }, 10000);
+
+  // Found on an Apple TV 4K (H1): it closes the event channel as part of TEARDOWN.
+  it('completes when the receiver closes the event channel during TEARDOWN', async () => {
+    const { receiver, stream } = await start({ closeEventsOnTeardown: true });
+    await expect(stream.stream(Buffer.alloc(1408), { credentials: receiver.credentials })).resolves.toBeUndefined();
+    expect(receiver.requests.at(-1)!.method).toBe('TEARDOWN');
+  }, 10000);
+
   it('fails the stream when the receiver closes the event channel', async () => {
     const { receiver, stream } = await start();
     const playing = stream.stream(endless(), { credentials: receiver.credentials });
