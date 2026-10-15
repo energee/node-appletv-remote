@@ -120,11 +120,12 @@ async function receiver(options: { rejectAuth?: boolean; commandCode?: number; i
         } else if (path === '/command') {
           const command = parseBuffer((request.params as { data: Buffer }).data)[0] as Record<string, unknown>;
           commands.push(command);
+          // Drop instead of answering, so the pending request sees a close rather than racing a reset.
+          if (command.type === 'playbackInfo' && options.dropStatus) { eventSocket!.end(); socket.end(); continue; }
           reply(Buffer.alloc(0), options.commandCode ?? 200);
           if (command.type === 'setRate' && !options.holdStatus) push({ type: 'playbackState', name: 'playing' });
           if (command.type === 'playbackInfo' && !options.holdStatus) {
-            if (options.dropStatus) eventSocket!.destroy();
-            else push({ kind: 'response', messageID: command.messageID, info: options.info ?? { playbackState: 'playing', rate: 1, duration: { flags: 1, value: 120000, timescale: 1000, epoch: 0 }, position: { flags: 1, value: 6_711_083_000, timescale: 1_000_000_000, epoch: 0 } } });
+            push({ kind: 'response', messageID: command.messageID, info: options.info ?? { playbackState: 'playing', rate: 1, duration: { flags: 1, value: 120000, timescale: 1000, epoch: 0 }, position: { flags: 1, value: 6_711_083_000, timescale: 1_000_000_000, epoch: 0 } } });
           }
         } else if (path === '/play' || path === '/playback-info') reply(Buffer.alloc(0), 500); // tvOS 18+
         else reply();
@@ -260,19 +261,27 @@ describe('AirPlay URL playback', () => {
       await Promise.all([first, second]);
     } finally { playback.close(); await fake.close(); }
   });
-  it('rejects a nonzero start position before connecting (tvOS 26 ignores it)', async () => {
+  it('sends a start position as the item Start-Position CMTime', async () => {
     const fake = await receiver(); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
-    try { await expect(playback.playUrl('https://example.org/movie.mp4', 12.5)).rejects.toThrow(/start position/i); expect(fake.requests).toHaveLength(0); }
+    try {
+      await playback.playUrl('https://example.org/movie.mp4', 12.5);
+      expect(fake.commands[0].item).toMatchObject({ 'Start-Position': { value: 12500, timescale: 1000, flags: 1, epoch: 0 } });
+    } finally { playback.close(); await fake.close(); }
+  });
+  it('omits Start-Position when starting from 0', async () => {
+    const fake = await receiver(); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
+    try { await playback.playUrl('https://example.org/movie.mp4'); expect(fake.commands[0].item).not.toHaveProperty('Start-Position'); }
     finally { playback.close(); await fake.close(); }
   });
-  it.each(['paused', 'loading', 'stopped'] as const)('reports receiver playbackState %s with rate and no timing', async state => {
-    const fake = await receiver({ info: { playbackState: state, rate: 0 } }); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
+  // getStatus keeps its original playing/paused/idle contract; idle covers loading (no duration yet) and stopped.
+  it.each([['paused', 'paused'], ['loading', 'idle'], ['stopped', 'idle']] as const)('reports receiver playbackState %s as %s', async (playbackState, state) => {
+    const fake = await receiver({ info: { playbackState, rate: 0 } }); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
     try { await playback.playUrl('https://example.org/movie.mp4'); expect(await playback.getStatus()).toEqual({ state, rate: 0 }); }
     finally { playback.close(); await fake.close(); }
   });
-  it('reports loading while the queued item is not ready (no playbackState yet, as tvOS sends at startup)', async () => {
+  it('reports idle while the queued item is not ready (no playbackState yet, as tvOS sends at startup)', async () => {
     const fake = await receiver({ info: { readyToPlay: false, item: { uuid: 'ITEM' } } }); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
-    try { await playback.playUrl('https://example.org/movie.mp4'); expect(await playback.getStatus()).toEqual({ state: 'loading' }); }
+    try { await playback.playUrl('https://example.org/movie.mp4'); expect(await playback.getStatus()).toEqual({ state: 'idle' }); }
     finally { playback.close(); await fake.close(); }
   });
   it('reports a pushed end of playback without polling', async () => {

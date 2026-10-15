@@ -18,10 +18,9 @@ const MAX_REPLY_BYTES = 1024 * 1024;
 /** bplist-creator exposes Real at runtime, but its bundled declaration omits it. */
 const PlistReal = (bplistCreator as typeof bplistCreator & { Real: new (value: number) => object }).Real;
 
-/** Receiver playbackInfo; duration/position are seconds and absent until the receiver reports them. */
+/** Receiver status; idle means no playing or paused item (startup buffering, unreachable media, or ended). */
 export interface AirPlayPlaybackStatus {
-  /** `loading` covers startup buffering and unreachable media alike; `stopped` follows the end of the item. */
-  state: 'loading' | 'playing' | 'paused' | 'stopped';
+  state: 'playing' | 'paused' | 'idle';
   duration?: number;
   position?: number;
   rate?: number;
@@ -67,14 +66,12 @@ export class AirPlayPlaybackSession {
 
   constructor(private host: string, private port: number, private credentials: HAPCredentials) {}
 
-  /** Queue a reachable HTTP(S) media URL from the start. Resolves when accepted, not when media starts or ends; position must be 0. */
+  /** Queue a reachable HTTP(S) media URL. Resolves when accepted, not when media starts or ends; position is seconds. */
   async playUrl(url: string, position = 0): Promise<void> {
     let parsed: URL;
     try { parsed = new URL(url); } catch { throw new Error('Invalid media URL'); }
     if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Media URL must use HTTP or HTTPS');
     if (!Number.isFinite(position) || position < 0) throw new Error('Position must be non-negative seconds');
-    // tvOS 26 starts queued items at 0 regardless of Start-Position-Seconds; fail rather than mislead.
-    if (position !== 0) throw new Error('Nonzero start position is not supported by current receivers');
     if (this.started || this.closed) throw new Error('Playback session already started or closed');
     this.started = true;
     try {
@@ -143,7 +140,9 @@ export class AirPlayPlaybackSession {
       const streamId = stream?.streams?.[0]?.streamID;
       if (typeof streamId !== 'number' && typeof streamId !== 'string') throw new Error('SETUP missing remote-control streamID');
       this.streamId = String(streamId);
-      await this.command({ type: 'insertPlayQueueItem', item: { uuid: randomUUID().toUpperCase(), mediaType: 'file', 'Content-Location': parsed.href } });
+      // tvOS reads the start as a CMTime under Start-Position; Start-Position-Seconds is ignored.
+      const start = position ? { 'Start-Position': { value: Math.round(position * 1000), timescale: 1000, flags: 1, epoch: 0 } } : {};
+      await this.command({ type: 'insertPlayQueueItem', item: { uuid: randomUUID().toUpperCase(), mediaType: 'file', 'Content-Location': parsed.href, ...start } });
       await this.command({ type: 'setProperty', property: 'actionAtItemEnd', value: 1 });
       await this.command({ type: 'setRate', rate: new PlistReal(1) });
       this.heartbeat = setInterval(() => {
@@ -152,7 +151,7 @@ export class AirPlayPlaybackSession {
     } catch (error) { this.fail(error as Error); throw error; }
   }
 
-  /** Most recent playbackState the receiver pushed, without a round trip; undefined before the first push. */
+  /** Last receiver playbackState pushed (loading/playing/paused/stopped), finer than getStatus().state; no round trip. */
   get state(): string | undefined { return this.pushedState; }
 
   /** Ask the receiver for playbackInfo over /command; rejects protocol/media errors and closes the failed session. */
@@ -170,8 +169,9 @@ export class AirPlayPlaybackSession {
       const info = await reply;
       if (info.error) { const error = info.error as Record<string, unknown>; throw new Error(`Playback error ${error.code ?? 'unknown'} (${error.domain ?? 'unknown domain'})`); }
       // Before the queued item is ready, tvOS replies { readyToPlay: false, item } with no playbackState.
-      const state = info.playbackState ?? 'loading';
-      if (typeof state !== 'string' || !['loading', 'playing', 'paused', 'stopped'].includes(state)) throw new Error('Invalid playback state');
+      const received = info.playbackState ?? 'loading';
+      if (typeof received !== 'string' || !['loading', 'playing', 'paused', 'stopped'].includes(received)) throw new Error('Invalid playback state');
+      const state = received === 'playing' || received === 'paused' ? received : 'idle';
       if (info.rate !== undefined && (typeof info.rate !== 'number' || !Number.isFinite(info.rate))) throw new Error('Invalid playback rate');
       return Object.fromEntries(Object.entries({ state, duration: cmTime(info.duration), position: cmTime(info.position), rate: info.rate }).filter(([, v]) => v !== undefined)) as unknown as AirPlayPlaybackStatus;
     } catch (error) { this.fail(error as Error); throw error; }
