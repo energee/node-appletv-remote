@@ -41,7 +41,7 @@ export interface TextInputEvent {
   timestamp?: number;
 }
 
-/** MRP TextInputMessage action types; deleteText sends Delete (setText/insertText/clearText use Companion RTI). */
+/** MRP TextInputMessage action types: `TextInputEvent.actionType` values, and the Delete that deleteText sends. */
 export enum TextInputActionType {
   Unknown = 0,
   Insert = 1,
@@ -641,20 +641,13 @@ export class AppleTV extends EventEmitter {
   private async editText(text: string, clear: boolean): Promise<string> {
     const conn = this.requireCompanion();
     await conn.sendRequest('_tiStop', new Map());
-    const content = (await conn.sendRequest('_tiStart', new Map())).get('_c');
-    const archive = content instanceof Map ? content.get('_tiD') : undefined;
+    const archive = (await this.companionContent('_tiStart')).get('_tiD');
     if (!Buffer.isBuffer(archive)) throw new Error('No text field is focused');
-    const session = readTextSession(archive);
-    let current = session.text;
-    if (clear) {
-      conn.sendMessage('_tiC', new Map<OpackValue, OpackValue>([['_tiV', 1], ['_tiD', rtiClearTextPayload(session.sessionUUID)]]));
-      current = '';
-    }
-    if (text) {
-      conn.sendMessage('_tiC', new Map<OpackValue, OpackValue>([['_tiV', 1], ['_tiD', rtiInputTextPayload(session.sessionUUID, text)]]));
-      current += text;
-    }
-    return current;
+    const { sessionUUID, text: current } = readTextSession(archive);
+    const send = (payload: Buffer) => conn.sendMessage('_tiC', new Map<OpackValue, OpackValue>([['_tiV', 1], ['_tiD', payload]]));
+    if (clear) send(rtiClearTextPayload(sessionUUID));
+    if (text) send(rtiInputTextPayload(sessionUUID, text));
+    return (clear ? '' : current) + text;
   }
 
   /** Send a Delete text-input action to the focused text field. */
