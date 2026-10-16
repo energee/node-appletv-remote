@@ -338,7 +338,11 @@ from unpadded A, B and S (pinned by `src/auth/__tests__/legacy-srp.test.ts`). H3
   after `FLUSH` was accepted (200) but no title was seen on screen. Repeated `setMetadata` during
   playback, screen awake on the home screen, on both the Apple TV HD and the Apple TV 4K: every
   request accepted, no banner or text at all, so the cause is likely session-level (ordering
-  before RECORD, or missing progress/artwork), not the text body.
+  before RECORD, or missing progress/artwork), not the text body. A scratch build (not committed)
+  then sent `progress` and the text `SET_PARAMETER` before `RECORD`, as the reference does, on the
+  Apple TV 4K: both accepted (200), audio played, still no banner, text or progress bar. Ordering
+  and progress are therefore ruled out on tvOS 26.6; artwork is the remaining untested reference
+  difference, and AirPlay 2 now-playing UI may need a different channel entirely.
 - Test first: additions in `src/raop/__tests__/stream.test.ts` (legacy) and
   `src/raop/__tests__/airplay2-stream.test.ts` (encrypted): request order (progress/artwork
   before RECORD), headers, bodies, gating, non-JPEG rejected, size cap.
