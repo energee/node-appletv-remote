@@ -82,8 +82,8 @@ it; password and access-control bits still fail closed. `stream()` requires
 ownership of the source.
 
 **AirPlay 2 realtime audio** (audible on an Apple TV 4K, AppleTV6,2, and an Apple TV HD,
-AppleTV5,3, both tvOS 26.6, with volume changes; text metadata is accepted but was not
-seen on screen on the Apple TV HD; other receivers and the details marked unverified below are untested on hardware). Pass the HAP `Credentials` that `PairSetup` (or `atv pair`) produced for
+AppleTV5,3, both tvOS 26.6, with volume changes; text metadata is accepted but nothing
+is shown on screen on either Apple TV, even with the screen awake; other receivers and the details marked unverified below are untested on hardware). Pass the HAP `Credentials` that `PairSetup` (or `atv pair`) produced for
 the receiver:
 
 ```typescript
