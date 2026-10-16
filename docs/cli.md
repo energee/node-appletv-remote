@@ -69,7 +69,7 @@ Two CLI timing knobs guard HID keys, which the Apple TV never acknowledges. Set 
 
 ```
 $ atv state
-Oh, No! Where is my Mouth? by Pit & Penny Stories [Playing] 0.00% (YouTube)
+Big Buck Bunny by Blender Foundation [Playing] 12.50% (YouTube)
 ```
 
 **Commands:** `command` (alias `cmd`) accepts the keys below and Companion buttons `guide`, `channel_up`, `channel_down`, `page_up`, `page_down`, and `screensaver`; see `atv --help` for complete syntax.

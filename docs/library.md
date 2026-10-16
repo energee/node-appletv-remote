@@ -107,21 +107,21 @@ re-query the capabilities relevant to your application.
 
 **Volume on tvOS 26 (#39):** on the tested devices `volume` stayed `undefined` and the
 `volume` event never fired when the TV offered no absolute volume, and `setVolume` sent
-but changed nothing. Check `featureAvailability('setVolume')` first. On tvOS 26.6 an
-AppleTV6,2 reports volume control unavailable (most likely because the TV's volume is not
-under its control over CEC or IR; not confirmed), and an AppleTV5,3 reports relative only (`volumeUp`/`volumeDown` supported, `setVolume`
+but changed nothing. Check `featureAvailability('setVolume')` first. On tvOS 26.6 one
+tested Apple TV reports volume control unavailable (most likely because the TV's volume is not
+under its control over CEC or IR; not confirmed), and another reports relative only (`volumeUp`/`volumeDown` supported, `setVolume`
 unsupported). Both answer a GetVolume request with 0 for every output UID, and their
 UpdateOutputDevice descriptors carry no volume.
 
 **Idle Apple TV state (#10):** when no app has a loaded item, an Apple TV (seen on
-the HD AppleTV5,3 and the 4K AppleTV6,2) answers the queue request with a typeless
+both tested models) answers the queue request with a typeless
 reply carrying our identifier and `errorCode` 35 ("Could not find the specified now
 playing client"). A typed request now rejects on such a reply instead of waiting out
 its 10 s timeout; the rejection carries `errorCode`. `getNowPlaying()` treats 35 as
 nothing playing (or the pushed state, if it arrived first); `getState()`,
-`requestPlaybackQueue()` and `requestArtwork()` reject. Hardware-checked on the HD
+`requestPlaybackQueue()` and `requestArtwork()` reject. Hardware-checked
 while playing, paused and after `stop`: queue replies and pushed state both work
-once an app has a loaded item. With nothing loaded, the HD sends no reply at all
+once an app has a loaded item. With nothing loaded, an Apple TV may send no reply at all
 to `play`, so that command still times out after 5 s.
 
 The handshake sends ClientUpdatesConfig, GetKeyboardSession and
@@ -176,11 +176,11 @@ atv.on('textFocusState', (state) => {});     // fires when focus changes (sessio
 await atv.fetchTextFocusState();             // re-ask the TV; also updates atv.textFocusState
 ```
 
-Text input uses Companion RTI: restart the text session (`_tiStop`/`_tiStart`), read the session UUID and current text from the reply, then send `_tiC` edits. A real Apple TV 4K ignored the older MRP `TextInputMessage`, so text input now needs `connectCompanion()`, and it rejects with `No text field is focused` instead of silently succeeding. `deleteText()` still sends the MRP Delete action.
+Text input uses Companion RTI: restart the text session (`_tiStop`/`_tiStart`), read the session UUID and current text from the reply, then send `_tiC` edits. A tested Apple TV ignored the older MRP `TextInputMessage`, so text input now needs `connectCompanion()`, and it rejects with `No text field is focused` instead of silently succeeding. `deleteText()` still sends the MRP Delete action.
 
 Text focus comes from the same RTI session: a `_tiStart` reply carries a `_tiD` archive only while a text field is focused. `connectCompanion()` sends `_tiStart` right after `_systemInfo`, because the TV pushes `_tiStarted`/`_tiStopped` events only to clients with an open RTI session; a TV that rejects it just emits `companionError` and leaves the state `unknown`. Every `_tiStart` reply (from connect, `fetchTextFocusState()` or a text edit) and every `_tiStarted`/`_tiStopped` event updates `textFocusState`, which emits only on change. It starts as `unknown` and returns to `unknown` when Companion closes. This is fixture-tested only; whether a given tvOS version pushes these events to this client is not hardware-verified (tracked in #30). The MRP `keyboard` event is separate and only fires on devices that still send KeyboardMessage.
 
-`connectCompanion()` sends `_systemInfo` after pair-verify. Without it, a real Apple TV 4K answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on an Apple TV 4K (tvOS, AppleTV6,2).
+`connectCompanion()` sends `_systemInfo` after pair-verify. Without it, a tested Apple TV answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on hardware ([tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on)).
 
 ## Connection and request lifecycle
 
@@ -225,7 +225,7 @@ nothing is playing; only the device's error 35 reply is (#10).
 
 ## Button actions, gestures, and audio routing
 
-These library APIs are protocol-tested; MRP button modes, touch swipes and output add/remove were exercised on an Apple TV 4K (#30). The CLI exposes them as `command <key> [action]`, `click`, `swipe` and `output`.
+These library APIs are protocol-tested; MRP button modes, touch swipes and output add/remove were exercised on hardware (#30). The CLI exposes them as `command <key> [action]`, `click`, `swipe` and `output`.
 
 ```typescript
 await atv.up('doubleTap');

@@ -32,8 +32,8 @@ one-shot API, not `AppleTV`/MRP playback. Two profiles are supported, chosen fro
 receiver's TXT record: **legacy** receivers accepting unencrypted PCM/L16 over IPv4
 UDP, with optional legacy PIN pair-verification, and **AirPlay 2 realtime** audio to
 HAP-paired receivers (current Apple TVs), described below.
-Hardware status: AirPlay 2 realtime audio is audible on an Apple TV 4K and an Apple TV
-HD (the HD run used RAOP discovery and `wavPcm` too); legacy receivers
+Hardware status: AirPlay 2 realtime audio, RAOP discovery and `wavPcm` are verified on the
+[tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on); legacy receivers
 and legacy PIN pairing are verified only against loopback tests. HomePods and other receivers needing transient pairing,
 AirPlay 2 buffered audio, RSA/FairPlay/MFi authentication, password digest auth,
 ALAC, transcoding, multiroom, live sources, artwork,
@@ -81,9 +81,8 @@ it; password and access-control bits still fail closed. `stream()` requires
 `credentials` on legacy receivers and `legacySeed` on AirPlay 2, all before taking
 ownership of the source.
 
-**AirPlay 2 realtime audio** (audible on an Apple TV 4K, AppleTV6,2, and an Apple TV HD,
-AppleTV5,3, both tvOS 26.6, with volume changes; text metadata is accepted but nothing
-is shown on screen on either Apple TV, even with the screen awake; other receivers and the details marked unverified below are untested on hardware). Pass the HAP `Credentials` that `PairSetup` (or `atv pair`) produced for
+**AirPlay 2 realtime audio** (audible with volume changes on the [tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on);
+text metadata is accepted but nothing is shown on screen, even with the screen awake; other receivers and the details marked unverified below are untested on hardware). Pass the HAP `Credentials` that `PairSetup` (or `atv pair`) produced for
 the receiver:
 
 ```typescript

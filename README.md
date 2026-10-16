@@ -57,9 +57,18 @@ atv --help                        # every command
 
 Credentials are saved to `~/.atv-credentials.json`; every command takes an optional `deviceId` and defaults to the most recently paired device. See the [CLI reference](https://github.com/energee/node-appletv-remote/blob/main/docs/cli.md).
 
+## Tested on
+
+| Model | Identifier | tvOS |
+|---|---|---|
+| Apple TV 4K | AppleTV6,2 | 26.6 |
+| Apple TV HD | AppleTV5,3 | 26.6 |
+
+Other models and tvOS versions are untested; reports are welcome.
+
 ## Status
 
-Hardware-checked on an Apple TV 4K (AppleTV6,2) and an Apple TV HD (AppleTV5,3), tvOS 26.6 (#30). Everything else is covered by protocol fixtures and loopback tests only; reports from real devices are welcome.
+"Verified" means checked on the models above (#30). Everything else is covered by protocol fixtures and loopback tests only.
 
 | Feature | Status |
 |---|---|
@@ -70,7 +79,7 @@ Hardware-checked on an Apple TV 4K (AppleTV6,2) and an Apple TV HD (AppleTV5,3),
 | Volume | Capability reporting verified; reading absolute volume unverified (#39) |
 | Audio output routing | Add/remove verified; `setOutputDevices` and routing errors unverified (#46) |
 | IPv6 (global, ULA, link-local) | Verified for MRP and Companion |
-| AirPlay 2 audio streaming (`RaopStream`) | Verified on 4K and HD, incl. WAV input and volume; text metadata not shown on screen (#22) |
+| AirPlay 2 audio streaming (`RaopStream`) | Verified, incl. WAV input and volume; text metadata not shown on screen (#22) |
 | Text entry and text-focus events | Unverified |
 | Media URL playback | Unverified |
 | Legacy Apple TV 2/3 (DMAP), legacy RAOP receivers, HomePods | Unverified, no hardware available |
