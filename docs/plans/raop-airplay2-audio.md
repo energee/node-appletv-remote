@@ -341,8 +341,13 @@ from unpadded A, B and S (pinned by `src/auth/__tests__/legacy-srp.test.ts`). H3
   before RECORD, or missing progress/artwork), not the text body. A scratch build (not committed)
   then sent `progress` and the text `SET_PARAMETER` before `RECORD`, as the reference does, on the
   Apple TV 4K: both accepted (200), audio played, still no banner, text or progress bar. Ordering
-  and progress are therefore ruled out on tvOS 26.6; artwork is the remaining untested reference
-  difference, and AirPlay 2 now-playing UI may need a different channel entirely.
+  and progress are therefore ruled out on tvOS 26.6. A second scratch run added a 600x600 JPEG
+  artwork `SET_PARAMETER` (`image/jpeg`) before `RECORD` with progress and text, the full reference
+  set, on the Apple TV 4K on its home screen: all accepted (200), still nothing on screen. On tvOS
+  26.6 these RAOP `SET_PARAMETER` requests are accepted but not displayed in the AirPlay 2 realtime
+  profile; task 13 should not ship artwork/progress as "shown on screen" without first finding the
+  channel tvOS actually uses for now-playing info (for example MRP `SetNowPlayingClient`/content
+  item updates). Treat on-screen metadata as a known limitation until then.
 - Test first: additions in `src/raop/__tests__/stream.test.ts` (legacy) and
   `src/raop/__tests__/airplay2-stream.test.ts` (encrypted): request order (progress/artwork
   before RECORD), headers, bodies, gating, non-JPEG rejected, size cap.
