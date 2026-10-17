@@ -202,6 +202,23 @@ describe('unified player state', () => {
       iTunesStoreArtistIdentifier: '9007199254740995', iTunesStoreAlbumIdentifier: '9007199254740996',
     });
   });
+  it('preserves direct playback evidence from encoded unnormalized fields without retaining them', async () => {
+    const atv = device();
+    deliver(atv, MessageType.SetNowPlayingClient, 'setNowPlayingClientMessage', { client: { bundleIdentifier: 'app' } });
+    const root = protobuf.Root.fromJSON(MRP_SCHEMA as protobuf.INamespace);
+    const proto = root.lookupType('ProtocolMessage');
+    const direct = proto.encode(proto.create({
+      type: MessageType.SetState,
+      '.setStateMessage': { playerPath: path('app'), nowPlayingInfo: { isAdvertisement: true } },
+    })).finish();
+    Reflect.get(atv, 'handleMRPMessage').call(atv, await MRPMessage.decode(Buffer.from(direct)));
+    expect(atv.nowPlaying).toMatchObject({ hasPlayback: true, title: '' });
+    const player = Reflect.get(Reflect.get(atv, 'playerState'), 'clients')
+      .get('app').players.get('MediaRemote-DefaultPlayer');
+    expect(player.direct).toEqual({});
+    deliver(atv, MessageType.SetState, 'setStateMessage', { playerPath: path('app'), playbackQueue: { contentItems: [] } });
+    expect(atv.nowPlaying.hasPlayback).toBe(false);
+  });
   it('keeps omitted metadata, clears replacements, and rejects unknown normalized enums', () => {
     const atv = device();
     deliver(atv, MessageType.SetState, 'setStateMessage', { playerPath: path('app'), playbackQueue: {

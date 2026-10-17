@@ -8,6 +8,8 @@ interface Player {
   /** Only the SetState fields snapshot() reads (playbackState, displayName); never queue/artwork payloads. */
   state: Payload;
   direct: Payload;
+  /** A direct now-playing payload had fields, even when all of them are intentionally unnormalized. */
+  hasDirectMetadata?: boolean;
   items: Payload[];
   location: number;
   /** A SetState carried state (see carriesState); identity/commands alone do not set it. */
@@ -118,7 +120,7 @@ export class PlayerState {
     const info = normalized;
     return new NowPlayingInfo({ ...player?.state, displayName: client?.info.displayName ?? player?.state.displayName,
       playerPath: { client: client?.info, player: { identifier } },
-      hasPlayback: Boolean(metadata || Object.keys(player?.direct ?? {}).length),
+      hasPlayback: Boolean(metadata || player?.hasDirectMetadata),
     }, info);
   }
 
@@ -183,9 +185,11 @@ export class PlayerState {
         player.location = payload.playbackQueue.location ?? 0;
         // Replaced queues must not inherit metadata from a previous track.
         player.direct = {};
+        player.hasDirectMetadata = false;
       }
       if (payload.nowPlayingInfo !== undefined) {
-        const fields = retain(payload.nowPlayingInfo, DIRECT_FIELDS);
+        const directPayload = payload.nowPlayingInfo;
+        const fields = retain(directPayload, DIRECT_FIELDS);
         const nextIdentifier = stableIdentifier(fields.uniqueIdentifier);
         const previousIdentifier = stableIdentifier(player.direct.uniqueIdentifier);
         if (nextIdentifier !== undefined && previousIdentifier !== undefined && nextIdentifier !== previousIdentifier) {
@@ -193,6 +197,7 @@ export class PlayerState {
           player.items = [];
         }
         player.direct = { ...player.direct, ...fields };
+        if (Object.keys(directPayload).length > 0) player.hasDirectMetadata = true;
       }
       if (payload.supportedCommands) player.commands = SupportedCommand.fromList(payload.supportedCommands);
     } else if (type === MessageType.UpdateContentItem) {
