@@ -87,4 +87,21 @@ describe('openRaopInput', () => {
     await expect(collect(input.source as AsyncIterable<Buffer>)).rejects.toThrow('stop');
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
   });
+
+  it('reports stdout failure before the caller starts consuming and releases the decoder', async () => {
+    const child = prepareChild();
+    const input = await openRaopInput('https://example.invalid/audio', new AbortController().signal);
+    child.stdout.emit('error', new Error('decoder output failed'));
+    await expect(input.failure).resolves.toMatchObject({ message: 'decoder output failed' });
+    await expect(collect(input.source as AsyncIterable<Buffer>)).rejects.toThrow('decoder output failed');
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('does not treat external signal termination as successful empty audio', async () => {
+    const child = prepareChild();
+    const input = await openRaopInput('https://example.invalid/audio', new AbortController().signal);
+    child.stdout.end(); child.emit('close', null, 'SIGKILL');
+    await expect(collect(input.source as AsyncIterable<Buffer>)).rejects.toThrow('ffmpeg exited from SIGKILL');
+    expect(child.kill).not.toHaveBeenCalled();
+  });
 });

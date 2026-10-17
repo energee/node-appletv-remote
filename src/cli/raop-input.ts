@@ -62,8 +62,9 @@ async function ffmpegInput(input: string, signal: AbortSignal): Promise<RaopInpu
   child.stderr.on('data', (data: Buffer) => {
     if (stderr.length < MAX_STDERR) stderr += data.toString('utf8', 0, MAX_STDERR - stderr.length);
   });
-  const failure = Promise.withResolvers<Error>();
-  child.stdout.on('error', (error: Error) => { stdoutError = error; failure.resolve(error); close(); });
+  let reportFailure!: (error: Error) => void;
+  const failure = new Promise<Error>(resolve => { reportFailure = resolve; });
+  child.stdout.on('error', (error: Error) => { stdoutError = error; reportFailure(error); close(); });
   const started = new Promise<void>((resolve, reject) => {
     child.once('spawn', resolve);
     child.once('error', (error: NodeJS.ErrnoException) => {
@@ -95,7 +96,7 @@ async function ffmpegInput(input: string, signal: AbortSignal): Promise<RaopInpu
       if (exitError) throw exitError;
     } finally { signal.removeEventListener('abort', abort); close(); await finished; }
   })();
-  return { source, failure: failure.promise, close };
+  return { source, failure, close };
 }
 
 /** Select a finite CLI input route without buffering a track. `pcm:` makes remote raw PCM explicit. */
