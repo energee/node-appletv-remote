@@ -12,7 +12,7 @@ import { PlaybackState } from '../now-playing-info.js';
 import { MessageType, HID_KEY_MAP } from '../mrp/messages.js';
 import { Credentials } from '../credentials.js';
 import { FileStorage, type DeviceRecord, type EndpointHints } from '../storage.js';
-import { DeviceSession, KEY_OPERATIONS } from '../session.js';
+import { DeviceSession, KEY_OPERATIONS, supportsSessionOperation } from '../session.js';
 import type { ControlProtocol, SessionOperation, SessionCredentials } from '../session.js';
 import { DmapPairing } from '../dmap/pairing.js';
 import { RaopStream } from '../raop/stream.js';
@@ -102,6 +102,10 @@ async function selectDevice<T>(devices: T[], none: string, label: (device: T) =>
   if (!selected) console.log('Invalid selection.');
   return selected;
 }
+/** Preserve each advertised identity once; scan includes deviceId in identifiers. */
+function deviceAliases(device: DiscoveredDeviceInfo): string[] {
+  return [...new Map([device.deviceId, ...(device.identifiers ?? [])].map(alias => [alias.toLowerCase(), alias])).values()];
+}
  
 
 /** `atv scan`: list Apple TVs and AirPlay receivers found via mDNS within 5 s, with each `psi` output ID. */
@@ -126,7 +130,7 @@ async function cmdPair() {
   console.log(`Pairing with ${atv.name}...`);
   const hapCreds = await (await atv.startPairing()).finish(await prompt('Enter PIN shown on Apple TV: '));
   const store = await storage();
-  store.setHap(device.deviceId, device.port ? 'airplay' : 'mrp', hapCreds, [device.deviceId, ...(device.identifiers ?? [])]);
+  store.setHap(device.deviceId, device.port ? 'airplay' : 'mrp', hapCreds, deviceAliases(device));
   await store.save();
   console.log(`Paired! Credentials saved to ${STORAGE_FILE}`);
 }
@@ -179,13 +183,28 @@ async function findDevice(record: DeviceRecord, accepts: (device: DiscoveredDevi
   return device;
 }
 
-/** Scan for a device, then retain only nonsecret endpoint hints for the next CLI invocation. */
+/** Try nonsecret endpoint hints before discovery; retries stop before any operation is dispatched. */
 async function connectCached(record: DeviceRecord, accepts: (device: DiscoveredDeviceInfo) => boolean, connect: (device: DiscoveredDeviceInfo) => Promise<DeviceSession>): Promise<DeviceSession> {
+  const saved = record.hints;
+  const endpoint = Object.values(record.settings ?? {}).map(settings => settings.endpoint)
+    .find(value => value?.address || value?.companionAddress || value?.mrpAddress || value?.dmapAddress);
+  const address = saved?.address ?? endpoint?.address ?? endpoint?.companionAddress ?? endpoint?.mrpAddress ?? endpoint?.dmapAddress;
+  if (address) {
+    const cached: DiscoveredDeviceInfo = { ...saved, name: saved?.name ?? record.key,
+      deviceId: record.aliases[0] ?? record.key, identifiers: record.aliases,
+      address, port: saved?.port ?? 0, model: saved?.model ?? '' };
+    if (accepts(cached)) {
+      try { return await connect(cached); } catch { /* Only setup failed; no operation has been dispatched. */ }
+    }
+  }
   const device = await findDevice(record, accepts);
   const result = await connect(device);
   try {
     const store = await storage();
-    const hints: EndpointHints = { address: device.address, port: device.port, companionPort: device.companionPort, mrpPort: device.mrpPort, dmapAddress: device.dmapAddress, dmapPort: device.dmapPort, raopAddress: device.raopAddress, raopPort: device.raopPort };
+    const hints: EndpointHints = { name: device.name, model: device.model, address: device.address, port: device.port,
+      companionAddress: device.companionAddress, companionPort: device.companionPort,
+      mrpAddress: device.mrpAddress, mrpPort: device.mrpPort, mrpEnabled: device.mrpEnabled,
+      dmapAddress: device.dmapAddress, dmapPort: device.dmapPort, raopAddress: device.raopAddress, raopPort: device.raopPort };
     if (JSON.stringify(record.hints) !== JSON.stringify(hints)) { record.hints = hints; store.upsert(record); await store.save(); }
     return result;
   } catch (error) {
@@ -202,14 +221,39 @@ async function connectSession(deviceId?: string, operations?: readonly SessionOp
     airplay: store.hap(record.key, 'airplay'), mrp: store.hap(record.key, 'mrp'),
     companion: store.hap(record.key, 'companion'), dmap: record.credentials?.dmap?.guid,
   };
-  const options = { credentials, operations, settleMs: settleMs(),
+  const carriers: ControlProtocol[] = protocol ? [protocol] : ['airplay', 'mrp', 'companion', 'dmap'];
+  for (const operation of operations ?? []) {
+    if (!carriers.some(carrier => credentials[carrier] !== undefined && supportsSessionOperation(carrier, operation))) {
+      throw new Error(`No configured implementation for ${operation}`);
+    }
+  }
+  const options = { credentials, operations,
+    settleMs: process.env.ATV_SETTLE_MS === undefined ? undefined : settleMs(),
+    protocolOptions: {
+      airplay: { settleMs: record.settings?.airplay?.settleMs ?? 500 },
+      mrp: { settleMs: record.settings?.mrp?.settleMs ?? 500 },
+    },
     ...(protocol ? { transports: { [protocol]: {} } } : {}) };
+  const configuredDevice = (device: DiscoveredDeviceInfo): DiscoveredDeviceInfo => {
+    const airplay = record.settings?.airplay?.endpoint;
+    const mrp = record.settings?.mrp?.endpoint;
+    const companion = record.settings?.companion?.endpoint;
+    const dmap = record.settings?.dmap?.endpoint;
+    return { ...device,
+      address: airplay?.address ?? device.address, port: airplay?.port ?? device.port,
+      mrpAddress: mrp?.mrpAddress ?? mrp?.address ?? device.mrpAddress ?? device.address,
+      mrpPort: mrp?.mrpPort ?? mrp?.port ?? device.mrpPort,
+      companionAddress: companion?.companionAddress ?? companion?.address ?? device.companionAddress ?? device.address,
+      companionPort: companion?.companionPort ?? companion?.port ?? device.companionPort,
+      dmapAddress: dmap?.dmapAddress ?? dmap?.address ?? device.dmapAddress ?? device.address,
+      dmapPort: dmap?.dmapPort ?? dmap?.port ?? device.dmapPort };
+  };
   const accepts = (device: DiscoveredDeviceInfo) => {
-    try { new DeviceSession(device, options); return true; } catch { return false; }
+    try { new DeviceSession(configuredDevice(device), options); return true; } catch { return false; }
   };
   return connectCached(record, accepts, async device => {
     console.error(`Connecting to ${device.name}...`);
-    const session = new DeviceSession(device, options);
+    const session = new DeviceSession(configuredDevice(device), options);
     session.on('transportError', ({ protocol: source, error }: { protocol: ControlProtocol; error: Error }) => console.error(`${source} error: ${error.message}`));
     await session.connect();
     return session;
@@ -371,7 +415,7 @@ async function cmdCompanionPair() {
   console.log(`Companion pairing with ${atv.name} on port ${device.companionPort}...`);
   const companionCreds = await (await atv.startCompanionPairing()).finish(await prompt('Enter PIN shown on Apple TV: '));
   const store = await storage();
-  store.setHap(device.deviceId, 'companion', companionCreds, [device.deviceId, ...(device.identifiers ?? [])]);
+  store.setHap(device.deviceId, 'companion', companionCreds, deviceAliases(device));
   await store.save();
   console.log(`Companion paired! Credentials saved to ${STORAGE_FILE}`);
 }
@@ -482,7 +526,7 @@ async function cmdDmapPair(localAddress: string) {
   }
 
   const store = await storage();
-  const record: DeviceRecord = store.get(device.deviceId) ?? { key: device.deviceId, aliases: [device.deviceId, ...(device.identifiers ?? [])] };
+  const record: DeviceRecord = store.get(device.deviceId) ?? { key: device.deviceId, aliases: deviceAliases(device) };
   record.credentials = { ...record.credentials, dmap: { guid } };
   store.upsert(record);
   await store.save();

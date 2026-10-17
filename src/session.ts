@@ -56,6 +56,8 @@ export interface SessionOptions {
   /** An override is strict: no alternative provider is selected if this provider is unavailable. */
   preferences?: Partial<Record<SessionOperation, ControlProtocol>>;
   settleMs?: number;
+  /** Per-MRP-carrier options; a defined top-level settleMs overrides these values. */
+  protocolOptions?: Partial<Record<'airplay' | 'mrp', { settleMs?: number }>>;
 }
 export interface SessionConnectionEvent {
   protocol: ControlProtocol;
@@ -77,6 +79,11 @@ const operationFeatures: Partial<Record<SessionOperation, Feature>> = {
   getNowPlaying: 'getState', getState: 'getState', requestPlaybackQueue: 'getState', requestArtwork: 'requestArtwork',
   insertText: 'setText', clearText: 'setText', getText: 'setText',
 };
+
+/** Declared implementation support only; it does not imply that a device enables the operation. */
+export function supportsSessionOperation(protocol: ControlProtocol, operation: SessionOperation): boolean {
+  return implementations[protocol].includes(operation);
+}
 const STATE_OPERATIONS: Record<string, SessionOperation> = {
   nowPlaying: 'getNowPlaying', volume: 'setVolume', outputDevices: 'requestPlaybackQueue',
   powerState: 'fetchPowerState', textFocusState: 'fetchTextFocusState', keyboard: 'getState', textInput: 'getState',
@@ -100,6 +107,7 @@ export class DeviceSession extends EventEmitter {
   private readonly credentials: SessionCredentials;
   private readonly requirements: Partial<Record<ControlProtocol, { required?: boolean }>>;
   private readonly settleMs?: number;
+  private readonly protocolOptions: Partial<Record<'airplay' | 'mrp', { settleMs?: number }>>;
   private closePromise?: Promise<void>;
   private lastPrimitiveState: Record<string, unknown> = {};
 
@@ -109,6 +117,7 @@ export class DeviceSession extends EventEmitter {
     this.preferences = { ...options.preferences };
     this.requirements = options.transports ?? {};
     this.settleMs = options.settleMs;
+    this.protocolOptions = { airplay: { ...options.protocolOptions?.airplay }, mrp: { ...options.protocolOptions?.mrp } };
     const explicit = options.transports !== undefined;
     const protocols: ControlProtocol[] = ['airplay', 'mrp', 'companion', 'dmap'];
     this.configured = protocols.filter(protocol => explicit ? Object.hasOwn(options.transports!, protocol) :
@@ -170,7 +179,9 @@ export class DeviceSession extends EventEmitter {
         try {
           if (client instanceof DmapClient) await client.connect(this.credentials.dmap!);
           else if (protocol === 'companion') await client.connectCompanion(this.credentials.companion!);
-          else await client.connect(new Credentials(this.credentials[protocol] as HAPCredentials), { settleMs: this.settleMs });
+          else await client.connect(new Credentials(this.credentials[protocol] as HAPCredentials), {
+            settleMs: this.settleMs ?? this.protocolOptions[protocol as 'airplay' | 'mrp']?.settleMs,
+          });
           if (generation !== this.generation || this.providers.get(protocol) !== provider) throw new Error('Session closed during setup');
           provider.ready = true;
           this.emit('connection', { protocol, state: 'ready' } satisfies SessionConnectionEvent);
