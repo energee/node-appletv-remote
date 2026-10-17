@@ -364,8 +364,10 @@ export class AppleTV extends EventEmitter {
       this.readyTransports.add(connection);
       this.emit('connect');
     } catch (err) {
-      connection.close();
-      if (this.connection === connection) this.connection = undefined;
+      if (this.connection === connection) {
+        connection.close();
+        if (this.connection === connection) this.connection = undefined;
+      }
       throw err;
     }
   }
@@ -460,8 +462,10 @@ export class AppleTV extends EventEmitter {
       this.readyTransports.add(connection);
       this.emit('companionConnect');
     } catch (err) {
-      connection.close();
-      if (this.companionConnection === connection) this.companionConnection = undefined;
+      if (this.companionConnection === connection) {
+        connection.close();
+        if (this.companionConnection === connection) this.companionConnection = undefined;
+      }
       throw err;
     }
   }

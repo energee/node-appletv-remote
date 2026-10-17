@@ -53,6 +53,9 @@ export function createClient(info: DiscoveredDeviceInfo, protocol?: 'airplay' | 
   return new AppleTV(info);
 }
 
+export { DeviceSession, connectDevice, KEY_OPERATIONS } from './session.js';
+export type { ControlProtocol, SessionCredentials, SessionOperation, SessionOptions, SessionConnectionEvent } from './session.js';
+
 export { AirPlayPlaybackSession } from './airplay-playback.js';
 export type { AirPlayPlaybackStatus } from './airplay-playback.js';
 
