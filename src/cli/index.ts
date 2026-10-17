@@ -503,8 +503,10 @@ async function cmdDmapPair(localAddress: string) {
     'No DMAP devices found.', (d) => `${d.name} (${d.dmapAddress ?? d.address}:${d.dmapPort}) [${d.deviceId}]`);
   if (!device) return;
 
+  const store = await storage();
+  const controllerName = store.get(device.deviceId)?.settings?.dmap?.controllerName ?? 'atv CLI';
   const pin = String(randomInt(10000)).padStart(4, '0');
-  const pairing = new DmapPairing({ name: 'atv CLI', address: localAddress, pin });
+  const pairing = new DmapPairing({ name: controllerName, address: localAddress, pin });
   // Ctrl+C must still close the callback server and unpublish the _touch-remote advertisement.
   const cancellation = new AbortController();
   const cancel = () => cancellation.abort(new Error('DMAP pairing cancelled'));
@@ -512,7 +514,7 @@ async function cmdDmapPair(localAddress: string) {
   let guid: string;
   try {
     await pairing.start();
-    console.log(`On ${device.name}, open Settings > General > Remotes, choose "atv CLI" and enter PIN ${pin}.`);
+    console.log(`On ${device.name}, open Settings > General > Remotes, choose "${controllerName}" and enter PIN ${pin}.`);
     // DmapPairing has no completion event; poll until it pairs, locks out after five wrong PINs, or expires.
     for (;;) {
       try { guid = pairing.finish(); break; } catch (error) {
@@ -525,7 +527,6 @@ async function cmdDmapPair(localAddress: string) {
     await pairing.close();
   }
 
-  const store = await storage();
   const record: DeviceRecord = store.get(device.deviceId) ?? { key: device.deviceId, aliases: deviceAliases(device) };
   record.credentials = { ...record.credentials, dmap: { guid } };
   store.upsert(record);
