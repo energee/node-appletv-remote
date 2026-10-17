@@ -38,24 +38,29 @@ atv.on('nowPlaying', info => console.log(info.toString()));
 await atv.close();
 ```
 
-Apps, accounts, power and text input need a second, Companion pairing: `startCompanionPairing()` then `connectCompanion()`. See the [library guide](https://github.com/energee/node-appletv-remote/blob/main/docs/library.md).
+Apps, accounts, text input, and Companion-only navigation/media/volume/power control need a second, Companion pairing: `startCompanionPairing()` then `connectCompanion()`. A successful Companion control reply acknowledges acceptance, not a resulting UI, playback, volume, or power-state change; observe the normal state events separately. See the [library guide](https://github.com/energee/node-appletv-remote/blob/main/docs/library.md).
+
+`DeviceSession` offers typed, per-operation routing over separately paired AirPlay, standalone
+MRP, Companion and legacy DMAP clients. It selects before sending and never replays a failed
+action through another protocol; see [routed sessions](docs/library.md#routed-sessions).
+This orchestration API is synthetic-peer verified; physical mixed-protocol validation is pending.
 
 ## CLI
 
 ```bash
 atv scan                          # find Apple TVs
 atv pair                          # AirPlay pairing (enter the PIN shown on the TV)
-atv companion-pair                # Companion pairing, needed for apps/accounts/power/text
-atv remote                        # interactive remote; type `help`
-atv command play                  # one key: up, down, select, menu, home, play_pause, ...
-atv state                         # what's playing
-atv volume 40
+atv companion-pair                # Companion pairing, needed for Companion-only controls/apps/accounts/power/text
+atv remote                        # interactive remote over configured paired protocols
+atv command play                  # one-shot routed control
+atv state                         # normalized now-playing snapshot
+atv volume 40                     # absolute volume when the selected provider advertises it
 atv app launch com.netflix.Netflix
 atv text set "search words"
 atv --help                        # every command
 ```
 
-Credentials are saved to `~/.atv-credentials.json`; every command takes an optional `deviceId` and defaults to the most recently paired device. See the [CLI reference](https://github.com/energee/node-appletv-remote/blob/main/docs/cli.md).
+Credentials and endpoint hints use `~/.atv-storage.json`; every command takes an optional `deviceId` and defaults to the most recent eligible paired record. Legacy files are imported non-destructively. See the [CLI reference](https://github.com/energee/node-appletv-remote/blob/main/docs/cli.md).
 
 ## Tested on
 
@@ -73,10 +78,10 @@ Other models and tvOS versions are untested; reports are welcome.
 | Feature | Status |
 |---|---|
 | Discovery, AirPlay and Companion pairing | Verified |
-| Navigation, media commands, button tap/double-tap/hold, touch swipes | Verified |
-| Now playing, playback queue, artwork | Verified (some apps, e.g. YouTube, send no artwork); richer MRP queue metadata is fixture-tested |
-| Apps, accounts, power, app launch by URL | Verified |
-| Volume | Capability reporting verified; reading absolute volume unverified (#39) |
+| Navigation/media/power over Companion alone | Protocol fixtures only; hardware unverified |
+| Navigation, media commands, button tap/double-tap/hold, touch swipes | Verified over MRP |
+| Apps, accounts, power state, app launch by URL | Verified |
+| Volume | MRP capability reporting verified; Companion control/reading unverified |
 | Audio output routing | Add/remove verified; `setOutputDevices` and routing errors unverified (#46) |
 | IPv6 (global, ULA, link-local) | Verified for MRP and Companion |
 | AirPlay 2 audio streaming (`RaopStream`) | Verified, incl. WAV input and volume; text metadata not shown on screen (#22) |

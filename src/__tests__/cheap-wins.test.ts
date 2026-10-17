@@ -24,6 +24,8 @@ function fakeMrp(atv: AppleTV) {
       return { type: 2, '.sendCommandResultMessage': { sendError: 0, handlerReturnStatus: 0 } };
     },
   };
+  const readyTransports = Reflect.get(atv, 'readyTransports');
+  if (readyTransports instanceof WeakSet) readyTransports.add(Reflect.get(atv, 'connection'));
   return sent;
 }
 
@@ -38,6 +40,8 @@ function fakeCompanion(atv: AppleTV, reply: OpackDict = new Map()) {
     }),
     sendMessage: vi.fn((id: string, content: OpackDict) => { messages.push([id, content]); }),
   };
+  const readyTransports = Reflect.get(atv, 'readyTransports');
+  if (readyTransports instanceof WeakSet) readyTransports.add(Reflect.get(atv, 'companionConnection'));
   return { requests, messages };
 }
 

@@ -20,27 +20,108 @@ const credentials = await pairing.finish(pin);
 const companionPairing = await atv.startCompanionPairing();
 const companionCredentials = await companionPairing.finish(pin);
 ```
+## Optional storage
 
-## Remote control (AirPlay/MRP)
+Storage is opt-in: existing explicit credentials never cause filesystem access. Call
+`load()` before lookup/update and `save()` when the application decides a successful
+pairing or hint update should persist. `FileStorage` is JSON with atomic same-directory
+replacement and mode `0600`; it is **not a keychain**. One writer per file is supported.
 
 ```typescript
-await atv.connect(credentials);
+import { FileStorage, CustomStorage } from 'node-appletv-remote';
 
-await atv.up();            // also down, left, right, select, menu, home, topMenu
-await atv.playPause();     // also play, pause, stop, next, previous
-await atv.skipForward();   // app's default interval, or pass seconds: skipBackward(30)
-await atv.setPosition(120);
-await atv.setShuffle(ShuffleState.Songs);
-await atv.setRepeat(RepeatState.All);
-await atv.setVolume(40);   // 0–100; also volumeUp, volumeDown
-await atv.wake();          // also suspend
+const storage = new FileStorage('.atv-storage.json');
+await storage.load();
+storage.setHap(device.deviceId, 'airplay', credentials, [device.deviceId, ...device.identifiers]);
+await storage.save();
+const credentialsAgain = storage.hap(device.deviceId, 'airplay');
 
-const state = await atv.getNowPlaying(); // unified NowPlayingInfo
-const rawState = await atv.getState();  // raw SetState, retained for compatibility
-const art = await atv.requestArtwork(400, 400); // null if the app has none
-
-await atv.close();
+// A keychain/database/cloud adapter implements { load(): Promise<StorageDocument|undefined>,
+// save(document): Promise<void> }; pass it to new CustomStorage(adapter).
 ```
+
+Records separate protocol credentials (`airplay`, `mrp`, `companion`, `raop`, `dmap`)
+from unauthenticated endpoint hints. Aliases must be unique; a collision requires explicit
+record selection. Explicit caller values take precedence over stored values, which take
+precedence over library defaults. Unknown versions and malformed credentials reject on load;
+they are never silently reset. Use `remove(key)` for deletion.
+
+
+## Routed sessions
+
+`DeviceSession` configures independent clients with credentials keyed by their actual pairing
+carrier. It does not convert AirPlay keys into standalone MRP or Companion keys. Explicit
+credentials cause no storage access. Construct the session before connecting when initial
+events matter:
+
+```typescript
+import { DeviceSession } from 'node-appletv-remote';
+
+const session = new DeviceSession(device, {
+  credentials: { airplay: credentials, companion: companionCredentials },
+  transports: { airplay: {}, companion: { required: false } },
+  preferences: { wake: 'companion' },
+});
+session.on('nowPlaying', info => console.log(info.toString()));
+session.on('connection', event => console.log(event.protocol, event.state));
+session.on('transportError', ({ protocol, error }) => console.error(protocol, error.message));
+await session.connect();
+try {
+  await session.execute('play');
+  await session.execute('appList');
+  console.log(await session.execute('getNowPlaying'));
+} finally {
+  await session.close();
+}
+```
+
+`connectDevice(device, options)` is the convenience form returning an already-ready session.
+`execute(operation, ...arguments)` retains the underlying `AppleTV` argument/result types;
+`sendKeyCommand` and exported `KEY_OPERATIONS` use the same policy. A DMAP provider rejects
+hold/double-tap before transmission instead of silently performing a single action.
+
+Playback/metadata/queue/artwork/routing prefer an eligible AirPlay MRP tunnel, then enabled
+standalone MRP. Shared navigation/media/volume operations can next select Companion, then
+an implemented DMAP operation. Apps, accounts, text, touch and power prefer Companion.
+DMAP normalizes `getNowPlaying` through its existing state request; it does not implement
+MRP queue/routing. Known AppleTV1–3 models never become modern AirPlay tunnels.
+
+`preferences` are strict operation overrides: an unimplemented or unconfigured choice rejects
+before setup; an unavailable override does not choose another protocol. Without an override,
+known unsupported/unavailable implementations are excluded before transmission. `unknown`
+means no device evidence, not no implementation. Selection occurs once per call; errors,
+timeouts and disconnects after dispatch propagate without replay on another protocol.
+
+Omitting `transports` opens eligible credential-bearing providers. Explicit entries default to
+required; required setup failure closes the whole attempt, while optional failure emits
+`connection: failed` and `transportError`. `operations: ['getNowPlaying']` limits setup to
+providers selected for those operations, as used by one-shot CLI commands.
+
+There is one authoritative source per normalized state event, independent of action availability.
+Setup state is coalesced until that source is ready. Loss invalidates its cached state and
+availability; later calls may choose another already-ready provider. DMAP terminal authentication
+loss participates in that invalidation. `connection` distinguishes `ready`, unexpected `lost`,
+intentional `closed`, and optional setup `failed`. `close()` cancels setup and owned transports,
+detaches forwarding, and is idempotent. Sessions are single-use and add no reconnect or cross-protocol retry.
+
+Verification uses synthetic MRP/Companion fixtures and a real local HTTP DMAP peer. Physical
+mixed-protocol/Companion-only interoperability remains unverified for this session API.
+
+## Remote control
+
+```typescript
+await atv.connect(credentials); // MRP remains preferred when both transports are open
+await atv.up();                 // also down, left, right, select, menu, home, topMenu
+await atv.playPause();          // also play, pause, stop, next, previous
+await atv.skipForward();        // app default interval, or skipBackward(30)
+await atv.setPosition(120);     // MRP only
+await atv.setShuffle(ShuffleState.Songs); // MRP only
+await atv.setRepeat(RepeatState.All);     // MRP only
+await atv.setVolume(40);        // 0–100; also volumeUp, volumeDown
+await atv.wake();               // also suspend
+```
+
+With only `connectCompanion(companionCredentials)`, navigation (except `topMenu`), `playPause`, play/pause/next/previous, skip, volume buttons, absolute volume, wake, and suspend use encrypted, acknowledged Companion requests. `stop`, absolute seek, shuffle/repeat, output routing, and now-playing APIs remain MRP-only. Companion HID actions retain single-tap, double-tap, and one-second hold semantics. A completed Companion request means only that the TV accepted the request; navigation, playback, volume, and power state are observational and are not changed optimistically.
 
 ## Media results, state and runtime availability
 
@@ -108,17 +189,14 @@ atv.on('featureAvailability', () => {
 ```
 
 Availability is `supported` (advertised and enabled), `unavailable` (advertised but
-currently disabled), `unsupported` (missing from a received command list), or
-`unknown` (no runtime evidence). Media commands use the active player's command
-list plus client defaults. Volume uses explicit relative/absolute capability
-flags and the known output UID. The flags come from a pushed VolumeControlAvailability
-(type 17), from the reply (type 63) to the GetVolumeControlCapabilities request the
-handshake sends (tvOS 26 does not always push type 17), and from
-VolumeControlCapabilitiesDidChange (type 64) pushes for our output device. A type 63 or
-64 without capabilities leaves earlier flags unchanged. Other public capabilities remain `unknown` rather
-than being guessed from model or service presence. Availability is advisory and
-may change at any time; device errors still reject. The event has no payload:
-re-query the capabilities relevant to your application.
+currently disabled), `unsupported` (missing from a received MRP command list), or
+`unknown` (no runtime evidence). On a Companion-only connection, `_iMC` media-control
+flags provide supported/unavailable evidence for play, pause, next, previous, skip, and
+volume; navigation and play/pause stay unknown because `_iMC` has no defined flags for
+them. A volume-capable `_iMC` update requests the reported volume and emits `volume` only
+for a finite 0–1 reply. Availability is advisory and may change at any time; device
+errors still reject. The event has no payload: re-query capabilities relevant to your
+application.
 
 **Volume on tvOS 26 (#39):** on the tested devices `volume` stayed `undefined` and the
 `volume` event never fired when the TV offered no absolute volume, and `setVolume` sent

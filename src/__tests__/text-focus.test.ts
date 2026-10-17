@@ -2,7 +2,7 @@
  * Keyboard text-focus state from Companion RTI: the `_tiStart` reply carries `_tiD` only when a
  * text field is focused, and a started session then receives `_tiStarted`/`_tiStopped` events.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppleTV, KeyboardFocusState } from '../appletv.js';
 import type { CompanionEvent } from '../appletv.js';
 import { CompanionConnection } from '../companion/connection.js';
@@ -12,6 +12,7 @@ import type { OpackDict, OpackValue } from '../companion/opack.js';
 const credentials = new Credentials({ clientId: 'test', serverId: 'server', clientLTSK: Buffer.alloc(32), clientLTPK: Buffer.alloc(32), serverLTPK: Buffer.alloc(32) });
 const liveDevice = () => new AppleTV({ name: 'TV', address: '127.0.0.1', port: 7000, deviceId: 'test', model: 'test', companionPort: 1234 });
 const device = () => new AppleTV({ name: 'TV', address: '127.0.0.1', port: 7000, deviceId: 'test', model: 'test' });
+beforeEach(() => { vi.spyOn(CompanionConnection.prototype, 'sendMessage').mockImplementation(() => {}); });
 
 /** Companion fake whose `_tiStart` reply is focused (`_tiD` present) or unfocused (empty `_c`). */
 function companion(focused: boolean) {
