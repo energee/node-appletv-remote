@@ -10,7 +10,18 @@ import { PlaybackState } from '../now-playing-info.js';
 import { MessageType, MRPMessage } from '../mrp/messages.js';
 
 function device() {
-  return new AppleTV({ name: 'Test', address: '127.0.0.1', port: 7000, deviceId: 'test', model: '' });
+  const atv = new AppleTV({ name: 'Test', address: '127.0.0.1', port: 7000, deviceId: 'test', model: '' });
+  const readyTransports = Reflect.get(atv, 'readyTransports');
+  let connection: unknown;
+  Object.defineProperty(atv, 'connection', {
+    configurable: true,
+    get: () => connection,
+    set: (next: unknown) => {
+      connection = next;
+      if (readyTransports instanceof WeakSet && next !== null && (typeof next === 'object' || typeof next === 'function')) readyTransports.add(next);
+    },
+  });
+  return atv;
 }
 function deliver(atv: AppleTV, type: MessageType, field: string, payload: object) {
   (atv as any).handleMRPMessage({ type, [`.${field}`]: payload });
