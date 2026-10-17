@@ -224,7 +224,8 @@ async function connectToDevice(deviceId?: string): Promise<AppleTV> {
     if ((device.port ? 'airplay' : 'mrp') !== protocol) throw new Error(`Stored ${protocol} credentials do not match the discovered transport`);
     const atv = new AppleTV(device);
     atv.on('error', (err: Error) => console.error(`AirPlay error: ${err.message}`));
-    try { await atv.connect(credentials, { settleMs: settleMs() }); } catch (e) { await atv.close(); throw e; }
+    const resolved = (await storage()).resolveConnection(id, protocol);
+    try { await atv.connect(credentials, { settleMs: process.env.ATV_SETTLE_MS === undefined ? resolved.settleMs ?? settleMs() : settleMs() }); } catch (e) { await atv.close(); throw e; }
     return atv;
   });
 }

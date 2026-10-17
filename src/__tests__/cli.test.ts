@@ -172,12 +172,12 @@ describe('CLI operations', () => {
   it('closes a failed MRP connection', async () => {
     vi.mocked(AppleTV.prototype.connect).mockRejectedValue(new Error('connect failed'));
     await expect(run(['stop'])).rejects.toThrow('connect failed');
-    expect(AppleTV.prototype.close).toHaveBeenCalledTimes(1);
+    expect(AppleTV.prototype.close).toHaveBeenCalledTimes(2);
   });
   it('closes a failed Companion connection', async () => {
     vi.mocked(AppleTV.prototype.connectCompanion).mockRejectedValue(new Error('connect failed'));
     await expect(run(['power'])).rejects.toThrow('connect failed');
-    expect(AppleTV.prototype.close).toHaveBeenCalledTimes(1);
+    expect(AppleTV.prototype.close).toHaveBeenCalledTimes(2);
   });
   it('shows help without a connection', async () => {
     await run(['--help']);

@@ -24,6 +24,7 @@ export interface DeviceRecord { key: string; aliases: string[]; credentials?: Pr
 export interface StorageDocument { version: typeof STORAGE_VERSION; devices: DeviceRecord[]; }
 export interface StorageAdapter { load(): Promise<StorageDocument | undefined>; save(document: StorageDocument): Promise<void>; }
 export interface ConnectionResolution { protocol: Protocol; endpoint: EndpointHints; credentials?: HAPCredentials; dmapGuid?: string; raop?: { clientId: string; seed: Buffer }; settleMs?: number; controllerName?: string; }
+export interface ResolveOptions extends ProtocolSettings { credentials?: HAPCredentials; dmapGuid?: string; raop?: { clientId: string; seed: Buffer }; }
 export interface FileStorageOptions { mode?: number; }
 
 function clone<T>(value: T): T { return structuredClone(value); }
@@ -81,7 +82,7 @@ export class DeviceStorage {
   get(keyOrAlias: string): DeviceRecord | undefined { this.ready(); const lower = keyOrAlias.toLowerCase(); return clone(this.document.devices.find(r => r.key === keyOrAlias || r.aliases.some(a => a.toLowerCase() === lower))); }
   /** Finds a record only when aliases select exactly one record. */
   resolve(alias: string): DeviceRecord | undefined { return this.get(alias); }
-  upsert(record: DeviceRecord): void { this.ready(); const index = this.document.devices.findIndex(r => r.key === record.key); const existing = index < 0 ? undefined : this.document.devices[index]!; const merged: DeviceRecord = existing ? { ...existing, ...record, credentials: record.credentials ? { ...existing.credentials, ...record.credentials } : existing.credentials, settings: record.settings ? { ...existing.settings, ...record.settings } : existing.settings, hints: record.hints ?? existing.hints } : record; validate({ version: STORAGE_VERSION, devices: [...this.document.devices.filter((_, i) => i !== index), merged] }); if (index < 0) this.document.devices.push(clone(merged)); else this.document.devices[index] = clone(merged); this.revision++; }
+  upsert(record: DeviceRecord): void { this.ready(); const index = this.document.devices.findIndex(r => r.key === record.key); const existing = index < 0 ? undefined : this.document.devices[index]!; const merged: DeviceRecord = existing ? { ...existing, ...record, credentials: record.credentials ? { ...existing.credentials, ...record.credentials } : existing.credentials, settings: record.settings ? { ...existing.settings, ...record.settings } : existing.settings, hints: record.hints ?? existing.hints } : record; validate({ version: STORAGE_VERSION, devices: [...this.document.devices.filter((_, i) => i !== index), merged] }); if (existing && JSON.stringify(existing) === JSON.stringify(merged)) return; if (index < 0) this.document.devices.push(clone(merged)); else this.document.devices[index] = clone(merged); this.revision++; }
   remove(key: string): boolean { this.ready(); const index = this.document.devices.findIndex(r => r.key === key); if (index < 0) return false; this.document.devices.splice(index, 1); this.revision++; return true; }
   setHap(key: string, protocol: 'airplay' | 'mrp' | 'companion', credentials: HAPCredentials, aliases = [key]): void { const record = this.get(key) ?? { key, aliases }; record.credentials = { ...record.credentials, [protocol]: encodeHap(credentials) }; this.upsert(record); }
   hap(key: string, protocol: 'airplay' | 'mrp' | 'companion'): HAPCredentials | undefined { const value = this.get(key)?.credentials?.[protocol]; return value ? decodeHap(value) : undefined; }
@@ -96,14 +97,15 @@ export class DeviceStorage {
     return true;
   }
   /** Resolve explicit options over stored protocol settings over nonsecret discovery hints. */
-  resolveConnection(key: string, protocol: Protocol, explicit: ProtocolSettings = {}): ConnectionResolution {
+  resolveConnection(key: string, protocol: Protocol, explicit: ResolveOptions = {}): ConnectionResolution {
     const record = this.get(key);
     if (!record) throw new Error(`No storage record matches "${key}"`);
     const stored = record.settings?.[protocol] ?? {};
     const endpoint = { ...record.hints, ...stored.endpoint, ...explicit.endpoint };
-    const credentials = protocol === 'airplay' || protocol === 'mrp' || protocol === 'companion' ? this.hap(record.key, protocol) : undefined;
-    const dmapGuid = protocol === 'dmap' ? record.credentials?.dmap?.guid : undefined;
-    const raop = protocol === 'raop' && record.credentials?.raop ? { clientId: record.credentials.raop.clientId, seed: Buffer.from(record.credentials.raop.seed, 'hex') } : undefined;
+    const storedCredentials = protocol === 'airplay' || protocol === 'mrp' || protocol === 'companion' ? this.hap(record.key, protocol) : undefined;
+    const credentials = explicit.credentials ?? storedCredentials;
+    const dmapGuid = explicit.dmapGuid ?? (protocol === 'dmap' ? record.credentials?.dmap?.guid : undefined);
+    const raop = explicit.raop ?? (protocol === 'raop' && record.credentials?.raop ? { clientId: record.credentials.raop.clientId, seed: Buffer.from(record.credentials.raop.seed, 'hex') } : undefined);
     return { protocol, endpoint, credentials, dmapGuid, raop, settleMs: explicit.settleMs ?? stored.settleMs, controllerName: explicit.controllerName ?? stored.controllerName };
   }
   async save(): Promise<void> { this.ready(); if (!this.dirty) return; const revision = this.revision; const snapshot = clone(this.document); validate(snapshot); await this.adapter.save(snapshot); if (this.revision === revision) this.savedRevision = revision; }
