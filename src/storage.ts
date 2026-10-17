@@ -90,10 +90,30 @@ export class DeviceStorage {
   setUnclassifiedHap(key: string, credentials: HAPCredentials, aliases = [key]): void { const record = this.get(key) ?? { key, aliases }; record.credentials = { ...record.credentials, unclassified: encodeHap(credentials) }; this.upsert(record); }
   /** Explicitly remove one protocol credential; omitted fields never erase secrets. */
   removeCredential(key: string, protocol: keyof ProtocolCredentials): boolean {
-    const record = this.get(key);
-    if (!record?.credentials?.[protocol]) return false;
-    delete record.credentials[protocol];
-    this.upsert(record);
+    this.ready();
+    const index = this.document.devices.findIndex(record => record.key === key);
+    const existing = index < 0 ? undefined : this.document.devices[index]!;
+    if (!existing?.credentials?.[protocol]) return false;
+    const credentials = { ...existing.credentials };
+    delete credentials[protocol];
+    const updated = { ...existing, credentials };
+    validate({ version: STORAGE_VERSION, devices: [...this.document.devices.filter((_, i) => i !== index), updated] });
+    this.document.devices[index] = clone(updated);
+    this.revision++;
+    return true;
+  }
+  /** Explicitly remove one protocol's settings while retaining all other settings. */
+  removeSettings(key: string, protocol: Protocol): boolean {
+    this.ready();
+    const index = this.document.devices.findIndex(record => record.key === key);
+    const existing = index < 0 ? undefined : this.document.devices[index]!;
+    if (!existing?.settings?.[protocol]) return false;
+    const settings = { ...existing.settings };
+    delete settings[protocol];
+    const updated = { ...existing, settings };
+    validate({ version: STORAGE_VERSION, devices: [...this.document.devices.filter((_, i) => i !== index), updated] });
+    this.document.devices[index] = clone(updated);
+    this.revision++;
     return true;
   }
   /** Resolve explicit options over stored protocol settings over nonsecret discovery hints. */

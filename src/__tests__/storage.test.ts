@@ -19,6 +19,10 @@ describe('storage', () => {
     expect(store.hap('living-room', 'companion')?.clientId).toBe('client-b');
     store.upsert({ key: 'living-room', aliases: ['living-room', 'AA:BB'], settings: { airplay: { settleMs: 20, endpoint: { address: '192.0.2.1', port: 7000 } } } });
     expect(store.resolveConnection('living-room', 'airplay', { settleMs: 5, endpoint: { port: 7001 } })).toMatchObject({ settleMs: 5, endpoint: { address: '192.0.2.1', port: 7001 } });
+    expect(store.removeCredential('living-room', 'airplay')).toBe(true);
+    expect(store.hap('living-room', 'airplay')).toBeUndefined();
+    expect(store.hap('living-room', 'companion')?.clientId).toBe('client-b');
+    expect(store.removeSettings('living-room', 'airplay')).toBe(true);
     expect(() => store.upsert({ key: 'other', aliases: ['aa:bb'] })).toThrow('belongs to more than one');
     expect(store.remove('living-room')).toBe(true);
   });
