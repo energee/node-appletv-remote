@@ -23,7 +23,7 @@ export type DeviceSettings = Partial<Record<Protocol, ProtocolSettings>>;
 export interface DeviceRecord { key: string; aliases: string[]; credentials?: ProtocolCredentials; settings?: DeviceSettings; hints?: EndpointHints; }
 export interface StorageDocument { version: typeof STORAGE_VERSION; devices: DeviceRecord[]; }
 export interface StorageAdapter { load(): Promise<StorageDocument | undefined>; save(document: StorageDocument): Promise<void>; }
-export interface ConnectionResolution { protocol: Protocol; endpoint: EndpointHints; credentials?: HAPCredentials; settleMs?: number; controllerName?: string; }
+export interface ConnectionResolution { protocol: Protocol; endpoint: EndpointHints; credentials?: HAPCredentials; dmapGuid?: string; raop?: { clientId: string; seed: Buffer }; settleMs?: number; controllerName?: string; }
 export interface FileStorageOptions { mode?: number; }
 
 function clone<T>(value: T): T { return structuredClone(value); }
@@ -81,12 +81,20 @@ export class DeviceStorage {
   get(keyOrAlias: string): DeviceRecord | undefined { this.ready(); const lower = keyOrAlias.toLowerCase(); return clone(this.document.devices.find(r => r.key === keyOrAlias || r.aliases.some(a => a.toLowerCase() === lower))); }
   /** Finds a record only when aliases select exactly one record. */
   resolve(alias: string): DeviceRecord | undefined { return this.get(alias); }
-  upsert(record: DeviceRecord): void { this.ready(); validate({ version: STORAGE_VERSION, devices: [record] }); const index = this.document.devices.findIndex(r => r.key === record.key); const aliases = new Set(record.aliases.map(a => a.toLowerCase())); if (this.document.devices.some((r, i) => i !== index && r.aliases.some(a => aliases.has(a.toLowerCase())))) throw new Error('Storage alias collision requires explicit record selection'); if (index < 0) this.document.devices.push(clone(record)); else this.document.devices[index] = clone(record); this.revision++; }
+  upsert(record: DeviceRecord): void { this.ready(); const index = this.document.devices.findIndex(r => r.key === record.key); const existing = index < 0 ? undefined : this.document.devices[index]!; const merged: DeviceRecord = existing ? { ...existing, ...record, credentials: record.credentials ? { ...existing.credentials, ...record.credentials } : existing.credentials, settings: record.settings ? { ...existing.settings, ...record.settings } : existing.settings, hints: record.hints ?? existing.hints } : record; validate({ version: STORAGE_VERSION, devices: [...this.document.devices.filter((_, i) => i !== index), merged] }); if (index < 0) this.document.devices.push(clone(merged)); else this.document.devices[index] = clone(merged); this.revision++; }
   remove(key: string): boolean { this.ready(); const index = this.document.devices.findIndex(r => r.key === key); if (index < 0) return false; this.document.devices.splice(index, 1); this.revision++; return true; }
   setHap(key: string, protocol: 'airplay' | 'mrp' | 'companion', credentials: HAPCredentials, aliases = [key]): void { const record = this.get(key) ?? { key, aliases }; record.credentials = { ...record.credentials, [protocol]: encodeHap(credentials) }; this.upsert(record); }
   hap(key: string, protocol: 'airplay' | 'mrp' | 'companion'): HAPCredentials | undefined { const value = this.get(key)?.credentials?.[protocol]; return value ? decodeHap(value) : undefined; }
   /** Preserve old credentials without assigning them to AirPlay or standalone MRP. */
   setUnclassifiedHap(key: string, credentials: HAPCredentials, aliases = [key]): void { const record = this.get(key) ?? { key, aliases }; record.credentials = { ...record.credentials, unclassified: encodeHap(credentials) }; this.upsert(record); }
+  /** Explicitly remove one protocol credential; omitted fields never erase secrets. */
+  removeCredential(key: string, protocol: keyof ProtocolCredentials): boolean {
+    const record = this.get(key);
+    if (!record?.credentials?.[protocol]) return false;
+    delete record.credentials[protocol];
+    this.upsert(record);
+    return true;
+  }
   /** Resolve explicit options over stored protocol settings over nonsecret discovery hints. */
   resolveConnection(key: string, protocol: Protocol, explicit: ProtocolSettings = {}): ConnectionResolution {
     const record = this.get(key);
@@ -94,7 +102,9 @@ export class DeviceStorage {
     const stored = record.settings?.[protocol] ?? {};
     const endpoint = { ...record.hints, ...stored.endpoint, ...explicit.endpoint };
     const credentials = protocol === 'airplay' || protocol === 'mrp' || protocol === 'companion' ? this.hap(record.key, protocol) : undefined;
-    return { protocol, endpoint, credentials, settleMs: explicit.settleMs ?? stored.settleMs, controllerName: explicit.controllerName ?? stored.controllerName };
+    const dmapGuid = protocol === 'dmap' ? record.credentials?.dmap?.guid : undefined;
+    const raop = protocol === 'raop' && record.credentials?.raop ? { clientId: record.credentials.raop.clientId, seed: Buffer.from(record.credentials.raop.seed, 'hex') } : undefined;
+    return { protocol, endpoint, credentials, dmapGuid, raop, settleMs: explicit.settleMs ?? stored.settleMs, controllerName: explicit.controllerName ?? stored.controllerName };
   }
   async save(): Promise<void> { this.ready(); if (!this.dirty) return; const revision = this.revision; const snapshot = clone(this.document); validate(snapshot); await this.adapter.save(snapshot); if (this.revision === revision) this.savedRevision = revision; }
 }
@@ -110,6 +120,7 @@ export class CustomStorage extends DeviceStorage { constructor(adapter: StorageA
 export class FileStorage extends DeviceStorage {
   constructor(readonly path: string, options: FileStorageOptions = {}) {
     const mode = options.mode ?? 0o600;
+    if ((mode & 0o077) !== 0) throw new Error('FileStorage mode must not grant group or other permissions');
     super({
       load: async () => { try { return JSON.parse(await readFile(path, 'utf8')) as StorageDocument; } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; } },
       save: async document => {
