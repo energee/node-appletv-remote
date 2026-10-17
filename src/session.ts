@@ -249,8 +249,8 @@ export class DeviceSession extends EventEmitter {
   private authority(operation: SessionOperation): Provider | undefined {
     for (const protocol of this.candidates(operation)) {
       const provider = this.providers.get(protocol);
-      if (provider && (provider.ready || this.state === 'connecting') &&
-          (!provider.ready || !['unsupported', 'unavailable'].includes(this.availability(provider, operation)))) return provider;
+      // State ownership is independent of whether an action is currently enabled (e.g. a read-only volume source).
+      if (provider && (provider.ready || this.state === 'connecting')) return provider;
     }
     return undefined;
   }

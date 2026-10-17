@@ -92,6 +92,21 @@ describe('operation policy', () => {
     } finally { await session.close(); }
   });
 
+  it('retains observed volume when its source does not permit absolute volume control', async () => {
+    const session = new DeviceSession(device, { credentials: { airplay: keys } });
+    const volumes: unknown[] = [];
+    session.on('volume', value => volumes.push(value));
+    await session.connect();
+    try {
+      state.mrp[0].emit('mrp-message', { type: MessageType.DeviceInfo, '.deviceInfoMessage': { deviceUID: 'speaker' } });
+      state.mrp[0].emit('mrp-message', { type: MessageType.VolumeControlAvailability, '.volumeControlAvailabilityMessage': { volumeControlAvailable: false } });
+      state.mrp[0].emit('mrp-message', { type: MessageType.VolumeDidChange, '.volumeDidChangeMessage': { outputDeviceUID: 'speaker', volume: 0.5 } });
+      expect(session.featureAvailability('setVolume')).toBe('unavailable');
+      expect(session.volume).toBe(50);
+      expect(volumes).toEqual([50]);
+    } finally { await session.close(); }
+  });
+
   it('excludes advertised unsupported media before sending, but never replays a timeout', async () => {
     const session = new DeviceSession(device, { credentials: { airplay: keys, companion: keys } });
     await session.connect();
