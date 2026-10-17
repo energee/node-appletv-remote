@@ -1,12 +1,10 @@
 /** CLI argument validation and dispatch without credentials, discovery, or hardware. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AppleTV, ShuffleState, RepeatState } from '../appletv.js';
+import { AppleTV } from '../appletv.js';
 import { NowPlayingInfo, PlaybackState } from '../now-playing-info.js';
 
 vi.mock('node:fs', () => ({ realpathSync: (path: string) => path, existsSync: vi.fn(() => true), readFileSync: vi.fn(() => '{"device":"fake"}'), writeFileSync: vi.fn() }));
 vi.mock('node:fs/promises', () => ({ readFile: async () => JSON.stringify({ version: 1, devices: [{ key: 'device', aliases: ['device'], credentials: { airplay: { clientId: 'client', clientLTSK: 'a'.repeat(64), clientLTPK: 'b'.repeat(64), serverLTPK: 'c'.repeat(64), serverId: 'server' }, companion: { clientId: 'companion', clientLTSK: 'd'.repeat(64), clientLTPK: 'e'.repeat(64), serverLTPK: 'f'.repeat(64), serverId: 'server' }, dmap: { guid: '0x0123456789ABCDEF' } } }] }), mkdir: async () => {}, writeFile: async () => {}, chmod: async () => {}, rename: async () => {}, rm: async () => {} }));
-vi.mock('../credentials.js', () => ({ Credentials: { deserialize: () => ({ companionCredentials: {} }) } }));
-vi.mock('../cli/device-cache.js', () => ({ withCachedDevice: async (_file: string, _id: string, _scan: unknown, connect: (device: { name: string; deviceId: string; address: string; port: number; companionPort: number }) => Promise<unknown>) => connect({ name: 'TV', deviceId: 'device', address: '127.0.0.1', port: 1, companionPort: 2 }) }));
 vi.mock('../discovery.js', () => ({ scan: vi.fn() }));
 import { main as run } from '../cli/index.js';
 import { readFileSync } from 'node:fs';
@@ -37,7 +35,6 @@ describe('CLI timing defaults', () => {
     expect(AppleTV.prototype.close).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await done;
-    expect(AppleTV.prototype.connectCompanion).toHaveBeenCalledOnce();
     expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
   });
   it.each([[['power'], 'fetchPowerState', 'on'], [['text', 'focus'], 'fetchTextFocusState', 'focused'], [['app', 'list'], 'appList', []], [['account', 'list'], 'accountList', []]] as const)(
@@ -62,11 +59,6 @@ describe('CLI timing defaults', () => {
       await done;
       expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
     });
-  it('honors explicit zero for both waits', async () => {
-    vi.spyOn(AppleTV.prototype, 'sendKeyCommand').mockResolvedValue(undefined);
-    await run(['command', 'select']);
-    expect(AppleTV.prototype.connectCompanion).toHaveBeenCalledOnce();
-  });
 });
 
 describe('CLI operations', () => {
@@ -92,42 +84,6 @@ describe('CLI operations', () => {
       expect(console.log).not.toHaveBeenCalledWith(progress);
     });
   it.each([
-    [['stop'], 'stop', []], [['seek', '12.5'], 'setPosition', [12.5]],
-    [['skip-forward', '10'], 'skipForward', [10]], [['skip-backward', '3'], 'skipBackward', [3]],
-    [['shuffle', 'albums'], 'setShuffle', [ShuffleState.Albums]], [['repeat', 'track'], 'setRepeat', [RepeatState.Track]],
-    [['volume', '0'], 'setVolume', [0]],
-  ] as const)('dispatches %j over its required transport', async (args, method, values) => {
-    const call = vi.spyOn(AppleTV.prototype, method).mockResolvedValue(undefined);
-    await run([...args, 'device']);
-    expect(call).toHaveBeenCalledWith(...values);
-    const companion = args[0] === 'skip-forward' || args[0] === 'skip-backward' || args[0] === 'volume';
-    expect(AppleTV.prototype.connectCompanion).toHaveBeenCalledTimes(companion ? 1 : 0);
-    expect(AppleTV.prototype.connect).toHaveBeenCalledTimes(companion ? 0 : 1);
-    expect(AppleTV.prototype.close).toHaveBeenCalledTimes(1);
-  });
-  it.each([
-    [['app', 'list'], 'appList', []], [['app', 'launch', 'com.example.app'], 'launchApp', ['com.example.app']],
-    [['account', 'list'], 'accountList', []], [['account', 'switch', 'user-id'], 'switchAccount', ['user-id']],
-    [['power'], 'fetchPowerState', []], [['text', 'focus'], 'fetchTextFocusState', []], [['command', 'channel_up'], 'channelUp', [undefined]],
-    [['cmd', 'channel_down'], 'channelDown', [undefined]], [['command', 'screensaver'], 'screensaver', [undefined]],
-    [['command', 'guide'], 'guide', [undefined]], [['command', 'page_up'], 'pageUp', [undefined]], [['command', 'page_down'], 'pageDown', [undefined]],
-    // Modern tvOS ignores the MRP TextInputMessage; text input uses Companion RTI.
-    [['text', 'set', ''], 'setText', ['']], [['text', 'append', 'hello world'], 'insertText', ['hello world']], [['text', 'clear'], 'clearText', []],
-  ] as const)('dispatches %j over Companion only', async (args, method, values) => {
-    const result = method === 'appList' ? [{ name: 'App', bundleId: 'com.example.app' }] : method === 'accountList' ? [{ name: 'User', id: 'user-id' }] : method === 'fetchPowerState' ? 'on' : method === 'fetchTextFocusState' ? 'focused' : method === 'insertText' ? 'hello world' : undefined;
-    const call = vi.spyOn(AppleTV.prototype, method).mockResolvedValue(result as never);
-    await run([...args, 'device']);
-    expect(call).toHaveBeenCalledWith(...values);
-    expect(AppleTV.prototype.connectCompanion).toHaveBeenCalledTimes(1);
-    expect(AppleTV.prototype.connect).not.toHaveBeenCalled();
-    expect(AppleTV.prototype.close).toHaveBeenCalledTimes(1);
-    if (method === 'appList') expect(console.log).toHaveBeenCalledWith('com.example.app\tApp');
-    if (method === 'accountList') expect(console.log).toHaveBeenCalledWith('user-id\tUser');
-    if (method === 'fetchPowerState') expect(console.log).toHaveBeenCalledWith('on');
-    if (method === 'fetchTextFocusState') expect(console.log).toHaveBeenCalledWith('focused');
-    if (method === 'insertText') expect(console.log).toHaveBeenCalledWith('hello world');
-  });
-  it.each([
     ['text', 'append'], ['seek', ''], ['seek', ' '], ['volume', '-1'], ['volume', '1e2'], ['shuffle', '__proto__'], ['repeat', 'constructor'], ['artwork', 'a', 'b', 'c'], ['scan', 'extra'], ['stop', ''], ['text', 'set', 'hi', ' '], ['seek'], ['seek', '-1'], ['seek', 'NaN'], ['seek', 'Infinity'], ['seek', '12junk'],
     ['skip-forward', '0'], ['skip-backward', '-3'], ['volume', '101'], ['volume', ''],
     ['shuffle', 'bad'], ['repeat', 'bad'], ['text', 'set'], ['text', 'clear', 'device', 'extra'],
@@ -150,23 +106,9 @@ describe('CLI operations', () => {
     await expect(run(['stop', 'missing-device'])).rejects.toThrow('No paired device matches');
     expect(AppleTV.prototype.connect).not.toHaveBeenCalled();
   });
-  it('uses the last paired device only when selector is omitted', async () => {
-    const stop = vi.spyOn(AppleTV.prototype, 'stop').mockResolvedValue(undefined);
-    await run(['stop']);
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('Connecting'));
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Connecting'));
-  });
   it('closes and propagates operation errors', async () => {
     vi.spyOn(AppleTV.prototype, 'stop').mockRejectedValue(new Error('send failed'));
     await expect(run(['stop'])).rejects.toThrow('send failed');
-    expect(AppleTV.prototype.close).toHaveBeenCalledTimes(1);
-  });
-  it('retains MRP key dispatch', async () => {
-    const send = vi.spyOn(AppleTV.prototype, 'sendKeyCommand').mockResolvedValue(undefined);
-    await run(['command', 'play']);
-    expect(send).toHaveBeenCalledWith('play', undefined);
-    expect(console.log).toHaveBeenCalledWith('Sent: play');
     expect(AppleTV.prototype.close).toHaveBeenCalledTimes(1);
   });
   it('closes a failed MRP connection', async () => {

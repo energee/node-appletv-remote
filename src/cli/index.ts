@@ -650,6 +650,8 @@ function numberArgument(value: string, min: number, max = Infinity, positive = f
 
 /** Validate and dispatch CLI arguments. Errors propagate to the executable's exit handler. */
 export async function main(argv: string[]): Promise<void> {
+  // A CLI invocation owns one loaded store; imported callers may run another command later.
+  cliStore = undefined;
   const [cmd, ...args] = argv;
   if (!cmd || ['help', '--help', '-h'].includes(cmd)) { help(); return; }
   let selectedOperation: SessionOperation;
