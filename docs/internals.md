@@ -27,6 +27,19 @@ src/
 ├── util/           # crypto, TLV, HTTP, HAP framing, AirPlay 2 event channel
 └── cli/            # the `atv` command
 ```
+## Storage
+
+`src/storage.ts` exposes a small asynchronous document store used optionally by the
+CLI and available to library consumers. The document is versioned and validates HAP
+key encodings/lengths, RAOP seed/client ID, and DMAP GUIDs before it can be used.
+Secrets live under per-protocol credentials; aliases and endpoint hints are separate
+unauthenticated data. `DeviceStorage` keeps mutations dirty until explicit `save()`.
+`FileStorage` is a single-writer JSON store: it writes a restrictive same-directory
+temporary file then atomically renames it, retaining the prior readable document when
+the write fails. It deliberately has no multi-process transaction guarantee and is
+plaintext rather than a keychain. `CustomStorage` accepts an adapter with async
+`load`/`save` methods for keychains, databases, or cloud-backed applications.
+
 
 ## Discovery and transport selection
 

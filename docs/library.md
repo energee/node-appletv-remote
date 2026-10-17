@@ -20,6 +20,32 @@ const credentials = await pairing.finish(pin);
 const companionPairing = await atv.startCompanionPairing();
 const companionCredentials = await companionPairing.finish(pin);
 ```
+## Optional storage
+
+Storage is opt-in: existing explicit credentials never cause filesystem access. Call
+`load()` before lookup/update and `save()` when the application decides a successful
+pairing or hint update should persist. `FileStorage` is JSON with atomic same-directory
+replacement and mode `0600`; it is **not a keychain**. One writer per file is supported.
+
+```typescript
+import { FileStorage, CustomStorage } from 'node-appletv-remote';
+
+const storage = new FileStorage('.atv-storage.json');
+await storage.load();
+storage.setHap(device.deviceId, 'airplay', credentials, [device.deviceId, ...device.identifiers]);
+await storage.save();
+const credentialsAgain = storage.hap(device.deviceId, 'airplay');
+
+// A keychain/database/cloud adapter implements { load(): Promise<StorageDocument|undefined>,
+// save(document): Promise<void> }; pass it to new CustomStorage(adapter).
+```
+
+Records separate protocol credentials (`airplay`, `mrp`, `companion`, `raop`, `dmap`)
+from unauthenticated endpoint hints. Aliases must be unique; a collision requires explicit
+record selection. Explicit caller values take precedence over stored values, which take
+precedence over library defaults. Unknown versions and malformed credentials reject on load;
+they are never silently reset. Use `remove(key)` for deletion.
+
 
 ## Remote control (AirPlay/MRP)
 
