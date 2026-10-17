@@ -59,22 +59,22 @@ function decodeHap(value: EncodedHap): HAPCredentials { hap(value, 'credential')
 /** Common asynchronous store contract. Call load before lookup/update, then save explicitly. */
 export class DeviceStorage {
   protected document: StorageDocument = { version: STORAGE_VERSION, devices: [] };
-  private loaded = false; private changed = false;
+  private loaded = false; private revision = 0; private savedRevision = 0;
   constructor(private readonly adapter: StorageAdapter) {}
-  async load(): Promise<void> { const value = await this.adapter.load(); if (value) validate(value); this.document = value ? clone(value) : { version: STORAGE_VERSION, devices: [] }; this.loaded = true; this.changed = false; }
+  async load(): Promise<void> { const value = await this.adapter.load(); if (value) validate(value); this.document = value ? clone(value) : { version: STORAGE_VERSION, devices: [] }; this.loaded = true; this.revision = 0; this.savedRevision = 0; }
   private ready(): void { if (!this.loaded) throw new Error('Storage must be loaded before use'); }
-  get dirty(): boolean { return this.changed; }
+  get dirty(): boolean { return this.revision !== this.savedRevision; }
   records(): readonly DeviceRecord[] { this.ready(); return clone(this.document.devices); }
   get(keyOrAlias: string): DeviceRecord | undefined { this.ready(); const lower = keyOrAlias.toLowerCase(); return clone(this.document.devices.find(r => r.key === keyOrAlias || r.aliases.some(a => a.toLowerCase() === lower))); }
   /** Finds a record only when aliases select exactly one record. */
   resolve(alias: string): DeviceRecord | undefined { return this.get(alias); }
-  upsert(record: DeviceRecord): void { this.ready(); validate({ version: STORAGE_VERSION, devices: [record] }); const index = this.document.devices.findIndex(r => r.key === record.key); const aliases = new Set(record.aliases.map(a => a.toLowerCase())); if (this.document.devices.some((r, i) => i !== index && r.aliases.some(a => aliases.has(a.toLowerCase())))) throw new Error('Storage alias collision requires explicit record selection'); if (index < 0) this.document.devices.push(clone(record)); else this.document.devices[index] = clone(record); this.changed = true; }
-  remove(key: string): boolean { this.ready(); const index = this.document.devices.findIndex(r => r.key === key); if (index < 0) return false; this.document.devices.splice(index, 1); this.changed = true; return true; }
+  upsert(record: DeviceRecord): void { this.ready(); validate({ version: STORAGE_VERSION, devices: [record] }); const index = this.document.devices.findIndex(r => r.key === record.key); const aliases = new Set(record.aliases.map(a => a.toLowerCase())); if (this.document.devices.some((r, i) => i !== index && r.aliases.some(a => aliases.has(a.toLowerCase())))) throw new Error('Storage alias collision requires explicit record selection'); if (index < 0) this.document.devices.push(clone(record)); else this.document.devices[index] = clone(record); this.revision++; }
+  remove(key: string): boolean { this.ready(); const index = this.document.devices.findIndex(r => r.key === key); if (index < 0) return false; this.document.devices.splice(index, 1); this.revision++; return true; }
   setHap(key: string, protocol: 'airplay' | 'mrp' | 'companion', credentials: HAPCredentials, aliases = [key]): void { const record = this.get(key) ?? { key, aliases }; record.credentials = { ...record.credentials, [protocol]: encodeHap(credentials) }; this.upsert(record); }
   hap(key: string, protocol: 'airplay' | 'mrp' | 'companion'): HAPCredentials | undefined { const value = this.get(key)?.credentials?.[protocol]; return value ? decodeHap(value) : undefined; }
   /** Preserve old credentials without assigning them to AirPlay or standalone MRP. */
   setUnclassifiedHap(key: string, credentials: HAPCredentials, aliases = [key]): void { const record = this.get(key) ?? { key, aliases }; record.credentials = { ...record.credentials, unclassified: encodeHap(credentials) }; this.upsert(record); }
-  async save(): Promise<void> { this.ready(); if (!this.changed) return; validate(this.document); await this.adapter.save(clone(this.document)); this.changed = false; }
+  async save(): Promise<void> { this.ready(); if (!this.dirty) return; const revision = this.revision; const snapshot = clone(this.document); validate(snapshot); await this.adapter.save(snapshot); if (this.revision === revision) this.savedRevision = revision; }
 }
 
 /** In-memory adapter, useful for tests and applications that do not want persistence. */
@@ -93,7 +93,7 @@ export class FileStorage extends DeviceStorage {
       save: async document => {
         const directory = dirname(path); const temporary = join(directory, `.${basename(path)}.${randomBytes(8).toString('hex')}.tmp`);
         await mkdir(directory, { recursive: true, mode: 0o700 });
-        try { await writeFile(temporary, JSON.stringify(document, null, 2) + '\n', { mode, flag: 'wx' }); await chmod(temporary, mode); await rename(temporary, path); await chmod(path, mode); }
+        try { await writeFile(temporary, JSON.stringify(document, null, 2) + '\n', { mode, flag: 'wx' }); await chmod(temporary, mode); await rename(temporary, path); }
         catch (error) { await rm(temporary, { force: true }).catch(() => {}); throw error; }
       },
     });

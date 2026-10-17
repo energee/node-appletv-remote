@@ -157,15 +157,16 @@ async function loadRecord(protocol: 'airplay' | 'companion' | 'dmap', deviceId?:
 }
 
 /** Load a typed modern credential; old unclassified imports intentionally require re-pairing. */
-async function loadCredentials(deviceId?: string): Promise<{ id: string; credentials: Credentials }> {
+async function loadCredentials(deviceId?: string): Promise<{ id: string; protocol: 'airplay' | 'mrp'; credentials: Credentials }> {
   if (deviceId !== undefined && !deviceId.trim()) throw new Error('Device selector must be nonblank');
   const store = await storage();
   const records = store.records().filter(record => Boolean(record.credentials?.airplay || record.credentials?.mrp));
   if (records.length === 0) throw new Error('No typed AirPlay/MRP credentials found. Re-pair this device to classify its transport.');
   const record = deviceId === undefined ? records[records.length - 1] : records.find(r => r.key.toLowerCase().includes(deviceId.toLowerCase()));
   if (!record) throw new Error(`No paired device matches "${deviceId}"`);
-  const credential = store.hap(record.key, 'airplay') ?? store.hap(record.key, 'mrp');
-  return { id: record.key, credentials: new Credentials(credential!, store.hap(record.key, 'companion')) };
+  const protocol = record.credentials?.airplay ? 'airplay' : 'mrp';
+  const credential = store.hap(record.key, protocol)!;
+  return { id: record.key, protocol, credentials: { ...credential, companionCredentials: store.hap(record.key, 'companion') } as Credentials };
 }
 
 /**
@@ -206,9 +207,10 @@ async function connectCached<T>(id: string, need: 'mrp' | 'companion' | 'dmap', 
 
 /** Load credentials, locate the device, and open an AirPlay/MRP connection. */
 async function connectToDevice(deviceId?: string): Promise<AppleTV> {
-  const { id, credentials } = await loadCredentials(deviceId);
+  const { id, protocol, credentials } = await loadCredentials(deviceId);
   return connectCached(id, 'mrp', async (device) => {
     console.error(`Connecting to ${device.name} (${device.address}:${device.port})...`);
+    if ((device.port ? 'airplay' : 'mrp') !== protocol) throw new Error(`Stored ${protocol} credentials do not match the discovered transport`);
     const atv = new AppleTV(device);
     atv.on('error', (err: Error) => console.error(`AirPlay error: ${err.message}`));
     try { await atv.connect(credentials, { settleMs: settleMs() }); } catch (e) { await atv.close(); throw e; }
@@ -253,7 +255,8 @@ async function cmdCommand(command: string, action?: InputAction, deviceId?: stri
   const companion = button !== undefined || COMPANION_CONTROL_COMMANDS[command] === true;
   if (!button && !COMMAND_SET.has(command)) throw new Error(`Unknown command: ${command}. Run "atv --help".`);
   if (action && !button && !HID_KEY_MAP[command]) throw new Error(`Action modes are not supported for ${command}`);
-  const atv = await (companion && loadCredentials(deviceId).credentials.companionCredentials ? connectToCompanion(deviceId) : connectToDevice(deviceId));
+  const stored = companion ? await loadCredentials(deviceId) : undefined;
+  const atv = await (stored?.credentials.companionCredentials ? connectToCompanion(deviceId) : connectToDevice(deviceId));
   try {
     // An undefined action takes each method's 'singleTap' default.
     if (button) await atv[button](action);
@@ -267,7 +270,7 @@ async function cmdCommand(command: string, action?: InputAction, deviceId?: stri
 
 /** `atv remote [device]`: interactive prompt that sends each typed key name. */
 async function cmdRemote(deviceId?: string) {
-  const companion = Boolean(loadCredentials(deviceId).credentials.companionCredentials);
+  const companion = Boolean((await loadCredentials(deviceId)).credentials.companionCredentials);
   const atv = await (companion ? connectToCompanion(deviceId) : connectToDevice(deviceId));
 
   console.log(`Connected. Type commands to send (${COMMAND_NAMES.join(', ')})`);
@@ -708,7 +711,7 @@ export async function main(argv: string[]): Promise<void> {
       argumentsFor(args, 1, `${cmd} <number> [device]`);
       const value = numberArgument(args[0], 0, cmd === 'volume' ? 100 : Infinity, cmd.startsWith('skip-'));
       device = args[1];
-      companion = cmd !== 'seek' && Boolean(loadCredentials(device).credentials.companionCredentials);
+      companion = cmd !== 'seek' && Boolean((await loadCredentials(device)).credentials.companionCredentials);
       acknowledged = companion;
       operation = (atv) => cmd === 'seek' ? atv.setPosition(value) : cmd === 'volume' ? atv.setVolume(value) :
         cmd === 'skip-forward' ? atv.skipForward(value) : atv.skipBackward(value);

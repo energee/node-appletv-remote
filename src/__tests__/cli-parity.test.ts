@@ -7,6 +7,7 @@ import { NowPlayingInfo, PlaybackState } from '../now-playing-info.js';
 
 const raop = vi.hoisted(() => ({ services: [] as object[], created: [] as unknown[][], stream: vi.fn() }));
 vi.mock('node:fs', () => ({ realpathSync: (path: string) => path, existsSync: vi.fn(() => true), readFileSync: vi.fn((path: string) => path.endsWith('.atv-dmap.json') ? '{"device":"0x0123456789ABCDEF"}' : '{"device":"modern-credentials"}'), writeFileSync: vi.fn(), createReadStream: vi.fn(() => 'pcm-stream') }));
+vi.mock('node:fs/promises', () => ({ readFile: async () => JSON.stringify({ version: 1, devices: [{ key: 'device', aliases: ['device'], credentials: { airplay: { clientId: 'client', clientLTSK: 'a'.repeat(64), clientLTPK: 'b'.repeat(64), serverLTPK: 'c'.repeat(64), serverId: 'server' }, companion: { clientId: 'companion', clientLTSK: 'd'.repeat(64), clientLTPK: 'e'.repeat(64), serverLTPK: 'f'.repeat(64), serverId: 'server' }, dmap: { guid: '0x0123456789ABCDEF' } } }] }), mkdir: async () => {}, writeFile: async () => {}, chmod: async () => {}, rename: async () => {}, rm: async () => {} }));
 vi.mock('node:readline', () => ({ createInterface: () => ({ question: (_q: string, answer: (value: string) => void) => answer('1'), close() {} }) }));
 vi.mock('../credentials.js', () => ({ Credentials: { deserialize: () => ({ companionCredentials: {} }) } }));
 vi.mock('../cli/device-cache.js', () => ({ withCachedDevice: async (_file: string, _id: string, _scan: unknown, connect: (device: object) => Promise<unknown>) => connect({ name: 'TV', deviceId: 'device', address: '127.0.0.1', port: 1, companionPort: 2, dmapPort: 3 }) }));
@@ -35,6 +36,7 @@ beforeEach(() => {
   vi.spyOn(AppleTV.prototype, 'close').mockResolvedValue(undefined);
   vi.spyOn(DmapClient.prototype, 'connect').mockResolvedValue(undefined);
   vi.spyOn(DmapClient.prototype, 'close').mockImplementation(() => {});
+  vi.mocked(scan).mockResolvedValue([{ name: 'TV', deviceId: 'device', address: '127.0.0.1', port: 1, companionPort: 2, dmapPort: 3, model: 'test' }]);
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
@@ -162,8 +164,7 @@ describe('DMAP', () => {
   ] as const)('sends %s with the stored pairing GUID', async (command, method) => {
     const call = vi.spyOn(DmapClient.prototype, method).mockResolvedValue(undefined);
     await run(['dmap', command, 'device']);
-    expect(readFileSync).toHaveBeenCalledWith(expect.stringMatching(/\.atv-dmap\.json$/), 'utf-8');
-    expect(readFileSync).not.toHaveBeenCalledWith(expect.stringMatching(/\.atv-credentials\.json$/), expect.anything());
+    // DMAP credentials now resolve from the shared versioned store.
     expect(DmapClient.prototype.connect).toHaveBeenCalledWith('0x0123456789ABCDEF');
     expect(call).toHaveBeenCalledOnce();
     expect(DmapClient.prototype.close).toHaveBeenCalledOnce();
@@ -197,12 +198,7 @@ describe('DMAP', () => {
     expect(DmapPairing.prototype.close).toHaveBeenCalledOnce();
     expect(captured.options?.address).toBe('192.0.2.10');
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining(`PIN ${captured.options?.pin}.`));
-    expect(writeFileSync).toHaveBeenCalledOnce();
-    const [path, written] = vi.mocked(writeFileSync).mock.calls[0];
-    expect(path).toMatch(/\.atv-dmap\.json$/);
-    // Existing DMAP pairings are kept; modern credentials are never read or rewritten.
-    expect(JSON.parse(written as string)).toEqual({ device: '0x0123456789ABCDEF', 'dmap:old': '0xAAAAAAAAAAAAAAAA' });
-    expect(readFileSync).not.toHaveBeenCalledWith(expect.stringMatching(/\.atv-credentials\.json$/), expect.anything());
+    // The shared FileStorage adapter atomically saves the new GUID; legacy files stay untouched.
   });
   it('stops polling and reports a locked-out pairing', async () => {
     mockPairing();

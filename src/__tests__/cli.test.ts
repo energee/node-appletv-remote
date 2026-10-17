@@ -4,6 +4,7 @@ import { AppleTV, ShuffleState, RepeatState } from '../appletv.js';
 import { NowPlayingInfo, PlaybackState } from '../now-playing-info.js';
 
 vi.mock('node:fs', () => ({ realpathSync: (path: string) => path, existsSync: vi.fn(() => true), readFileSync: vi.fn(() => '{"device":"fake"}'), writeFileSync: vi.fn() }));
+vi.mock('node:fs/promises', () => ({ readFile: async () => JSON.stringify({ version: 1, devices: [{ key: 'device', aliases: ['device'], credentials: { airplay: { clientId: 'client', clientLTSK: 'a'.repeat(64), clientLTPK: 'b'.repeat(64), serverLTPK: 'c'.repeat(64), serverId: 'server' }, companion: { clientId: 'companion', clientLTSK: 'd'.repeat(64), clientLTPK: 'e'.repeat(64), serverLTPK: 'f'.repeat(64), serverId: 'server' }, dmap: { guid: '0x0123456789ABCDEF' } } }] }), mkdir: async () => {}, writeFile: async () => {}, chmod: async () => {}, rename: async () => {}, rm: async () => {} }));
 vi.mock('../credentials.js', () => ({ Credentials: { deserialize: () => ({ companionCredentials: {} }) } }));
 vi.mock('../cli/device-cache.js', () => ({ withCachedDevice: async (_file: string, _id: string, _scan: unknown, connect: (device: { name: string; deviceId: string; address: string; port: number; companionPort: number }) => Promise<unknown>) => connect({ name: 'TV', deviceId: 'device', address: '127.0.0.1', port: 1, companionPort: 2 }) }));
 vi.mock('../discovery.js', () => ({ scan: vi.fn() }));
@@ -22,6 +23,7 @@ beforeEach(() => {
   vi.spyOn(AppleTV.prototype, 'connect').mockResolvedValue(undefined);
   vi.spyOn(AppleTV.prototype, 'connectCompanion').mockResolvedValue(undefined);
   vi.spyOn(AppleTV.prototype, 'close').mockResolvedValue(undefined);
+  vi.mocked(scan).mockResolvedValue([{ name: 'TV', deviceId: 'device', address: '127.0.0.1', port: 1, companionPort: 2, dmapPort: 3, model: 'test' }]);
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers(); });
 
