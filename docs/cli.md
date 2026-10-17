@@ -71,6 +71,10 @@ Two CLI timing knobs guard HID keys, which the Apple TV never acknowledges. Set 
 $ atv state
 Big Buck Bunny by Blender Foundation [Playing] 12.50% (YouTube)
 ```
+`atv state` deliberately keeps this concise human-readable summary. It does not
+print queue content IDs, unique IDs, or store/account identifiers by default;
+use the library's `NowPlayingInfo` when structured metadata is needed.
+
 
 **Commands:** `command` (alias `cmd`) accepts the keys below and Companion buttons `guide`, `channel_up`, `channel_down`, `page_up`, `page_down`, and `screensaver`; see `atv --help` for complete syntax.
 

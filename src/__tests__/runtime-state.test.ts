@@ -6,7 +6,7 @@ import { AirPlayConnection } from '../connection.js';
 import { Credentials } from '../credentials.js';
 import { vi } from 'vitest';
 import { AppleTV } from '../appletv.js';
-import { PlaybackState } from '../now-playing-info.js';
+import { MediaSubType, MediaType, PlaybackState } from '../now-playing-info.js';
 import { MessageType, MRPMessage } from '../mrp/messages.js';
 
 function device() {
@@ -170,6 +170,52 @@ describe('unified player state', () => {
     expect(events).toBe(1);
     expect(info).toBe(emitted);
     expect(info.playbackState).toBe(PlaybackState.Stopped);
+  });
+  it('normalizes encoded queue metadata and direct identifiers into public event and cached snapshots', async () => {
+    const atv = device();
+    deliver(atv, MessageType.SetNowPlayingClient, 'setNowPlayingClientMessage', { client: { bundleIdentifier: 'app' } });
+    Reflect.set(atv, 'connection', {});
+    const root = protobuf.Root.fromJSON(MRP_SCHEMA as protobuf.INamespace);
+    const proto = root.lookupType('ProtocolMessage');
+    let emitted: unknown;
+    atv.on('nowPlaying', info => { emitted = info; });
+    const bytes = proto.encode(proto.create({
+      type: MessageType.SetState,
+      '.setStateMessage': {
+        playerPath: path('app'), playbackState: 1,
+        nowPlayingInfo: { uniqueIdentifier: '9007199254740993', shuffleMode: 3, repeatMode: 2 },
+        playbackQueue: { location: 0, contentItems: [{ identifier: 'current', metadata: {
+          title: 'Episode', genre: 'Drama', contentIdentifier: 'content-id', seriesName: 'Series',
+          seasonNumber: 0, episodeNumber: 0, mediaType: 2, mediaSubType: 4,
+          iTunesStoreIdentifier: '9007199254740993', iTunesStoreSubscriptionIdentifier: '9007199254740994',
+          iTunesStoreArtistIdentifier: '9007199254740995', iTunesStoreAlbumIdentifier: '9007199254740996',
+        } }] },
+      },
+    })).finish();
+    Reflect.get(atv, 'handleMRPMessage').call(atv, await MRPMessage.decode(Buffer.from(bytes)));
+    expect(emitted).toBe(atv.nowPlaying);
+    await expect(Reflect.get(atv, 'getNowPlaying').call(atv)).resolves.toBe(atv.nowPlaying);
+    expect(atv.nowPlaying).toMatchObject({
+      genre: 'Drama', contentIdentifier: 'content-id', seriesName: 'Series', seasonNumber: 0, episodeNumber: 0,
+      mediaType: MediaType.Video, mediaSubType: MediaSubType.Podcast, uniqueIdentifier: '9007199254740993',
+      iTunesStoreIdentifier: '9007199254740993', iTunesStoreSubscriptionIdentifier: '9007199254740994',
+      iTunesStoreArtistIdentifier: '9007199254740995', iTunesStoreAlbumIdentifier: '9007199254740996',
+    });
+  });
+  it('keeps omitted metadata, clears replacements, and rejects unknown normalized enums', () => {
+    const atv = device();
+    deliver(atv, MessageType.SetState, 'setStateMessage', { playerPath: path('app'), playbackQueue: {
+      location: 0, contentItems: [{ identifier: 'current', metadata: { seriesName: 'Series', mediaType: 1, seasonNumber: 0 } }],
+    }, nowPlayingInfo: { shuffleMode: 0, repeatMode: 99 } });
+    expect(atv.nowPlaying).toMatchObject({ seriesName: 'Series', seasonNumber: 0 });
+    expect(atv.nowPlaying.mediaType).toBe(MediaType.Audio);
+    expect(atv.nowPlaying.shuffleState).toBeUndefined();
+    expect(atv.nowPlaying.repeatState).toBeUndefined();
+    deliver(atv, MessageType.UpdateContentItem, 'updateContentItemMessage', { playerPath: path('app'),
+      contentItems: [{ identifier: 'current', metadata: { episodeNumber: 0 } }] });
+    expect(atv.nowPlaying).toMatchObject({ seriesName: 'Series', episodeNumber: 0 });
+    deliver(atv, MessageType.SetState, 'setStateMessage', { playerPath: path('app'), playbackQueue: { contentItems: [] } });
+    expect(atv.nowPlaying).toMatchObject({ seriesName: '', contentIdentifier: '', hasPlayback: false });
   });
 });
 

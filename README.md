@@ -74,7 +74,7 @@ Other models and tvOS versions are untested; reports are welcome.
 |---|---|
 | Discovery, AirPlay and Companion pairing | Verified |
 | Navigation, media commands, button tap/double-tap/hold, touch swipes | Verified |
-| Now playing, playback queue, artwork | Verified (some apps, e.g. YouTube, send no artwork) |
+| Now playing, playback queue, artwork | Verified (some apps, e.g. YouTube, send no artwork); richer MRP queue metadata is fixture-tested |
 | Apps, accounts, power, app launch by URL | Verified |
 | Volume | Capability reporting verified; reading absolute volume unverified (#39) |
 | Audio output routing | Add/remove verified; `setOutputDevices` and routing errors unverified (#46) |

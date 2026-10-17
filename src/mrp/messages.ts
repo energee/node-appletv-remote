@@ -205,11 +205,11 @@ export class MRPMessage {
    * Decode a ProtocolMessage into a plain object; extensions appear as '.fooMessage' keys.
    * Only fields present on the wire are set: no proto2 defaults (e.g. `playbackState: 0`)
    * and no empty repeated fields, so `'field' in msg` means the device sent it.
-   * Enums stay numeric, int64 become numbers and bytes stay Buffers.
+   * Enums stay numeric, int64 stay decimal strings, and bytes stay Buffers.
    */
   static async decode(buffer: Buffer): Promise<Record<string, unknown>> {
     const ProtocolMessage = lookupType('ProtocolMessage');
-    return ProtocolMessage.toObject(ProtocolMessage.decode(buffer), { longs: Number });
+    return ProtocolMessage.toObject(ProtocolMessage.decode(buffer), { longs: String });
   }
 
   /**

@@ -5,6 +5,33 @@
 
 import type { RepeatState, ShuffleState } from './appletv.js';
 
+/** A protobuf integer is public only when its decoded representation preserves its value. */
+function identifier(value: unknown): string | undefined {
+  if (typeof value === 'string') return value || undefined;
+  if (typeof value === 'bigint') return String(value);
+  if (typeof value === 'number') return Number.isSafeInteger(value) ? String(value) : undefined;
+  if (value && typeof value === 'object' && 'toString' in value && typeof value.toString === 'function') {
+    const text = value.toString();
+    return /^-?\d+$/.test(text) ? text : undefined;
+  }
+  return undefined;
+}
+
+
+/** MRP queue media type values from ContentItemMetadata.MediaType. */
+export enum MediaType {
+  Audio = 1,
+  Video = 2,
+}
+
+/** MRP queue media subtype values from ContentItemMetadata.MediaSubType. */
+export enum MediaSubType {
+  Music = 1,
+  Podcast = 4,
+  AudioBook = 5,
+  ITunesU = 6,
+}
+
 /** Playback state as carried in SetStateMessage.playbackState. */
 export enum PlaybackState {
   Unknown = 0,
@@ -14,7 +41,6 @@ export enum PlaybackState {
   Interrupted = 4,
   Seeking = 5,
 }
-
 /** Track metadata and playback position for the currently playing item. */
 export class NowPlayingInfo {
   /** False when the active player has no current metadata/item; separate from Stopped. */
@@ -23,12 +49,31 @@ export class NowPlayingInfo {
   readonly title: string;
   readonly artist: string;
   readonly album: string;
-  /** Empty when unknown. Currently filled only by DMAP play status. */
+  /** Empty when unknown; supplied by DMAP or MRP queue metadata. */
   readonly genre: string;
-  /** Undefined when unknown. Currently filled only by DMAP play status, where shuffle on reads as Songs. */
+  /** Undefined when unknown; supplied by DMAP or direct MRP now-playing metadata. */
   readonly shuffleState?: ShuffleState;
-  /** Undefined when unknown. Currently filled only by DMAP play status. */
+  /** Undefined when unknown; supplied by DMAP or direct MRP now-playing metadata. */
   readonly repeatState?: RepeatState;
+  /** MRP queue media category, not the application's bundle identity. */
+  readonly mediaType?: MediaType;
+  /** MRP queue media subtype. */
+  readonly mediaSubType?: MediaSubType;
+  /** MRP queue series label, not an episode title; empty when unknown. */
+  readonly seriesName: string;
+  /** MRP queue season number; undefined when unknown. */
+  readonly seasonNumber?: number;
+  /** MRP queue episode number; undefined when unknown. */
+  readonly episodeNumber?: number;
+  /** MRP queue content identifier; empty when unknown. */
+  readonly contentIdentifier: string;
+  /** Direct MRP item identifier; undefined when unknown. */
+  readonly uniqueIdentifier?: string;
+  /** MRP queue store identifiers; undefined when absent or unsafe to represent. */
+  readonly iTunesStoreIdentifier?: string;
+  readonly iTunesStoreSubscriptionIdentifier?: string;
+  readonly iTunesStoreArtistIdentifier?: string;
+  readonly iTunesStoreAlbumIdentifier?: string;
   /** Track length in seconds; 0 when unknown. */
   readonly duration: number;
   /** Position in seconds as of `timestamp`, not live. */
@@ -55,8 +100,26 @@ export class NowPlayingInfo {
     this.artist = (nowPlayingPayload.artist as string) ?? '';
     this.album = (nowPlayingPayload.album as string) ?? '';
     this.genre = (nowPlayingPayload.genre as string) ?? '';
-    this.shuffleState = nowPlayingPayload.shuffleState as ShuffleState | undefined;
-    this.repeatState = nowPlayingPayload.repeatState as RepeatState | undefined;
+    this.shuffleState = nowPlayingPayload.shuffleState === 1 || nowPlayingPayload.shuffleState === 2 || nowPlayingPayload.shuffleState === 3
+      ? nowPlayingPayload.shuffleState as ShuffleState : undefined;
+    this.repeatState = nowPlayingPayload.repeatState === 1 || nowPlayingPayload.repeatState === 2 || nowPlayingPayload.repeatState === 3
+      ? nowPlayingPayload.repeatState as RepeatState : undefined;
+    this.mediaType = nowPlayingPayload.mediaType === MediaType.Audio || nowPlayingPayload.mediaType === MediaType.Video
+      ? nowPlayingPayload.mediaType : undefined;
+    this.mediaSubType = nowPlayingPayload.mediaSubType === MediaSubType.Music || nowPlayingPayload.mediaSubType === MediaSubType.Podcast ||
+      nowPlayingPayload.mediaSubType === MediaSubType.AudioBook || nowPlayingPayload.mediaSubType === MediaSubType.ITunesU
+      ? nowPlayingPayload.mediaSubType : undefined;
+    this.seriesName = (nowPlayingPayload.seriesName as string) ?? '';
+    this.seasonNumber = typeof nowPlayingPayload.seasonNumber === 'number' && Number.isFinite(nowPlayingPayload.seasonNumber)
+      ? nowPlayingPayload.seasonNumber : undefined;
+    this.episodeNumber = typeof nowPlayingPayload.episodeNumber === 'number' && Number.isFinite(nowPlayingPayload.episodeNumber)
+      ? nowPlayingPayload.episodeNumber : undefined;
+    this.contentIdentifier = (nowPlayingPayload.contentIdentifier as string) ?? '';
+    this.uniqueIdentifier = identifier(nowPlayingPayload.uniqueIdentifier);
+    this.iTunesStoreIdentifier = identifier(nowPlayingPayload.iTunesStoreIdentifier);
+    this.iTunesStoreSubscriptionIdentifier = identifier(nowPlayingPayload.iTunesStoreSubscriptionIdentifier);
+    this.iTunesStoreArtistIdentifier = identifier(nowPlayingPayload.iTunesStoreArtistIdentifier);
+    this.iTunesStoreAlbumIdentifier = identifier(nowPlayingPayload.iTunesStoreAlbumIdentifier);
     this.duration = (nowPlayingPayload.duration as number) ?? 0;
     this.elapsedTime = (nowPlayingPayload.elapsedTime as number) ?? 0;
     this.playbackRate = (nowPlayingPayload.playbackRate as number) ?? 0;

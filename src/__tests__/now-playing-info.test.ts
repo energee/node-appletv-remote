@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { NowPlayingInfo, PlaybackState } from '../now-playing-info.js';
+import { MediaSubType, MediaType, NowPlayingInfo, PlaybackState } from '../now-playing-info.js';
 
 describe('NowPlayingInfo', () => {
   it('extracts fields from mock payloads', () => {
@@ -28,6 +28,17 @@ describe('NowPlayingInfo', () => {
     expect(info.playbackState).toBe(PlaybackState.Playing);
     expect(info.appDisplayName).toBe('Music');
     expect(info.timestamp).toBe(1234567890);
+    const metadata = new NowPlayingInfo({}, {
+      mediaType: MediaType.Video, mediaSubType: MediaSubType.Podcast, seriesName: 'Series',
+      seasonNumber: 0, episodeNumber: 0, contentIdentifier: 'content', uniqueIdentifier: 42,
+      iTunesStoreIdentifier: '9007199254740993', iTunesStoreSubscriptionIdentifier: BigInt(8),
+    });
+    expect(metadata).toMatchObject({
+      mediaType: MediaType.Video, mediaSubType: MediaSubType.Podcast, seriesName: 'Series',
+      seasonNumber: 0, episodeNumber: 0, contentIdentifier: 'content', uniqueIdentifier: '42',
+      iTunesStoreIdentifier: '9007199254740993', iTunesStoreSubscriptionIdentifier: '8',
+    });
+    expect(new NowPlayingInfo({}, { uniqueIdentifier: '', iTunesStoreIdentifier: Number.MAX_SAFE_INTEGER + 1 }).uniqueIdentifier).toBeUndefined();
   });
 
   it('handles missing fields with defaults', () => {
@@ -41,6 +52,11 @@ describe('NowPlayingInfo', () => {
     expect(info.playbackRate).toBe(0);
     expect(info.playbackState).toBe(PlaybackState.Unknown);
     expect(info.appDisplayName).toBe('');
+    expect(info.mediaType).toBeUndefined();
+    expect(info.mediaSubType).toBeUndefined();
+    expect(info.seriesName).toBe('');
+    expect(info.contentIdentifier).toBe('');
+    expect(info.iTunesStoreIdentifier).toBeUndefined();
   });
 
   it('calculates percentCompleted correctly', () => {

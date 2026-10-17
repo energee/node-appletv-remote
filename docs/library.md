@@ -84,6 +84,21 @@ identify the selected player. Position is a snapshot, not extrapolated. CLI stat
 formatter). Metadata-free explicit Playing/Paused/Interrupted/Seeking states are
 printed as their reported state, not "Absent." The raw `playbackQueue` and `supportedCommands` events still expose
 messages from any player; normalized `nowPlaying` is active-player-only.
+`NowPlayingInfo` normalizes queue metadata when MRP supplies it: `mediaType`
+(`MediaType.Audio` or `MediaType.Video`), `mediaSubType` (`Music`, `Podcast`,
+`AudioBook`, or `ITunesU`), `seriesName`, optional `seasonNumber` and
+`episodeNumber`, `genre`, `contentIdentifier`, direct `uniqueIdentifier`, and
+the four separate optional `iTunesStore*Identifier` fields. Media type describes
+the selected queue item, not the application's bundle. `seriesName` is a series
+label, not an episode title. Text fields are `''` when unknown; optional
+numbers, enums, and identifiers are `undefined`. Store identifiers are lossless
+strings, including decoded 64-bit values. Unknown and unrecognized wire enums
+remain `undefined`. DMAP supplies only its existing genre/shuffle/repeat fields;
+the MRP-only fields remain unknown. Normalized values always come from the
+selected client/player: inactive players' metadata is cached until selected,
+then replacement queues, changed direct item IDs, removals, and reconnects clear
+the old selected snapshot.
+
 
 ```typescript
 const availability = atv.featureAvailability('play');

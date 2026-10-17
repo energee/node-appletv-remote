@@ -31,11 +31,27 @@ export function carriesState(setState: Payload): boolean {
     Object.keys(setState.nowPlayingInfo ?? {}).length > 0;
 }
 
-/** Shallow copy whose bytes fields are copied: protobufjs decodes bytes as views of the frame, which can pin a large artwork frame. */
-function detach(fields: Payload): Payload {
-  const copy: Payload = {};
-  for (const [key, value] of Object.entries(fields)) copy[key] = value instanceof Uint8Array ? Buffer.from(value) : value;
-  return copy;
+/** Retain only fields that feed the normalized snapshot; opaque metadata must not pin a frame. */
+function retain(fields: Payload, names: readonly string[]): Payload {
+  const retained: Payload = {};
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(fields, name)) retained[name] = fields[name];
+  }
+  return retained;
+}
+
+const DIRECT_FIELDS = ['title', 'artist', 'album', 'duration', 'elapsedTime', 'playbackRate', 'repeatMode', 'shuffleMode', 'timestamp', 'uniqueIdentifier'] as const;
+const METADATA_FIELDS = ['title', 'duration', 'elapsedTime', 'playbackRate', 'trackArtistName', 'albumArtistName', 'albumName', 'elapsedTimeTimestamp', 'genre', 'contentIdentifier', 'iTunesStoreIdentifier', 'iTunesStoreSubscriptionIdentifier', 'iTunesStoreArtistIdentifier', 'iTunesStoreAlbumIdentifier', 'seriesName', 'mediaType', 'mediaSubType', 'seasonNumber', 'episodeNumber'] as const;
+
+/** A protobuf integer has a stable track identity only if its decoded form is lossless. */
+function stableIdentifier(value: unknown): string | undefined {
+  if (typeof value === 'string' || typeof value === 'bigint') return String(value);
+  if (typeof value === 'number') return Number.isSafeInteger(value) ? String(value) : undefined;
+  if (value && typeof value === 'object' && 'toString' in value && typeof value.toString === 'function') {
+    const text = value.toString();
+    return /^-?\d+$/.test(text) ? text : undefined;
+  }
+  return undefined;
 }
 
 /** Keeps inactive-player updates separate until the device selects that client/player. */
@@ -82,14 +98,24 @@ export class PlayerState {
     const metadata = player?.items[player.location]?.metadata;
     const normalized: Payload = {};
     if (metadata) {
-      for (const field of ['title', 'duration', 'elapsedTime', 'playbackRate']) {
-        if (metadata[field] !== undefined) normalized[field] = metadata[field];
+      for (const field of ['title', 'duration', 'elapsedTime', 'playbackRate', 'genre', 'contentIdentifier',
+        'iTunesStoreIdentifier', 'iTunesStoreSubscriptionIdentifier', 'iTunesStoreArtistIdentifier',
+        'iTunesStoreAlbumIdentifier', 'seriesName', 'mediaType', 'mediaSubType', 'seasonNumber', 'episodeNumber']) {
+        if (Object.prototype.hasOwnProperty.call(metadata, field)) normalized[field] = metadata[field];
       }
-      normalized.artist = metadata.trackArtistName ?? metadata.albumArtistName;
-      normalized.album = metadata.albumName;
-      normalized.timestamp = metadata.elapsedTimeTimestamp;
+      if (Object.prototype.hasOwnProperty.call(metadata, 'trackArtistName')) normalized.artist = metadata.trackArtistName;
+      else if (Object.prototype.hasOwnProperty.call(metadata, 'albumArtistName')) normalized.artist = metadata.albumArtistName;
+      if (Object.prototype.hasOwnProperty.call(metadata, 'albumName')) normalized.album = metadata.albumName;
+      if (Object.prototype.hasOwnProperty.call(metadata, 'elapsedTimeTimestamp')) normalized.timestamp = metadata.elapsedTimeTimestamp;
     }
-    const info = { ...normalized, ...player?.direct };
+    if (player?.direct) {
+      for (const [field, value] of Object.entries(player.direct)) {
+        if (field === 'repeatMode') normalized.repeatState = value;
+        else if (field === 'shuffleMode') normalized.shuffleState = value;
+        else normalized[field] = value;
+      }
+    }
+    const info = normalized;
     return new NowPlayingInfo({ ...player?.state, displayName: client?.info.displayName ?? player?.state.displayName,
       playerPath: { client: client?.info, player: { identifier } },
       hasPlayback: Boolean(metadata || Object.keys(player?.direct ?? {}).length),
@@ -148,16 +174,21 @@ export class PlayerState {
       for (const field of ['playbackState', 'displayName']) {
         if (payload[field] !== undefined) player.state[field] = payload[field];
       }
-      if (payload.playbackQueue) {
-        // Keep only what snapshots and item updates read; detach() copies bytes fields so artwork frames are not retained.
-        player.items = (payload.playbackQueue.contentItems ?? []).map((item: Payload) => ({ identifier: item.identifier, metadata: item.metadata ? detach(item.metadata) : undefined }));
+      if (payload.playbackQueue !== undefined) {
+        // Keep only snapshot fields; opaque queue blobs and artwork must not be retained.
+        player.items = (payload.playbackQueue.contentItems ?? []).map((item: Payload) => ({
+          identifier: item.identifier,
+          metadata: item.metadata ? retain(item.metadata, METADATA_FIELDS) : undefined,
+        }));
         player.location = payload.playbackQueue.location ?? 0;
         // Replaced queues must not inherit metadata from a previous track.
         player.direct = {};
       }
-      if (payload.nowPlayingInfo) {
-        const fields = detach(payload.nowPlayingInfo);
-        if (fields.uniqueIdentifier !== undefined && player.direct.uniqueIdentifier !== undefined && String(fields.uniqueIdentifier) !== String(player.direct.uniqueIdentifier)) {
+      if (payload.nowPlayingInfo !== undefined) {
+        const fields = retain(payload.nowPlayingInfo, DIRECT_FIELDS);
+        const nextIdentifier = stableIdentifier(fields.uniqueIdentifier);
+        const previousIdentifier = stableIdentifier(player.direct.uniqueIdentifier);
+        if (nextIdentifier !== undefined && previousIdentifier !== undefined && nextIdentifier !== previousIdentifier) {
           player.direct = {};
           player.items = [];
         }
@@ -168,15 +199,15 @@ export class PlayerState {
       for (const item of payload.contentItems ?? []) {
         const existing = player.items.find(candidate => candidate.identifier === item.identifier);
         if (existing && item.metadata) {
-          const changes = detach(item.metadata);
+          const changes = retain(item.metadata, METADATA_FIELDS);
           existing.metadata = { ...existing.metadata, ...changes };
           if (existing === player.items[player.location]) {
             for (const field of ['title', 'duration', 'elapsedTime', 'playbackRate']) {
               if (Object.prototype.hasOwnProperty.call(changes, field)) delete player.direct[field];
             }
-            if ('trackArtistName' in changes || 'albumArtistName' in changes) delete player.direct.artist;
-            if ('albumName' in changes) delete player.direct.album;
-            if ('elapsedTimeTimestamp' in changes) delete player.direct.timestamp;
+            if (Object.prototype.hasOwnProperty.call(changes, 'trackArtistName') || Object.prototype.hasOwnProperty.call(changes, 'albumArtistName')) delete player.direct.artist;
+            if (Object.prototype.hasOwnProperty.call(changes, 'albumName')) delete player.direct.album;
+            if (Object.prototype.hasOwnProperty.call(changes, 'elapsedTimeTimestamp')) delete player.direct.timestamp;
           }
         }
       }

@@ -15,7 +15,7 @@ export type { OpackValue, OpackDict } from './companion/opack.js';
 export { FrameType, encodeFrame, parseFrames } from './companion/framing.js';
 export type { Frame } from './companion/framing.js';
 export { Credentials, parseCredentials } from './credentials.js';
-export { NowPlayingInfo, PlaybackState } from './now-playing-info.js';
+export { NowPlayingInfo, PlaybackState, MediaType, MediaSubType } from './now-playing-info.js';
 export { SupportedCommand, Command } from './supported-command.js';
 export { Message } from './message.js';
 export { AirPlayConnection } from './connection.js';
