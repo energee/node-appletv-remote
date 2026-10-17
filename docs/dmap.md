@@ -102,6 +102,10 @@ Media extras, matching what the legacy protocol offers:
   the idle time, leaving the OS probe interval and count (macOS defaults: 75 s x 8, about
   10 minutes). Until then neither `nowPlaying` nor `pushError` fires. Use your own
   watchdog (for example `stopPushUpdates()` plus a `getState()` probe) if you need faster detection.
+- `close` fires when an existing credential-bearing session ends, including explicit close,
+  replacement, persistent authentication rejection, or failed re-login. Routed sessions
+  use it to invalidate availability and cached metadata; it is distinct from a transient
+  command error and from `pushError` (which reports that the poller stopped).
 
 Capabilities report navigation and push updates as `available` (protocol support, not
 hardware verification); media, seek, skip, shuffle, repeat and artwork as `unknown`

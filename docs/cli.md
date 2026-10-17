@@ -5,7 +5,7 @@ Every `atv` command, its arguments, and how it picks a device. `atv --help` prin
 ```bash
 atv scan                          # find Apple TVs (and AirPlay receivers' psi output IDs)
 atv pair                          # AirPlay pairing (enter the PIN shown on the TV)
-atv companion-pair                # Companion pairing, needed for apps/accounts/power
+atv companion-pair                # Companion pairing, needed for Companion-only controls/apps/accounts/power
 
 atv command <command> [action] [deviceId]  # send one command, e.g. `atv command play`
 atv command up doubleTap [deviceId]  # action: singleTap (default), doubleTap, hold
@@ -17,17 +17,19 @@ atv messages [deviceId]           # stream raw MRP messages until Ctrl+C
 atv keyboard [deviceId]           # stream keyboard/text events
 atv --help                       # complete syntax and available keys
 
-# AirPlay/MRP playback
+# AirPlay/MRP-only operations
 atv stop [deviceId]
-atv seek 120.5 [deviceId]          # absolute position in seconds (>= 0)
-atv skip-forward 30 [deviceId]    # positive seconds; skip-backward also supported
+atv seek 120.5 [deviceId]         # absolute position in seconds (>= 0)
 atv shuffle songs [deviceId]      # off, albums, songs
 atv repeat all [deviceId]         # off, track, all
-atv volume 40 [deviceId]          # absolute volume, 0..100
 atv output list [deviceId]        # selected outputs, tab-separated ID and name
 atv output add <psi-uuid>[,<psi-uuid>...] [deviceId]  # also remove, set
 
-# Companion only (requires atv companion-pair)
+# Shared MRP/Companion controls
+atv skip-forward 30 [deviceId]    # positive seconds; skip-backward also supported
+atv volume 40 [deviceId]          # absolute volume, 0..100, when advertised
+
+# Companion-only operations (requires atv companion-pair)
 atv text set "search words" [deviceId]  # prints the new text; fails if no field is focused
 atv text append " more" [deviceId]
 atv text clear [deviceId]
@@ -54,13 +56,41 @@ atv raop-stream 192.168.1.20 https://example.test/track.mp3
 atv raop-stream 192.168.1.20 pcm:https://example.test/track.pcm # explicit remote raw PCM
 ```
 
-Credentials are saved to `~/.atv-credentials.json`. Leave out `deviceId` to use the most recently paired device. An explicit selector matches a paired device ID case-insensitively; blank or unmatched selectors fail instead of silently selecting the last device. Each device's last working address is cached in `~/.atv-devices.json`, so commands skip the network scan. If the TV has moved, the CLI rescans automatically; an address that silently drops packets fails over after a 5 s connect timeout rather than the OS TCP timeout (about 75 s on macOS).
+Credentials, protocol settings, DMAP GUIDs and nonsecret endpoint hints use
+`~/.atv-storage.json`, the public versioned `FileStorage` format (plaintext, mode `0600`,
+not a keychain). The first run without that file validates and imports old
+`~/.atv-credentials.json`, `~/.atv-dmap.json` and `~/.atv-devices.json` without deleting them.
+Old HAP records without pairing-carrier provenance remain unclassified until re-pairing;
+duplicate outer/Companion keys import as Companion-only. Corrupt imports reject.
+Omit `deviceId` for the latest eligible record; selectors match keys/known aliases
+case-insensitively, and blank, missing or ambiguous selectors reject.
+Stored endpoint overrides take precedence over discovery hints. Connections try validated
+cached hints first and rescan only after setup failure, before any action is sent.
+Discovery matches known aliases exactly, never by a friendly-name substring.
 
-Playback and output commands open only AirPlay/MRP; text/app/account/power/click/swipe commands and extra buttons open only Companion. `command` (alias `cmd`) still accepts `skip_forward` / `skip_backward` for the app's default interval; use the hyphenated commands to specify seconds. Extra Companion buttons are `channel_up`, `channel_down`, `screensaver`, `guide`, `page_up`, and `page_down` (not available in the MRP-only interactive remote). An optional action (`singleTap`, `doubleTap`, `hold`; case-insensitive) may follow navigation/HID keys and Companion buttons; media keys, `wake`, `suspend`, skips and `home_hold` reject it before connecting. When both an action and a device are given, an unrecognized action word is rejected as an invalid action instead of being treated as a device selector.
+Control commands use the public `DeviceSession` operation policy, not a separate CLI router.
+Navigation/media/volume prefer eligible AirPlay MRP, enabled standalone MRP, then Companion
+and supported DMAP controls; wake/suspend prefer Companion. A one-shot opens only the selected
+operation's provider. `remote` opens configured credential-bearing providers and reports a clear
+unavailable-operation error instead of fabricating a Companion stop/seek/queue implementation.
+Text/app/account/power/click/swipe and extra buttons use only Companion. Keys remain paired
+to their actual carrier; the CLI never sends standalone MRP credentials to an AirPlay endpoint.
+Once an action is dispatched its error is propagated, never retried through another protocol.
+`command` (alias `cmd`) accepts `skip_forward` / `skip_backward` for the provider's default;
+use hyphenated commands to specify seconds. Extra buttons are `channel_up`, `channel_down`,
+`screensaver`, `guide`, `page_up`, and `page_down`. Optional `singleTap`, `doubleTap`, and `hold`
+actions follow supported HID/buttons; media commands, wake/suspend and `home_hold` reject
+modifiers before connection. DMAP does not support hold/double-tap. Companion acceptance is
+not confirmation of UI, media, volume, or power state.
 
 Output IDs must be the receiver's AirPlay **`psi`** UUID, which `atv scan` prints as `psi=...`; its `deviceid` (MAC) and `pi` are ignored by the TV and time out after five seconds. Comma-separated IDs are trimmed and must be unique and nonblank (checked before connecting). `output add/remove/set` print the confirmed selected outputs afterward; `atv output set ""` is rejected, so the CLI cannot clear all outputs.
 
-`atv dmap-pair` advertises this computer as a Remote on the given local IPv4 interface, prints a random PIN, waits up to five minutes for the TV, and stores the pairing GUID in `~/.atv-dmap.json` (separate from modern credentials, keyed by the device ID shown in the selection list: the AirPlay `deviceid` when the TV also advertises AirPlay on that address, which Apple TV 2/3 normally do, otherwise `dmap:<instance>`). It fails immediately once five wrong PINs lock pairing or the window expires; Ctrl+C cancels, closes the callback server and unpublishes the advertisement. `atv dmap` logs in with that GUID; `[deviceId]` selects among DMAP pairings the same way. Its address is cached like the others. `state` is a one-shot snapshot; the CLI does not use the library's DMAP push updates.
+`atv dmap-pair` advertises this computer as a Remote on the selected local IPv4 interface,
+prints a random PIN and stores the successful GUID under that device's DMAP carrier in
+`~/.atv-storage.json`. Five wrong PINs, expiry or Ctrl+C close the pairing server and
+unpublish the advertisement. `atv dmap` logs in with that GUID, applies DMAP endpoint
+settings over cached hints and uses the same selector rules. `state` is a one-shot
+snapshot; the CLI does not start DMAP push polling.
 
 `atv raop-stream` resolves the receiver's `_raop._tcp` TXT record by browsing mDNS for up to five seconds at the given IPv4 address, then streams finite input with `RaopStream`. Local `.pcm` is already raw PCM16LE stereo 44.1 kHz; a matching `.wav` is read directly. Other local files, incompatible or malformed WAV files, and ordinary HTTP(S) URLs are decoded and resampled by an installed `ffmpeg` executable (`-f s16le -ar 44100 -ac 2`). The command fails before discovery with a PCM/WAV alternative if `ffmpeg` is missing. It does not infer remote raw PCM from MIME type: prefix an HTTP(S) raw PCM URL with `pcm:` explicitly. Remote sources are finite downloads, not live-radio streams, and no track is prebuffered. It supports only receivers that accept unencrypted legacy PCM without a PIN (receivers requiring a legacy seed, password or HAP fail before streaming). Ctrl+C cancels the source/decoder and tears the session down; a decoder/source failure after PCM has begun is reported rather than retried.
 

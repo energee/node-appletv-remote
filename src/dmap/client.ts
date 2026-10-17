@@ -17,8 +17,8 @@ const REPEAT_WIRE = [RepeatState.Off, RepeatState.Track, RepeatState.All];
 /**
  * DMAP support is deliberately separate from AppleTV's AirPlay/MRP transport.
  *
- * Events (only after startPushUpdates()): `nowPlaying` (NowPlayingInfo) per play-status
- * revision, and `pushError` (Error) when polling stops on a failure.
+ * `nowPlaying` (NowPlayingInfo) and `pushError` (Error) are emitted by push updates.
+ * `close` reports termination of a credential-bearing session, including authentication loss.
  */
 export class DmapClient extends EventEmitter {
   readonly protocol = 'dmap' as const;
@@ -102,8 +102,13 @@ export class DmapClient extends EventEmitter {
   /** Stop push updates, release the HTTP pools and forget login/state. A later connect() can reopen it. */
   close(): void { this.stopPushUpdates(); this.endSession(); }
 
-  /** Forget the session after a failed login; a running push poll fails and reports `pushError`. */
-  private endSession(): void { this.generation++; this.loginPending = undefined; this.http.destroy(); this.pushHttp.destroy(); this.session = 0; this.credentials = undefined; this.latest = undefined; }
+  /** Forget terminal authentication/session state and notify owners to invalidate cached snapshots. */
+  private endSession(): void {
+    const hadCredentials = this.credentials !== undefined;
+    this.generation++; this.loginPending = undefined; this.http.destroy(); this.pushHttp.destroy();
+    this.session = 0; this.credentials = undefined; this.latest = undefined;
+    if (hadCredentials) this.emit('close');
+  }
   private async control(command: string): Promise<void> { await this.request('POST', command, { 'prompt-id': '0' }); }
   private async prompt(command: string): Promise<void> {
     await this.request('POST', 'controlpromptentry', { 'prompt-id': '0' }, Buffer.concat([encodeDmap('cmbe', command), encodeDmap('cmcc', Buffer.from([0]))]));

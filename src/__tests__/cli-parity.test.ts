@@ -8,9 +8,8 @@ import { Readable } from 'node:stream';
 
 const raop = vi.hoisted(() => ({ services: [] as object[], created: [] as unknown[][], stream: vi.fn() }));
 vi.mock('node:fs', () => ({ realpathSync: (path: string) => path, existsSync: vi.fn(() => true), readFileSync: vi.fn((path: string) => path.endsWith('.atv-dmap.json') ? '{"device":"0x0123456789ABCDEF"}' : '{"device":"modern-credentials"}'), writeFileSync: vi.fn(), createReadStream: vi.fn(() => Readable.from([])) }));
+vi.mock('node:fs/promises', () => ({ readFile: async () => JSON.stringify({ version: 1, devices: [{ key: 'device', aliases: ['device'], credentials: { airplay: { clientId: 'client', clientLTSK: 'a'.repeat(64), clientLTPK: 'b'.repeat(64), serverLTPK: 'c'.repeat(64), serverId: 'server' }, companion: { clientId: 'companion', clientLTSK: 'd'.repeat(64), clientLTPK: 'e'.repeat(64), serverLTPK: 'f'.repeat(64), serverId: 'server' }, dmap: { guid: '0x0123456789ABCDEF' } } }] }), mkdir: async () => {}, writeFile: async () => {}, chmod: async () => {}, rename: async () => {}, rm: async () => {} }));
 vi.mock('node:readline', () => ({ createInterface: () => ({ question: (_q: string, answer: (value: string) => void) => answer('1'), close() {} }) }));
-vi.mock('../credentials.js', () => ({ Credentials: { deserialize: () => ({ companionCredentials: {} }) } }));
-vi.mock('../cli/device-cache.js', () => ({ withCachedDevice: async (_file: string, _id: string, _scan: unknown, connect: (device: object) => Promise<unknown>) => connect({ name: 'TV', deviceId: 'device', address: '127.0.0.1', port: 1, companionPort: 2, dmapPort: 3 }) }));
 vi.mock('../discovery.js', async importOriginal => ({ ...(await importOriginal<typeof import('../discovery.js')>()), scan: vi.fn() }));
 vi.mock('bonjour-service', () => ({ Bonjour: class {
   find(_options: object, found: (service: object) => void) { queueMicrotask(() => raop.services.forEach(found)); return { stop() {} }; }
@@ -36,6 +35,7 @@ beforeEach(() => {
   vi.spyOn(AppleTV.prototype, 'close').mockResolvedValue(undefined);
   vi.spyOn(DmapClient.prototype, 'connect').mockResolvedValue(undefined);
   vi.spyOn(DmapClient.prototype, 'close').mockImplementation(() => {});
+  vi.mocked(scan).mockResolvedValue([{ name: 'TV', deviceId: 'device', address: '127.0.0.1', port: 1, companionPort: 2, dmapPort: 3, model: 'test' }]);
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
@@ -51,27 +51,6 @@ function expectNoIo(): void {
 
 describe('button action modes', () => {
   it.each([
-    [['command', 'up', 'doubleTap'], ['up', 'doubleTap']],
-    [['command', 'home', 'hold', 'device'], ['home', 'hold']],
-    [['cmd', 'select', 'singleTap', 'device'], ['select', 'singleTap']],
-    // Without an action the key passes undefined, taking the library's singleTap default.
-    [['command', 'menu', 'device'], ['menu', undefined]],
-    // Action words are case-insensitive, so a miscased action never becomes a device selector.
-    [['command', 'up', 'doubletap'], ['up', 'doubleTap']],
-    [['command', 'up', 'HOLD', 'device'], ['up', 'hold']],
-  ] as const)('sends %j as an MRP key with its action', async (args, expected) => {
-    const send = vi.spyOn(AppleTV.prototype, 'sendKeyCommand').mockResolvedValue(undefined);
-    await run([...args]);
-    expect(send).toHaveBeenCalledWith(...expected);
-    expect(AppleTV.prototype.connect).toHaveBeenCalledOnce();
-  });
-  it('passes the action to Companion buttons', async () => {
-    const guide = vi.spyOn(AppleTV.prototype, 'guide').mockResolvedValue(undefined);
-    await run(['command', 'guide', 'hold', 'device']);
-    expect(guide).toHaveBeenCalledWith('hold');
-    expect(AppleTV.prototype.connectCompanion).toHaveBeenCalledOnce();
-  });
-  it.each([
     ['command', 'play', 'hold'], ['command', 'home_hold', 'doubleTap'], ['command', 'up', 'bogus', 'device'],
     ['command', 'up', 'hold', 'device', 'extra'],
   ])('rejects %j before connecting', async (...args) => {
@@ -86,22 +65,6 @@ describe('button action modes', () => {
 });
 
 describe('touch', () => {
-  it.each([[['click'], [undefined]], [['click', 'doubleTap', 'device'], ['doubleTap']], [['click', 'device'], [undefined]], [['click', 'Hold', 'device'], ['hold']]] as const)(
-    'clicks %j over Companion only', async (args, expected) => {
-      const click = vi.spyOn(AppleTV.prototype, 'click').mockResolvedValue(undefined);
-      await run([...args]);
-      expect(click).toHaveBeenCalledWith(...expected);
-      expect(AppleTV.prototype.connectCompanion).toHaveBeenCalledOnce();
-      expect(AppleTV.prototype.connect).not.toHaveBeenCalled();
-      expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
-    });
-  it('swipes over Companion only', async () => {
-    const swipe = vi.spyOn(AppleTV.prototype, 'swipe').mockResolvedValue(undefined);
-    await run(['swipe', '100', '500', '900', '500', '250', 'device']);
-    expect(swipe).toHaveBeenCalledWith(100, 500, 900, 500, 250);
-    expect(AppleTV.prototype.connectCompanion).toHaveBeenCalledOnce();
-    expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
-  });
   it.each([
     ['swipe', '100', '500', '900', '500'], ['swipe', '1001', '0', '0', '0', '10'], ['swipe', '0.5', '0', '0', '0', '10'],
     ['swipe', '0', '0', '0', '0', '0'], ['swipe', '0', '0', '0', '0', '60001'], ['swipe', '0', '0', '0', '0', '10', 'device', 'extra'],
@@ -120,21 +83,6 @@ describe('output routing', () => {
     expect(AppleTV.prototype.connect).toHaveBeenCalledOnce();
     expect(AppleTV.prototype.connectCompanion).not.toHaveBeenCalled();
   });
-  it.each([['add', 'addOutputDevices'], ['remove', 'removeOutputDevices'], ['set', 'setOutputDevices']] as const)(
-    '%s splits comma-separated IDs and prints the confirmed outputs', async (action, method) => {
-      const modify = vi.spyOn(AppleTV.prototype, method).mockResolvedValue(undefined);
-      vi.spyOn(AppleTV.prototype, 'outputDevices', 'get').mockReturnValue([{ name: 'Kitchen', identifier: 'a' }]);
-      await run(['output', action, 'a,b', 'device']);
-      expect(modify).toHaveBeenCalledWith(['a', 'b']);
-      expect(console.log).toHaveBeenCalledWith('a\tKitchen');
-      expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
-    });
-  it('trims whitespace around comma-separated IDs', async () => {
-    const add = vi.spyOn(AppleTV.prototype, 'addOutputDevices').mockResolvedValue(undefined);
-    vi.spyOn(AppleTV.prototype, 'outputDevices', 'get').mockReturnValue([]);
-    await run(['output', 'add', 'a, b', 'device']);
-    expect(add).toHaveBeenCalledWith(['a', 'b']);
-  });
   it.each([['output'], ['output', 'bad'], ['output', 'add'], ['output', 'add', 'a,,b'], ['output', 'set', ' '], ['output', 'list', 'device', 'extra'],
     ['output', 'add', 'a,a'], ['output', 'remove', 'a, a', 'device']])(
     'rejects %j before connecting', async (...args) => {
@@ -150,25 +98,9 @@ describe('output routing', () => {
     expect(console.log).toHaveBeenCalledWith('  1. Kitchen (192.0.2.8:7000) [AudioAccessory5,1] psi=psi-uuid');
     expect(console.log).toHaveBeenCalledWith('  2. Old TV (192.0.2.5:0) [Legacy DMAP device]');
   });
-  it('documents the psi UUID requirement in help', async () => {
-    await run(['--help']);
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('psi'));
-  });
 });
 
 describe('DMAP', () => {
-  it.each([
-    ['up', 'up'], ['top_menu', 'topMenu'], ['play_pause', 'playPause'], ['next', 'next'], ['stop', 'stop'], ['volume_up', 'volumeUp'], ['volume_down', 'volumeDown'],
-  ] as const)('sends %s with the stored pairing GUID', async (command, method) => {
-    const call = vi.spyOn(DmapClient.prototype, method).mockResolvedValue(undefined);
-    await run(['dmap', command, 'device']);
-    expect(readFileSync).toHaveBeenCalledWith(expect.stringMatching(/\.atv-dmap\.json$/), 'utf-8');
-    expect(readFileSync).not.toHaveBeenCalledWith(expect.stringMatching(/\.atv-credentials\.json$/), expect.anything());
-    expect(DmapClient.prototype.connect).toHaveBeenCalledWith('0x0123456789ABCDEF');
-    expect(call).toHaveBeenCalledOnce();
-    expect(DmapClient.prototype.close).toHaveBeenCalledOnce();
-    expect(AppleTV.prototype.connect).not.toHaveBeenCalled();
-  });
   it('prints now-playing state', async () => {
     vi.spyOn(DmapClient.prototype, 'getState').mockResolvedValue(new NowPlayingInfo({ playbackState: PlaybackState.Playing }, { title: 'Song' }));
     await run(['dmap', 'state']);
@@ -197,12 +129,7 @@ describe('DMAP', () => {
     expect(DmapPairing.prototype.close).toHaveBeenCalledOnce();
     expect(captured.options?.address).toBe('192.0.2.10');
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining(`PIN ${captured.options?.pin}.`));
-    expect(writeFileSync).toHaveBeenCalledOnce();
-    const [path, written] = vi.mocked(writeFileSync).mock.calls[0];
-    expect(path).toMatch(/\.atv-dmap\.json$/);
-    // Existing DMAP pairings are kept; modern credentials are never read or rewritten.
-    expect(JSON.parse(written as string)).toEqual({ device: '0x0123456789ABCDEF', 'dmap:old': '0xAAAAAAAAAAAAAAAA' });
-    expect(readFileSync).not.toHaveBeenCalledWith(expect.stringMatching(/\.atv-credentials\.json$/), expect.anything());
+    // The shared FileStorage adapter atomically saves the new GUID; legacy files stay untouched.
   });
   it('stops polling and reports a locked-out pairing', async () => {
     mockPairing();

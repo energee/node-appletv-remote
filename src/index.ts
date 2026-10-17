@@ -21,6 +21,8 @@ export { Message } from './message.js';
 export { AirPlayConnection } from './connection.js';
 export type { HAPCredentials } from './auth/types.js';
 export type { ScanOptions, DiscoveredDevice, DiscoveredDeviceInfo } from './discovery.js';
+export { DeviceStorage, MemoryStorage, FileStorage, CustomStorage, STORAGE_VERSION } from './storage.js';
+export type { StorageAdapter, StorageDocument, DeviceRecord, DeviceSettings, EndpointHints, ProtocolCredentials, Protocol, FileStorageOptions } from './storage.js';
 
 export { LegacyMRPConnection } from './mrp/legacy-connection.js';
 export { MRPConnection } from './mrp/connection.js';
@@ -52,6 +54,9 @@ export function createClient(info: DiscoveredDeviceInfo, protocol?: 'airplay' | 
   if (!info.port && !(protocol === undefined && info.companionPort)) throw new Error('No AirPlay port available');
   return new AppleTV(info);
 }
+
+export { DeviceSession, connectDevice, KEY_OPERATIONS } from './session.js';
+export type { ControlProtocol, SessionCredentials, SessionOperation, SessionOptions, SessionConnectionEvent } from './session.js';
 
 export { AirPlayPlaybackSession } from './airplay-playback.js';
 export type { AirPlayPlaybackStatus } from './airplay-playback.js';

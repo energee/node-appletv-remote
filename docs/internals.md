@@ -27,12 +27,40 @@ src/
 ├── util/           # crypto, TLV, HTTP, HAP framing, AirPlay 2 event channel
 └── cli/            # the `atv` command
 ```
+## Storage
+
+`src/storage.ts` exposes a small asynchronous document store used optionally by the
+CLI and available to library consumers. The document is versioned and validates HAP
+key encodings/lengths, RAOP seed/client ID, and DMAP GUIDs before it can be used.
+Secrets live under per-protocol credentials; aliases and endpoint hints are separate
+unauthenticated data. `DeviceStorage` keeps mutations dirty until explicit `save()`.
+`FileStorage` is a single-writer JSON store: it writes a restrictive same-directory
+temporary file then atomically renames it, retaining the prior readable document when
+the write fails. It deliberately has no multi-process transaction guarantee and is
+plaintext rather than a keychain. `CustomStorage` accepts an adapter with async
+`load`/`save` methods for keychains, databases, or cloud-backed applications.
+
 
 ## Discovery and transport selection
 
 `DiscoveredDeviceInfo.port` remains the AirPlay port, and is **0 when AirPlay is absent**. `companionPort` and `mrpPort` are independent capabilities, not substitute AirPlay ports. `mrpEnabled` is false for Darwin build 19+ (tvOS 15+), where the legacy MRP advertisement no longer indicates a usable transport. Unknown builds retain legacy MRP eligibility.
 
 `AppleTV.connect()` and `startPairing()` preserve the AirPlay tunnel when advertised, otherwise select enabled standalone MRP. Companion-only devices use `connectCompanion()` and `startCompanionPairing()`; calling the MRP methods fails before opening a socket. Standalone credentials use the existing `Credentials` format but must be paired with the selected protocol; AirPlay pairing does not imply legacy MRP pairing. A returned PairSetup owns its open pairing carrier: always call `finish(pin)` or `destroy()`; abandoning it without either intentionally leaves pairing open. `PairSetup.clientId` is a public readonly controller pairing identifier (a random UUID per instance); it is sent in M5 and returned as `clientId` in the finished credentials.
+
+`DeviceSession` is the shared high-level routing policy used by the CLI. Each configured
+provider owns its actual `AppleTV` or `DmapClient`, so credentials, request correlation,
+handshake readiness and encryption counters remain per carrier. The operation table
+contains only implemented public methods; discovery ports do not establish runtime support.
+Metadata/queue/routing prefer MRP, while apps/text/touch/power prefer Companion. Explicit
+preferences are strict, and no failure after dispatch triggers a second provider.
+
+Handlers attach before setup. Normalized setup state is coalesced until the provider is
+ready and forwarded only from its authoritative source. Optional failure is observable,
+required failure closes the attempt, and close-during-setup cannot resurrect a provider.
+Terminal DMAP authentication loss emits `close` and invalidates the routed cached state;
+ordinary request errors remain the original operation failure. Session closure detaches
+forwarding before closing each owned client and does not initiate reconnect.
+
 
 A standalone MRP connection sends a heartbeat (a GenericMessage) every 30 s, never overlapping another. Any reply carrying the request's identifier counts, whatever its type; a miss is retried once immediately, and a second miss fails the connection.
 
@@ -55,9 +83,9 @@ const reply = await atv.sendCompanionRequest('FetchAttentionState', new Map());
 atv.sendCompanionMessage('_interest', new Map([['_regEvents', ['SystemStatus']]]));
 ```
 
-- A reply carrying an `_em` error rejects with `Companion <id> failed: <_em>` instead of resolving with an empty `_c`.
+- A reply carrying `_em` or a present, nonzero `_ec` rejects; a request is accepted only after its correlated reply.
 - Plain content is wrapped as `{ _i, _t, _c, _x }`. `_t` is 2 for a request and 1 for a message. If you pass a prebuilt envelope (with `_t`, `_c` or `_x`), only `_i` and `_x` get filled in.
-- Wrap whole numbers in `new OpackFloat(n)` when the protocol expects a float, such as skip seconds or volume 0/1. Use `bigint` for unsigned 64-bit IDs.
+- Companion HID controls use `_hidC` content `{ _hBtS: 1|2, _hidC: code }`; media controls use `_mcc`. `_skpS` and `_vol` must be `new OpackFloat(...)` because Companion requires float64 even for whole values.
 - Request IDs stay in 1..127, since Apple TVs read larger single-byte IDs as negative. A timed-out ID stays reserved for 30s so a late reply can't resolve the wrong request.
 
 The OPACK and framing tests use independent wire fixtures, including published OPACK examples.

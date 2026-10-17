@@ -14,6 +14,8 @@ function mrp(atv: AppleTV) {
     const message = await MRPMessage.decode(buf);
     sent.push(message);
   } };
+  const readyTransports = Reflect.get(atv, 'readyTransports');
+  if (readyTransports instanceof WeakSet) readyTransports.add(Reflect.get(atv, 'connection'));
   return sent;
 }
 function companion(atv: AppleTV) {
@@ -23,6 +25,8 @@ function companion(atv: AppleTV) {
     return new Map<OpackValue, OpackValue>([['_c', new Map([['_sid', 7]])]]);
   }), sendMessage: vi.fn((id: string, content: OpackDict) => { sent.push([id, content]); }) };
   (atv as any).companionConnection = conn;
+  const readyTransports = Reflect.get(atv, 'readyTransports');
+  if (readyTransports instanceof WeakSet) readyTransports.add(conn);
   return { sent, conn };
 }
 afterEach(() => vi.useRealTimers());

@@ -2,9 +2,8 @@
 /**
  * `atv` command-line tool: scan, pair, control playback/text, touch, output routing and Companion,
  * inspect now-playing, keyboard, and Companion events, control legacy DMAP Apple TVs, and stream raw
- * PCM to legacy RAOP receivers (experimental). A thin consumer of the public library APIs;
- * credentials are stored as JSON in ~/.atv-credentials.json keyed by device ID, DMAP pairing GUIDs
- * in ~/.atv-dmap.json.
+ * PCM to legacy RAOP receivers (experimental). Pairings and endpoint hints use the
+ * public versioned FileStorage API; legacy CLI JSON is imported once without deletion.
  */
 import { scan, normalizeTxt, type DiscoveredDeviceInfo } from '../discovery.js';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -12,7 +11,9 @@ import { AppleTV, Key, ShuffleState, RepeatState, contentItems, INPUT_ACTIONS } 
 import { PlaybackState } from '../now-playing-info.js';
 import { MessageType, HID_KEY_MAP } from '../mrp/messages.js';
 import { Credentials } from '../credentials.js';
-import { DmapClient } from '../dmap/client.js';
+import { FileStorage, type DeviceRecord, type EndpointHints } from '../storage.js';
+import { DeviceSession, KEY_OPERATIONS, supportsSessionOperation } from '../session.js';
+import type { ControlProtocol, SessionOperation, SessionCredentials } from '../session.js';
 import { DmapPairing } from '../dmap/pairing.js';
 import { RaopStream } from '../raop/stream.js';
 import { openRaopInput, type RaopInput } from './raop-input.js';
@@ -22,62 +23,91 @@ import { isIPv4 } from 'node:net';
 import { randomInt } from 'node:crypto';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { withCachedDevice } from './device-cache.js';
 import { createInterface } from 'node:readline';
 import type { Message } from '../message.js';
 import type { KeyboardInfo, TextInputEvent, CompanionEvent, App, UserAccount, InputAction } from '../appletv.js';
 
-/** Where paired credentials are stored (falls back to the current directory if HOME is unset). */
+/** Versioned CLI state. Plaintext storage is protected by restrictive file permissions, not a keychain. */
+const STORAGE_FILE = join(process.env.HOME ?? '.', '.atv-storage.json');
 const CREDS_FILE = join(process.env.HOME ?? '.', '.atv-credentials.json');
-/** Legacy DMAP pairing GUIDs, kept apart so a DMAP pairing never becomes the default modern device. */
 const DMAP_FILE = join(process.env.HOME ?? '.', '.atv-dmap.json');
-/** Last-known address of each paired device, so commands can skip the mDNS scan. */
 const DEVICES_FILE = join(process.env.HOME ?? '.', '.atv-devices.json');
+let cliStore: FileStorage | undefined;
 
-/** Non-negative ms from an env var, or `fallback` when unset/invalid; `0` disables the wait. */
+/** Load the shared store and perform the one-time, non-destructive legacy import. */
+async function storage(): Promise<FileStorage> {
+  if (cliStore) return cliStore;
+  const store = new FileStorage(STORAGE_FILE);
+  const hadDocument = existsSync(STORAGE_FILE);
+  await store.load();
+  if (!hadDocument) {
+    const modern = existsSync(CREDS_FILE) ? JSON.parse(readFileSync(CREDS_FILE, 'utf8')) as Record<string, string> : {};
+    const dmap = existsSync(DMAP_FILE) ? JSON.parse(readFileSync(DMAP_FILE, 'utf8')) as Record<string, string> : {};
+    const cached = existsSync(DEVICES_FILE) ? JSON.parse(readFileSync(DEVICES_FILE, 'utf8')) as Record<string, EndpointHints> : {};
+    for (const [key, serialized] of Object.entries(modern)) {
+      const credentials = Credentials.deserialize(serialized);
+      const companion = credentials.companionCredentials;
+      if (companion && credentials.clientId === companion.clientId && credentials.clientLTSK.equals(companion.clientLTSK) && credentials.clientLTPK.equals(companion.clientLTPK) && credentials.serverLTPK.equals(companion.serverLTPK) && credentials.serverId === companion.serverId) {
+        store.setHap(key, 'companion', companion, [key]);
+      } else {
+        store.setUnclassifiedHap(key, credentials, [key]);
+        if (companion) store.setHap(key, 'companion', companion, [key]);
+      }
+    }
+    for (const [key, guid] of Object.entries(dmap)) {
+      if (typeof guid !== 'string' || !guid) throw new Error('Legacy DMAP credentials contain an invalid GUID');
+      const record: DeviceRecord = store.get(key) ?? { key, aliases: [key] };
+      record.credentials = { ...record.credentials, dmap: { guid } };
+      store.upsert(record);
+    }
+    for (const [key, hints] of Object.entries(cached)) {
+      if (!hints || typeof hints !== 'object') throw new Error('Legacy device cache contains an invalid endpoint');
+      const record: DeviceRecord = store.get(key) ?? { key, aliases: [key] };
+      record.hints = hints;
+      store.upsert(record);
+    }
+    await store.save();
+  }
+  cliStore = store;
+  return store;
+}
+
+/** Non-negative milliseconds from an environment variable, or the given fallback. */
 function envMs(name: string, fallback: number): number {
   const value = Number(process.env[name]);
   return process.env[name]?.trim() && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
-// HID keys get no device acknowledgment, so the CLI waits before trusting a send (old fixed values).
-// Settle applies to every MRP connect: any first request may be lost before the device is ready.
 const settleMs = (): number => envMs('ATV_SETTLE_MS', 500);
 const postSendMs = (): number => envMs('ATV_POST_SEND_MS', 1000);
 
 /** Ask one question on stdin and resolve with the raw answer. */
 function prompt(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  // Promise.withResolvers is unavailable in the package's ES2022 target.
   return new Promise((resolve) => {
     rl.question(question, (answer) => {
       rl.close();
-      resolve(answer);
+      resolve(answer ?? '');
     });
   });
 }
 
-/** Number `devices` with `label`, then prompt for one; prints `none` or an invalid-selection notice and returns undefined. */
+/** Number devices then return the user's selected member. */
 async function selectDevice<T>(devices: T[], none: string, label: (device: T) => string): Promise<T | undefined> {
   if (devices.length === 0) {
     console.log(none);
     return undefined;
   }
-  devices.forEach((d, i) => console.log(`  ${i + 1}. ${label(d)}`));
-  const device = devices[parseInt(await prompt('Select device number: ')) - 1];
-  if (!device) console.log('Invalid selection.');
-  return device;
+  devices.forEach((device, index) => console.log(`  ${index + 1}. ${label(device)}`));
+  const selected = devices[parseInt(await prompt('Select device number: '), 10) - 1];
+  if (!selected) console.log('Invalid selection.');
+  return selected;
 }
-
-/** Every stored value in a JSON credential `file` keyed by device ID, or {} if it does not exist. */
-function readStored(file: string): Record<string, string> {
-  return existsSync(file) ? JSON.parse(readFileSync(file, 'utf-8')) : {};
+/** Preserve each advertised identity once; scan includes deviceId in identifiers. */
+function deviceAliases(device: DiscoveredDeviceInfo): string[] {
+  return [...new Map([device.deviceId, ...(device.identifiers ?? [])].map(alias => [alias.toLowerCase(), alias])).values()];
 }
-
-/** Set one device's value in a JSON credential `file`, keeping every other device's entry. */
-function saveStored(file: string, id: string, value: string): void {
-  const stored = readStored(file);
-  stored[id] = value;
-  writeFileSync(file, JSON.stringify(stored, null, 2));
-}
+ 
 
 /** `atv scan`: list Apple TVs and AirPlay receivers found via mDNS within 5 s, with each `psi` output ID. */
 async function cmdScan() {
@@ -92,20 +122,18 @@ async function cmdScan() {
   });
 }
 
-/** `atv pair`: pick a device, run AirPlay pair-setup with the on-screen PIN, and save the credentials. */
+/** `atv pair`: persist credentials under the carrier actually selected by discovery. */
 async function cmdPair() {
   console.log('Scanning for Apple TVs...');
   const device = await selectDevice(await scan({ timeout: 5000 }), 'No Apple TVs found.', String);
   if (!device) return;
-
   const atv = new AppleTV(device);
   console.log(`Pairing with ${atv.name}...`);
-  const pairSetup = await atv.startPairing();
-
-  const pin = await prompt('Enter PIN shown on Apple TV: ');
-  const hapCreds = await pairSetup.finish(pin);
-  saveStored(CREDS_FILE, device.deviceId, new Credentials(hapCreds).serialize());
-  console.log(`Paired! Credentials saved to ${CREDS_FILE}`);
+  const hapCreds = await (await atv.startPairing()).finish(await prompt('Enter PIN shown on Apple TV: '));
+  const store = await storage();
+  store.setHap(device.deviceId, device.port ? 'airplay' : 'mrp', hapCreds, deviceAliases(device));
+  await store.save();
+  console.log(`Paired! Credentials saved to ${STORAGE_FILE}`);
 }
 
 /**
@@ -124,99 +152,112 @@ const COMMAND_NAMES = Object.values(Key);
 /** Fast membership check for COMMAND_NAMES. */
 const COMMAND_SET = new Set<string>(COMMAND_NAMES);
 
-/**
- * Load the stored value for the first device ID in `file` containing `deviceId`
- * (case-insensitive), or the most recently added device only if no selector is given.
- * @throws if the file is missing/empty or an explicit selector is blank or unmatched.
- */
-function loadStored(file: string, pairCommand: string, deviceId?: string): { id: string; value: string } {
+/** Select one credential record; ambiguous selectors never choose an arbitrary paired identity. */
+async function loadRecord(deviceId?: string, protocol?: ControlProtocol): Promise<DeviceRecord> {
   if (deviceId !== undefined && !deviceId.trim()) throw new Error('Device selector must be nonblank');
-  if (!existsSync(file)) {
-    throw new Error(`No credentials found. Run "atv ${pairCommand}" first.`);
-  }
-  const entries = Object.entries(readStored(file));
-  if (entries.length === 0) {
-    throw new Error('No paired devices.');
-  }
-
-  const entry = deviceId === undefined ? entries[entries.length - 1]
-    : entries.find(([k]) => k.toLowerCase().includes(deviceId.toLowerCase()));
-  if (!entry) throw new Error(`No paired device matches "${deviceId}"`);
-  return { id: entry[0], value: entry[1] };
+  const records = (await storage()).records().filter(record => protocol ? !!record.credentials?.[protocol] :
+    !!(record.credentials?.airplay || record.credentials?.mrp || record.credentials?.companion || record.credentials?.dmap));
+  if (!records.length) throw new Error('No usable typed credentials found. Pair this device with the required protocol first.');
+  if (deviceId === undefined) return records[records.length - 1];
+  const selector = deviceId.toLowerCase();
+  const exact = records.filter(record => record.key.toLowerCase() === selector || record.aliases.some(alias => alias.toLowerCase() === selector));
+  const matches = exact.length ? exact : records.filter(record => record.key.toLowerCase().includes(selector) || record.aliases.some(alias => alias.toLowerCase().includes(selector)));
+  if (matches.length > 1) throw new Error('Device selector is ambiguous; use an explicit record key');
+  if (!matches.length) throw new Error(`No paired device matches "${deviceId}"`);
+  return matches[0];
 }
 
-/** Load modern (AirPlay/Companion) credentials; see loadStored for selector rules. */
-function loadCredentials(deviceId?: string): { id: string; credentials: Credentials } {
-  const { id, value } = loadStored(CREDS_FILE, 'pair', deviceId);
-  return { id, credentials: Credentials.deserialize(value) };
-}
-
-/**
- * Scan (stopping early once found) and return the device whose ID equals or contains `id`, or whose name contains it (case-insensitive).
- * @throws if nothing matches; the message lists the devices that were found.
- */
-async function findDevice(id: string, need: 'mrp' | 'companion' | 'dmap'): Promise<DiscoveredDeviceInfo> {
+/** Match known record aliases exactly; a friendly-name substring is not a paired identity. */
+async function findDevice(record: DeviceRecord, accepts: (device: DiscoveredDeviceInfo) => boolean): Promise<DiscoveredDeviceInfo> {
   console.error('Finding device...');
-  const idLower = id.toLowerCase();
-  const matches = (d: DiscoveredDeviceInfo) =>
-    d.deviceId.toLowerCase() === idLower ||
-    d.identifiers?.some(alias => alias.toLowerCase() === idLower) ||
-    d.name.toLowerCase().includes(idLower) ||
-    d.deviceId.toLowerCase().includes(idLower);
-  // Stop as soon as the device has arrived with the port `need` requires: Companion, DMAP, or an
-  // AirPlay/usable MRP port.
-  const devices = await scan({ timeout: 5000, until: (d) => matches(d) && (need === 'companion' ? !!d.companionPort :
-    need === 'dmap' ? !!d.dmapPort : !!d.port || !!d.mrpPort && d.mrpEnabled !== false) });
-  const device = devices.find(matches);
+  const aliases = new Set([record.key, ...record.aliases].map(alias => alias.toLowerCase()));
+  const matches = (device: DiscoveredDeviceInfo) => aliases.has(device.deviceId.toLowerCase()) ||
+    !!device.identifiers?.some(alias => aliases.has(alias.toLowerCase()));
+  // The public session policy decides endpoint eligibility before any authentication or command.
+  const devices = await scan({ timeout: 5000, until: (device) => matches(device) && accepts(device) });
+  const matchesFound = devices.filter(device => matches(device) && accepts(device));
+  if (matchesFound.length > 1) throw new Error('Discovery identity is ambiguous; select a nonconflicting device record');
+  const device = matchesFound[0];
   if (!device) {
-    throw new Error(`Device not found on network (looking for "${id}"). Found: ${devices.map((d) => `${d.name} [${d.deviceId}]`).join(', ')}`);
+    throw new Error(`Device not found on network (looking for "${record.key}"). Found: ${devices.map((d) => `${d.name} [${d.deviceId}]`).join(', ')}`);
   }
   return device;
 }
 
-/** Run `connect` against the device's cached address, rescanning once if that fails. */
-function connectCached<T>(
-  id: string,
-  need: 'mrp' | 'companion' | 'dmap',
-  connect: (device: DiscoveredDeviceInfo) => Promise<T>,
-): Promise<T> {
-  return withCachedDevice(DEVICES_FILE, id, () => findDevice(id, need), connect);
-}
-
-/** Load credentials, locate the device (cache first, then mDNS), and open an AirPlay/MRP connection. */
-async function connectToDevice(deviceId?: string): Promise<AppleTV> {
-  const { id, credentials } = loadCredentials(deviceId);
-  return connectCached(id, 'mrp', async (device) => {
-    console.error(`Connecting to ${device.name} (${device.address}:${device.port})...`);
-    const atv = new AppleTV(device);
-    atv.on('error', (err: Error) => console.error(`AirPlay error: ${err.message}`));
-    try {
-      await atv.connect(credentials, { settleMs: settleMs() });
-    } catch (e) {
-      await atv.close();
-      throw e;
+/** Try nonsecret endpoint hints before discovery; retries stop before any operation is dispatched. */
+async function connectCached(record: DeviceRecord, accepts: (device: DiscoveredDeviceInfo) => boolean, connect: (device: DiscoveredDeviceInfo) => Promise<DeviceSession>): Promise<DeviceSession> {
+  const saved = record.hints;
+  const endpoint = Object.values(record.settings ?? {}).map(settings => settings.endpoint)
+    .find(value => value?.address || value?.companionAddress || value?.mrpAddress || value?.dmapAddress);
+  const address = saved?.address ?? endpoint?.address ?? endpoint?.companionAddress ?? endpoint?.mrpAddress ?? endpoint?.dmapAddress;
+  if (address) {
+    const cached: DiscoveredDeviceInfo = { ...saved, name: saved?.name ?? record.key,
+      deviceId: record.aliases[0] ?? record.key, identifiers: record.aliases,
+      address, port: saved?.port ?? 0, model: saved?.model ?? '' };
+    if (accepts(cached)) {
+      try { return await connect(cached); } catch { /* Only setup failed; no operation has been dispatched. */ }
     }
-    return atv;
-  });
-}
-
-/** Load Companion credentials and connect only Companion, using the existing address cache. */
-async function connectToCompanion(deviceId?: string): Promise<AppleTV> {
-  const { id, credentials } = loadCredentials(deviceId);
-  if (!credentials.companionCredentials) {
-    throw new Error('No companion credentials. Run "atv companion-pair" first.');
   }
-  return connectCached(id, 'companion', async (device) => {
-    if (!device.companionPort) throw new Error('Device has no companion-link port');
-    const atv = new AppleTV(device);
-    console.error(`Connecting companion to ${device.name} (${device.address}:${device.companionPort})...`);
-    try {
-      await atv.connectCompanion(credentials.companionCredentials!);
-      return atv;
-    } catch (error) {
-      await atv.close();
-      throw error;
+  const device = await findDevice(record, accepts);
+  const result = await connect(device);
+  try {
+    const store = await storage();
+    const hints: EndpointHints = { name: device.name, model: device.model, address: device.address, port: device.port,
+      companionAddress: device.companionAddress, companionPort: device.companionPort,
+      mrpAddress: device.mrpAddress, mrpPort: device.mrpPort, mrpEnabled: device.mrpEnabled,
+      dmapAddress: device.dmapAddress, dmapPort: device.dmapPort, raopAddress: device.raopAddress, raopPort: device.raopPort };
+    if (JSON.stringify(record.hints) !== JSON.stringify(hints)) { record.hints = hints; store.upsert(record); await store.save(); }
+    return result;
+  } catch (error) {
+    await result.close();
+    throw error;
+  }
+}
+
+/** Use the same typed configuration and per-operation routing policy as public library consumers. */
+async function connectSession(deviceId?: string, operations?: readonly SessionOperation[], protocol?: ControlProtocol): Promise<DeviceSession> {
+  const record = await loadRecord(deviceId, protocol);
+  const store = await storage();
+  const credentials: SessionCredentials = {
+    airplay: store.hap(record.key, 'airplay'), mrp: store.hap(record.key, 'mrp'),
+    companion: store.hap(record.key, 'companion'), dmap: record.credentials?.dmap?.guid,
+  };
+  const carriers: ControlProtocol[] = protocol ? [protocol] : ['airplay', 'mrp', 'companion', 'dmap'];
+  for (const operation of operations ?? []) {
+    if (!carriers.some(carrier => credentials[carrier] !== undefined && supportsSessionOperation(carrier, operation))) {
+      throw new Error(`No configured implementation for ${operation}`);
     }
+  }
+  const options = { credentials, operations,
+    settleMs: process.env.ATV_SETTLE_MS === undefined ? undefined : settleMs(),
+    protocolOptions: {
+      airplay: { settleMs: record.settings?.airplay?.settleMs ?? 500 },
+      mrp: { settleMs: record.settings?.mrp?.settleMs ?? 500 },
+    },
+    ...(protocol ? { transports: { [protocol]: {} } } : {}) };
+  const configuredDevice = (device: DiscoveredDeviceInfo): DiscoveredDeviceInfo => {
+    const airplay = record.settings?.airplay?.endpoint;
+    const mrp = record.settings?.mrp?.endpoint;
+    const companion = record.settings?.companion?.endpoint;
+    const dmap = record.settings?.dmap?.endpoint;
+    return { ...device,
+      address: airplay?.address ?? device.address, port: airplay?.port ?? device.port,
+      mrpAddress: mrp?.mrpAddress ?? mrp?.address ?? device.mrpAddress ?? device.address,
+      mrpPort: mrp?.mrpPort ?? mrp?.port ?? device.mrpPort,
+      companionAddress: companion?.companionAddress ?? companion?.address ?? device.companionAddress ?? device.address,
+      companionPort: companion?.companionPort ?? companion?.port ?? device.companionPort,
+      dmapAddress: dmap?.dmapAddress ?? dmap?.address ?? device.dmapAddress ?? device.address,
+      dmapPort: dmap?.dmapPort ?? dmap?.port ?? device.dmapPort };
+  };
+  const accepts = (device: DiscoveredDeviceInfo) => {
+    try { new DeviceSession(configuredDevice(device), options); return true; } catch { return false; }
+  };
+  return connectCached(record, accepts, async device => {
+    console.error(`Connecting to ${device.name}...`);
+    const session = new DeviceSession(configuredDevice(device), options);
+    session.on('transportError', ({ protocol: source, error }: { protocol: ControlProtocol; error: Error }) => console.error(`${source} error: ${error.message}`));
+    await session.connect();
+    return session;
   });
 }
 
@@ -226,6 +267,7 @@ const COMPANION_BUTTONS = {
   guide: 'guide', page_up: 'pageUp', page_down: 'pageDown',
 } as const;
 
+
 /**
  * Send a validated key or Companion button, optionally with an action mode, then close even if
  * sending fails. Only HID keys and Companion buttons accept an action; media keys, wake/suspend,
@@ -234,12 +276,13 @@ const COMPANION_BUTTONS = {
 async function cmdCommand(command: string, action?: InputAction, deviceId?: string) {
   const button = Object.hasOwn(COMPANION_BUTTONS, command)
     ? COMPANION_BUTTONS[command as keyof typeof COMPANION_BUTTONS] : undefined;
+  const selectedOperation = button ?? KEY_OPERATIONS[command as Key];
   if (!button && !COMMAND_SET.has(command)) throw new Error(`Unknown command: ${command}. Run "atv --help".`);
   if (action && !button && !HID_KEY_MAP[command]) throw new Error(`Action modes are not supported for ${command}`);
-  const atv = await (button ? connectToCompanion(deviceId) : connectToDevice(deviceId));
+  const atv = await connectSession(deviceId, [selectedOperation]);
   try {
     // An undefined action takes each method's 'singleTap' default.
-    if (button) await atv[button](action);
+    if (button) await atv.execute(button, action);
     else await atv.sendKeyCommand(command as Key, action);
     console.log(`Sent: ${command}`);
     await delay(postSendMs());
@@ -250,7 +293,7 @@ async function cmdCommand(command: string, action?: InputAction, deviceId?: stri
 
 /** `atv remote [device]`: interactive prompt that sends each typed key name. */
 async function cmdRemote(deviceId?: string) {
-  const atv = await connectToDevice(deviceId);
+  const atv = await connectSession(deviceId);
 
   console.log(`Connected. Type commands to send (${COMMAND_NAMES.join(', ')})`);
   console.log('Type "quit" or "exit" to disconnect.\n');
@@ -292,10 +335,10 @@ async function cmdRemote(deviceId?: string) {
 
 /** `atv state [device]`: print title, artist, album, play state, progress, and app for the current item. */
 async function cmdState(deviceId?: string) {
-  const atv = await connectToDevice(deviceId);
+  const atv = await connectSession(deviceId, ['getNowPlaying']);
   try {
     console.error('Requesting state...');
-    const info = await atv.getNowPlaying();
+    const info = await atv.execute('getNowPlaying');
     const stopped = info.playbackState === PlaybackState.Stopped;
     const idle = !info.hasPlayback && (stopped || info.playbackState === PlaybackState.Unknown);
     console.log(idle ? `Nothing playing. [${stopped ? 'Stopped' : 'Absent'}]` : info.toString());
@@ -306,10 +349,10 @@ async function cmdState(deviceId?: string) {
 
 /** `atv queue [device]`: print up to 20 items from the playback queue. */
 async function cmdQueue(deviceId?: string) {
-  const atv = await connectToDevice(deviceId);
+  const atv = await connectSession(deviceId, ['requestPlaybackQueue']);
   try {
     console.error('Requesting playback queue...');
-    const response = await atv.requestPlaybackQueue({
+    const response = await atv.execute('requestPlaybackQueue', {
       location: 0,
       length: 20,
       includeMetadata: true,
@@ -331,10 +374,10 @@ async function cmdQueue(deviceId?: string) {
 
 /** `atv artwork [device] [file]`: save 600x600 now-playing artwork (default artwork.jpg). */
 async function cmdArtwork(deviceId?: string, outputFile?: string) {
-  const atv = await connectToDevice(deviceId);
+  const atv = await connectSession(deviceId, ['requestArtwork']);
   try {
     console.error('Requesting artwork...');
-    const artwork = await atv.requestArtwork(600, 600);
+    const artwork = await atv.execute('requestArtwork', 600, 600);
     if (artwork) {
       const filename = outputFile ?? 'artwork.jpg';
       writeFileSync(filename, artwork);
@@ -349,7 +392,7 @@ async function cmdArtwork(deviceId?: string, outputFile?: string) {
 
 /** `atv messages [device]`: print every incoming MRP message until Ctrl+C. */
 async function cmdMessages(deviceId?: string) {
-  const atv = await connectToDevice(deviceId);
+  const atv = await connectSession(deviceId, ['getState']);
   console.log('Listening for messages (Ctrl+C to stop)...\n');
 
   atv.on('message', (msg: Message) => {
@@ -363,38 +406,24 @@ async function cmdMessages(deviceId?: string) {
   });
 }
 
-/** `atv companion-pair`: Companion pair-setup; merges the result into the device's existing AirPlay credentials, or stores it standalone. */
+/** `atv companion-pair`: preserve existing AirPlay pairing while adding proven Companion credentials. */
 async function cmdCompanionPair() {
   console.log('Scanning for Apple TVs...');
   const device = await selectDevice((await scan({ timeout: 5000 })).filter((d) => d.companionPort),
     'No Apple TVs with companion-link found.', (d) => `${d} [companion:${d.companionPort}]`);
   if (!device) return;
-
   const atv = new AppleTV(device);
   console.log(`Companion pairing with ${atv.name} on port ${device.companionPort}...`);
-  const pairSetup = await atv.startCompanionPairing();
-
-  const pin = await prompt('Enter PIN shown on Apple TV: ');
-  const companionCreds = await pairSetup.finish(pin);
-
-  // Add companion data to the device's existing AirPlay credentials.
-  const existingJson = readStored(CREDS_FILE)[device.deviceId];
-  let creds: Credentials;
-  if (existingJson) {
-    creds = Credentials.deserialize(existingJson);
-    creds.companionCredentials = companionCreds;
-  } else {
-    console.log('Warning: No AirPlay credentials found. Pair with AirPlay first (atv pair).');
-    console.log('Saving companion credentials standalone.');
-    creds = new Credentials(companionCreds, companionCreds);
-  }
-  saveStored(CREDS_FILE, device.deviceId, creds.serialize());
-  console.log(`Companion paired! Credentials saved to ${CREDS_FILE}`);
+  const companionCreds = await (await atv.startCompanionPairing()).finish(await prompt('Enter PIN shown on Apple TV: '));
+  const store = await storage();
+  store.setHap(device.deviceId, 'companion', companionCreds, deviceAliases(device));
+  await store.save();
+  console.log(`Companion paired! Credentials saved to ${STORAGE_FILE}`);
 }
 
 /** `atv companion-test [device]`: connect over Companion with stored credentials and print events until Ctrl+C. */
 async function cmdCompanionTest(deviceId?: string) {
-  const atv = await connectToCompanion(deviceId);
+  const atv = await connectSession(deviceId, ['sendCompanionRequest'], 'companion');
   console.log('Companion connected! Listening for events (Ctrl+C to stop)...\n');
 
   atv.on('companionEvent', (event: CompanionEvent) => {
@@ -405,12 +434,12 @@ async function cmdCompanionTest(deviceId?: string) {
     console.log(`  data: ${JSON.stringify(readable)}`);
   });
 
-  atv.on('companionError', (err: Error) => {
-    console.error(`Companion error: ${err.message}`);
+  atv.on('transportError', ({ error }: { error: Error }) => {
+    console.error(`Companion error: ${error.message}`);
   });
 
-  atv.on('companionClose', () => {
-    console.log('Companion connection closed.');
+  atv.on('connection', ({ state }: { state: string }) => {
+    if (state === 'lost') console.log('Companion connection closed.');
   });
 
   process.on('SIGINT', async () => {
@@ -422,7 +451,7 @@ async function cmdCompanionTest(deviceId?: string) {
 
 /** `atv keyboard [device]`: print keyboard focus and text-input events (plus their raw messages) until Ctrl+C. */
 async function cmdKeyboard(deviceId?: string) {
-  const atv = await connectToDevice(deviceId);
+  const atv = await connectSession(deviceId, ['getState']);
   console.log('Listening for keyboard/textInput events (Ctrl+C to stop)...\n');
 
   atv.on('keyboard', (info: KeyboardInfo) => {
@@ -475,8 +504,10 @@ async function cmdDmapPair(localAddress: string) {
     'No DMAP devices found.', (d) => `${d.name} (${d.dmapAddress ?? d.address}:${d.dmapPort}) [${d.deviceId}]`);
   if (!device) return;
 
+  const store = await storage();
+  const controllerName = store.get(device.deviceId)?.settings?.dmap?.controllerName ?? 'atv CLI';
   const pin = String(randomInt(10000)).padStart(4, '0');
-  const pairing = new DmapPairing({ name: 'atv CLI', address: localAddress, pin });
+  const pairing = new DmapPairing({ name: controllerName, address: localAddress, pin });
   // Ctrl+C must still close the callback server and unpublish the _touch-remote advertisement.
   const cancellation = new AbortController();
   const cancel = () => cancellation.abort(new Error('DMAP pairing cancelled'));
@@ -484,7 +515,7 @@ async function cmdDmapPair(localAddress: string) {
   let guid: string;
   try {
     await pairing.start();
-    console.log(`On ${device.name}, open Settings > General > Remotes, choose "atv CLI" and enter PIN ${pin}.`);
+    console.log(`On ${device.name}, open Settings > General > Remotes, choose "${controllerName}" and enter PIN ${pin}.`);
     // DmapPairing has no completion event; poll until it pairs, locks out after five wrong PINs, or expires.
     for (;;) {
       try { guid = pairing.finish(); break; } catch (error) {
@@ -497,28 +528,22 @@ async function cmdDmapPair(localAddress: string) {
     await pairing.close();
   }
 
-  saveStored(DMAP_FILE, device.deviceId, guid);
-  console.log(`Paired! Pairing GUID saved to ${DMAP_FILE}`);
+  const record: DeviceRecord = store.get(device.deviceId) ?? { key: device.deviceId, aliases: deviceAliases(device) };
+  record.credentials = { ...record.credentials, dmap: { guid } };
+  store.upsert(record);
+  await store.save();
+  console.log(`Paired! Pairing GUID saved to ${STORAGE_FILE}`);
 }
 
-/** `atv dmap <command|state> [device]`: log in with the stored GUID, run one DMAP request, then close. */
+/** `atv dmap <command|state> [device]`: log in with a stored GUID, then close. */
 async function cmdDmap(command: keyof typeof DMAP_COMMANDS | 'state', deviceId?: string) {
-  const { id, value: guid } = loadStored(DMAP_FILE, 'dmap-pair', deviceId);
-  const client = await connectCached(id, 'dmap', async (device) => {
-    console.error(`Connecting DMAP to ${device.name} (${device.dmapAddress ?? device.address}:${device.dmapPort})...`);
-    const dmap = new DmapClient(device);
-    await dmap.connect(guid); // closes itself if login fails
-    return dmap;
-  });
+  const operation = command === 'state' ? 'getNowPlaying' : DMAP_COMMANDS[command];
+  const client = await connectSession(deviceId, [operation], 'dmap');
   try {
-    // Every DMAP request is an HTTP round trip, so no post-send wait is needed.
-    if (command === 'state') console.log((await client.getState()).toString());
-    else {
-      await client[DMAP_COMMANDS[command]]();
-      console.log(`Sent: ${command}`);
-    }
+    if (command === 'state') console.log((await client.execute('getNowPlaying')).toString());
+    else { await client.execute(DMAP_COMMANDS[command]); console.log(`Sent: ${command}`); }
   } finally {
-    client.close();
+    await client.close();
   }
 }
 
@@ -577,7 +602,7 @@ async function cmdRaopStream(address: string, input: string) {
 function help(): void {
   console.log(`Usage:
   atv scan | pair | companion-pair
-  atv command <key> [action] [device]  Send an MRP key or Companion button (alias: cmd);
+  atv command <key> [action] [device]  Send a routed key or Companion button (alias: cmd);
                                        action: singleTap (default), doubleTap, hold
                                        (case-insensitive)
   atv stop [device]
@@ -611,7 +636,7 @@ function help(): void {
   atv artwork [device] [output.jpg]
   atv help | --help | -h
 
-MRP keys: ${COMMAND_NAMES.join(', ')}
+Remote keys (provider-dependent): ${COMMAND_NAMES.join(', ')}
 Companion buttons: ${Object.keys(COMPANION_BUTTONS).join(', ')}`);
 }
 
@@ -635,13 +660,15 @@ function numberArgument(value: string, min: number, max = Infinity, positive = f
 
 /** Validate and dispatch CLI arguments. Errors propagate to the executable's exit handler. */
 export async function main(argv: string[]): Promise<void> {
+  // A CLI invocation owns one loaded store; imported callers may run another command later.
+  cliStore = undefined;
   const [cmd, ...args] = argv;
   if (!cmd || ['help', '--help', '-h'].includes(cmd)) { help(); return; }
-  let companion = false;
+  let selectedOperation: SessionOperation;
   // Queries get a reply; every other operation ends with an unacknowledged send (HID key, `_tiC`, ...).
   let acknowledged = false;
   let device: string | undefined;
-  let operation: (atv: AppleTV) => Promise<void | string | App[] | UserAccount[]>;
+  let operation: (atv: DeviceSession) => Promise<void | string | App[] | UserAccount[]>;
   switch (cmd) {
     case 'command': case 'cmd': {
       const { action, rest } = splitAction(args, 1);
@@ -651,8 +678,8 @@ export async function main(argv: string[]): Promise<void> {
     case 'click': {
       const { action, rest } = splitAction(args, 0);
       argumentsFor(rest, 0, 'click [action] [device]');
-      device = rest[0]; companion = true;
-      operation = (atv) => atv.click(action);
+      device = rest[0]; selectedOperation = 'click';
+      operation = (atv) => atv.execute('click', action);
       break;
     }
     case 'swipe': {
@@ -662,8 +689,8 @@ export async function main(argv: string[]): Promise<void> {
         if (!Number.isInteger(number)) throw new Error(`Invalid numeric argument: ${value}`);
         return number;
       });
-      device = args[5]; companion = true;
-      operation = (atv) => atv.swipe(x1, y1, x2, y2, ms);
+      device = args[5]; selectedOperation = 'swipe';
+      operation = (atv) => atv.execute('swipe', x1, y1, x2, y2, ms);
       break;
     }
     case 'output': {
@@ -671,10 +698,10 @@ export async function main(argv: string[]): Promise<void> {
       // Routing resolves only once the TV reports the new group, so no post-send wait is needed.
       acknowledged = true;
       // Rows reuse the printer's `id\tname` format.
-      const rows = (atv: AppleTV) => atv.outputDevices.map((d) => ({ id: d.identifier, name: d.name }));
+      const rows = (atv: DeviceSession) => atv.outputDevices.map((d) => ({ id: d.identifier, name: d.name }));
       if (action === 'list') {
         argumentsFor(values, 0, 'output list [device]');
-        device = values[0];
+        device = values[0]; selectedOperation = 'requestPlaybackQueue';
         operation = async (atv) => rows(atv);
       } else if (Object.hasOwn(OUTPUT_METHODS, action ?? '')) {
         const usage = `output ${action} <id[,id...]> [device]`;
@@ -685,7 +712,8 @@ export async function main(argv: string[]): Promise<void> {
         }
         device = values[1];
         const method = OUTPUT_METHODS[action as keyof typeof OUTPUT_METHODS];
-        operation = async (atv) => { await atv[method](ids); return rows(atv); };
+        selectedOperation = method;
+        operation = async (atv) => { await atv.execute(method, ids); return rows(atv); };
       } else throw new Error(`Invalid output operation: ${action ?? '(missing)'}`);
       break;
     }
@@ -702,15 +730,17 @@ export async function main(argv: string[]): Promise<void> {
       return cmdRaopStream(args[0], args[1]);
     case 'stop': case 'power':
       argumentsFor(args, 0, `${cmd} [device]`);
-      device = args[0]; companion = acknowledged = cmd === 'power';
-      operation = cmd === 'stop' ? (atv) => atv.stop() : (atv) => atv.fetchPowerState();
+      device = args[0]; acknowledged = cmd === 'power';
+      selectedOperation = cmd === 'stop' ? 'stop' : 'fetchPowerState';
+      operation = cmd === 'stop' ? (atv) => atv.execute('stop') : (atv) => atv.execute('fetchPowerState');
       break;
     case 'seek': case 'skip-forward': case 'skip-backward': case 'volume': {
       argumentsFor(args, 1, `${cmd} <number> [device]`);
       const value = numberArgument(args[0], 0, cmd === 'volume' ? 100 : Infinity, cmd.startsWith('skip-'));
       device = args[1];
-      operation = (atv) => cmd === 'seek' ? atv.setPosition(value) : cmd === 'volume' ? atv.setVolume(value) :
-        cmd === 'skip-forward' ? atv.skipForward(value) : atv.skipBackward(value);
+      selectedOperation = cmd === 'seek' ? 'setPosition' : cmd === 'volume' ? 'setVolume' :
+        cmd === 'skip-forward' ? 'skipForward' : 'skipBackward';
+      operation = (atv) => atv.execute(selectedOperation as 'setPosition' | 'setVolume' | 'skipForward' | 'skipBackward', value);
       break;
     }
     case 'shuffle': case 'repeat': {
@@ -719,38 +749,40 @@ export async function main(argv: string[]): Promise<void> {
       const repeat: Record<string, RepeatState> = { off: RepeatState.Off, track: RepeatState.Track, all: RepeatState.All };
       if (!Object.hasOwn(cmd === 'shuffle' ? shuffle : repeat, args[0])) throw new Error(`Invalid ${cmd} mode: ${args[0]}`);
       device = args[1];
-      operation = (atv) => cmd === 'shuffle' ? atv.setShuffle(shuffle[args[0]]) : atv.setRepeat(repeat[args[0]]);
+      selectedOperation = cmd === 'shuffle' ? 'setShuffle' : 'setRepeat';
+      operation = (atv) => cmd === 'shuffle' ? atv.execute('setShuffle', shuffle[args[0]]) : atv.execute('setRepeat', repeat[args[0]]);
       break;
     }
     case 'text': {
       const [action, ...values] = args;
-      companion = true; // modern tvOS ignores the MRP TextInputMessage; text uses Companion RTI
       if (action === 'clear') {
         argumentsFor(values, 0, 'text clear [device]');
-        device = values[0]; operation = (atv) => atv.clearText();
+        device = values[0]; selectedOperation = 'clearText'; operation = (atv) => atv.execute('clearText');
       } else if (action === 'focus') {
         argumentsFor(values, 0, 'text focus [device]');
-        device = values[0]; acknowledged = true;
-        operation = (atv) => atv.fetchTextFocusState();
+        device = values[0]; acknowledged = true; selectedOperation = 'fetchTextFocusState';
+        operation = (atv) => atv.execute('fetchTextFocusState');
       } else if (action === 'set' || action === 'append') {
         // Empty text is valid; unlike identifiers it must not be trimmed or rejected.
         if (values.length < 1 || values.length > 2 || (values[1] !== undefined && !values[1].trim())) throw new Error(`Usage: atv text ${action} <text> [device]`);
         device = values[1];
-        operation = (atv) => action === 'set' ? atv.setText(values[0]) : atv.insertText(values[0]);
+        selectedOperation = action === 'set' ? 'setText' : 'insertText';
+        operation = (atv) => action === 'set' ? atv.execute('setText', values[0]) : atv.execute('insertText', values[0]);
       } else throw new Error('Usage: atv text <set|append|clear|focus> ...');
       break;
     }
     case 'app': case 'account': {
       const [action, ...values] = args;
-      companion = true;
       if (action === 'list') {
         argumentsFor(values, 0, `${cmd} list [device]`);
         device = values[0]; acknowledged = true;
-        operation = (atv) => cmd === 'app' ? atv.appList() : atv.accountList();
+        selectedOperation = cmd === 'app' ? 'appList' : 'accountList';
+        operation = (atv) => cmd === 'app' ? atv.execute('appList') : atv.execute('accountList');
       } else if (action === (cmd === 'app' ? 'launch' : 'switch')) {
         argumentsFor(values, 1, `${cmd} ${action} <id> [device]`);
         device = values[1];
-        operation = (atv) => cmd === 'app' ? atv.launchApp(values[0]) : atv.switchAccount(values[0]);
+        selectedOperation = cmd === 'app' ? 'launchApp' : 'switchAccount';
+        operation = (atv) => cmd === 'app' ? atv.execute('launchApp', values[0]) : atv.execute('switchAccount', values[0]);
       } else throw new Error(`Invalid ${cmd} operation: ${action ?? '(missing)'}`);
       break;
     }
@@ -773,7 +805,7 @@ export async function main(argv: string[]): Promise<void> {
       return cmdArtwork(args[0], args[1]);
     default: throw new Error(`Unknown command: ${cmd}. Run "atv --help".`);
   }
-  const atv = await (companion ? connectToCompanion(device) : connectToDevice(device));
+  const atv = await connectSession(device, [selectedOperation]);
   try {
     const result = await operation(atv);
     if (Array.isArray(result)) {

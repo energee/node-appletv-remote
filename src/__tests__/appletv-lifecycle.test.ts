@@ -6,7 +6,10 @@ import { CompanionConnection } from '../companion/connection.js';
 import { Credentials } from '../credentials.js';
 const credentials = new Credentials({ clientId: 'test', serverId: 'server', clientLTSK: Buffer.alloc(32), clientLTPK: Buffer.alloc(32), serverLTPK: Buffer.alloc(32) });
 // connectCompanion() sends _systemInfo after pair-verify; tests that mock connect() also need it to succeed.
-beforeEach(() => { vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockResolvedValue(new Map([['_c', new Map()]])); });
+beforeEach(() => {
+  vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockResolvedValue(new Map([['_c', new Map()]]));
+  vi.spyOn(CompanionConnection.prototype, 'sendMessage').mockImplementation(() => {});
+});
 afterEach(() => vi.restoreAllMocks());
 it('failed AirPlay setup invalidates the high-level connection', async () => {
   const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test' });
