@@ -324,8 +324,9 @@ describe('AirPlay URL playback', () => {
       expect(await playback.getStatus()).toEqual({ state: 'idle' });
       const full = await fetch(url);
       expect([full.status, await full.text(), full.headers.get('content-length'), full.headers.get('accept-ranges'), full.headers.get('content-type')]).toEqual([200, 'abcdef', '6', 'bytes', 'application/octet-stream']);
-      const head = await fetch(url, { method: 'HEAD' });
-      expect([head.status, await head.text(), head.headers.get('content-length')]).toEqual([200, '', '6']);
+      expect(await Promise.all([fetch(url).then(response => response.text()), fetch(url).then(response => response.text())])).toEqual(['abcdef', 'abcdef']);
+      const head = await fetch(url, { method: 'HEAD', headers: { Range: 'bytes=1-3' } });
+      expect([head.status, await head.text(), head.headers.get('content-length'), head.headers.get('content-range')]).toEqual([200, '', '6', null]);
       for (const [range, status, body, contentRange] of [
         ['bytes=1-3', 206, 'bcd', 'bytes 1-3/6'],
         ['bytes=4-', 206, 'ef', 'bytes 4-5/6'],
@@ -369,8 +370,8 @@ describe('AirPlay URL playback', () => {
       await playback.playFile(file, 0, { address: '127.0.0.1' });
       const url = String((fake.commands[0].item as Record<string, unknown>)['Content-Location']);
       await writeFile(file, 'changed');
-      await expect(fetch(url)).rejects.toThrow();
-      await expect(playback.getStatus()).rejects.toThrow(/changed/);
+      expect([ (await fetch(url)).status, await (await fetch(url)).text() ]).toEqual([200, 'abcdef']);
+      expect(await playback.getStatus()).toMatchObject({ state: 'playing' });
     } finally {
       playback.close(); await fake.close();
     }

@@ -1,10 +1,12 @@
 /** Authenticated AirPlay 2 URL playback over the tvOS 18+ remote-control queue. */
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram';
 import { randomUUID, randomBytes } from 'node:crypto';
-import { createReadStream, promises as fs, type ReadStream, type Stats } from 'node:fs';
-import type { FileHandle } from 'node:fs/promises';
+import { constants, createReadStream, createWriteStream, promises as fs, type ReadStream, type Stats } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { lookup } from 'node:dns/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { isIP, isIPv6, type Socket } from 'node:net';
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
@@ -75,27 +77,31 @@ class LocalFileServer {
   private closed = false;
 
   private constructor(
-    private readonly file: FileHandle,
-    private readonly path: string,
+    private readonly snapshot: string,
+    private readonly directory: string,
     private readonly stat: Stats,
     private readonly token: string,
     private readonly onError: (error: Error) => void,
   ) {
     this.server = createServer((request, response) => { void this.respond(request, response); });
     this.server.on('error', error => {
-      if (this.listening && !this.closed) {
-        this.close();
-        this.onError(error);
-      }
+      if (this.listening && !this.closed) { this.close(); this.onError(error); }
     });
   }
 
   static async open(path: string, address: string, onError: (error: Error) => void): Promise<LocalFileServer> {
-    const file = await fs.open(path, 'r');
+    const file = await fs.open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    let directory: string | undefined;
     try {
-      const stat = await file.stat();
-      if (!stat.isFile()) throw new Error('Local media path must be a regular file');
-      const server = new LocalFileServer(file, path, stat, randomBytes(32).toString('base64url'), onError);
+      const before = await file.stat();
+      if (!before.isFile()) throw new Error('Local media path must be a regular file');
+      directory = await fs.mkdtemp(join(tmpdir(), 'node-atv-media-'));
+      const snapshot = join(directory, 'media');
+      await pipeline(file.createReadStream({ autoClose: false }), createWriteStream(snapshot, { mode: 0o600 }));
+      const after = await file.stat();
+      if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) throw new Error('Local media file changed while opening');
+      const stat = await fs.stat(snapshot);
+      const server = new LocalFileServer(snapshot, directory, stat, randomBytes(32).toString('base64url'), onError);
       await new Promise<void>((resolve, reject) => {
         server.server.once('error', reject);
         server.server.listen({ host: address, port: 0 }, () => {
@@ -104,9 +110,11 @@ class LocalFileServer {
           resolve();
         });
       });
+      await file.close();
       return server;
     } catch (error) {
-      await file.close();
+      await file.close().catch(() => {});
+      if (directory) await fs.rm(directory, { recursive: true, force: true });
       throw error;
     }
   }
@@ -122,11 +130,7 @@ class LocalFileServer {
     this.closed = true;
     for (const stream of this.streams) stream.destroy();
     this.streams.clear();
-    this.server.close(() => {
-      void this.file.close().catch(error => {
-        if ((error as NodeJS.ErrnoException).code !== 'EBADF') throw error;
-      });
-    });
+    this.server.close(() => { void fs.rm(this.directory, { recursive: true, force: true }); });
     this.server.closeAllConnections();
   }
 
@@ -134,39 +138,25 @@ class LocalFileServer {
     if (this.closed) { response.destroy(); return; }
     if (request.url !== `/${this.token}`) { response.writeHead(404).end(); return; }
     if (request.method !== 'GET' && request.method !== 'HEAD') { response.writeHead(405, { Allow: 'GET, HEAD' }).end(); return; }
-    let current: Stats;
-    try {
-      current = await this.file.stat();
-      if (!current.isFile() || current.dev !== this.stat.dev || current.ino !== this.stat.ino || current.size !== this.stat.size || current.mtimeMs !== this.stat.mtimeMs || current.ctimeMs !== this.stat.ctimeMs) throw new Error('Local media file changed while serving');
-    } catch (error) {
-      response.destroy(error instanceof Error ? error : new Error(String(error)));
-      this.close();
-      this.onError(error instanceof Error ? error : new Error(String(error)));
-      return;
-    }
-    let range: ByteRange | undefined;
-    try {
-      range = parseRange(request.headers.range, current.size);
-    } catch {
-      response.writeHead(416, { 'Content-Range': `bytes */${current.size}` }).end();
-      return;
-    }
-    const length = range ? range.end - range.start + 1 : current.size;
+    const range = request.method === 'GET' ? (() => {
+      try { return parseRange(request.headers.range, this.stat.size); }
+      catch { return null; }
+    })() : undefined;
+    if (range === null) { response.writeHead(416, { 'Content-Range': `bytes */${this.stat.size}` }).end(); return; }
+    const length = range ? range.end - range.start + 1 : this.stat.size;
     response.writeHead(range ? 206 : 200, {
       'Accept-Ranges': 'bytes',
       'Content-Type': 'application/octet-stream',
       'Content-Length': String(length),
-      ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${current.size}` } : {}),
+      ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${this.stat.size}` } : {}),
     });
     if (request.method === 'HEAD') { response.end(); return; }
-    const stream = createReadStream(this.path, { fd: this.file.fd, autoClose: false, start: range?.start, end: range?.end });
+    const stream = createReadStream(this.snapshot, { start: range?.start ?? 0, end: range?.end });
     this.streams.add(stream);
-    stream.once('close', () => this.streams.delete(stream));
-    stream.once('error', error => {
-      response.destroy(error);
-      this.close();
-      this.onError(error);
-    });
+    const stop = () => stream.destroy();
+    request.once('aborted', stop); response.once('close', stop);
+    stream.once('close', () => { this.streams.delete(stream); request.removeListener('aborted', stop); response.removeListener('close', stop); });
+    stream.once('error', error => { response.destroy(error); this.close(); this.onError(error); });
     stream.pipe(response);
   }
 }
@@ -219,15 +209,17 @@ export class AirPlayPlaybackSession {
    */
   async playFile(path: string, position = 0, options: AirPlayFilePlaybackOptions = {}): Promise<void> {
     if (this.started || this.closed) throw new Error('Playback session already started or closed');
-    const address = options.address ?? await routedAddress(this.host, this.port);
-    if (!isIP(address) || address === '0.0.0.0' || address === '::') throw new Error('Local media address must be a concrete IP address');
-    const localFile = await LocalFileServer.open(path, address, error => this.fail(error));
-    this.localFile = localFile;
+    this.started = true;
     try {
+      const address = options.address ?? await routedAddress(this.host, this.port);
+      if (address.includes('%') || !isIP(address) || address === '0.0.0.0' || (isIP(address) === 6 && /^[.:0]+$/.test(address))) throw new Error('Local media address must be a concrete unscoped IP address');
+      const localFile = await LocalFileServer.open(path, address, error => this.fail(error));
+      this.localFile = localFile;
+      this.started = false;
       await this.playUrl(localFile.url, position);
     } catch (error) {
-      this.localFile = undefined;
-      localFile.close();
+      if (!this.closed) this.started = false;
+      this.localFile?.close(); this.localFile = undefined;
       throw error;
     }
   }
