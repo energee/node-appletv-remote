@@ -15,8 +15,9 @@ import { Credentials } from '../credentials.js';
 import { DmapClient } from '../dmap/client.js';
 import { DmapPairing } from '../dmap/pairing.js';
 import { RaopStream } from '../raop/stream.js';
+import { openRaopInput, type RaopInput } from './raop-input.js';
 import { Bonjour, type Service } from 'bonjour-service';
-import { readFileSync, writeFileSync, existsSync, realpathSync, createReadStream } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, realpathSync } from 'node:fs';
 import { isIPv4 } from 'node:net';
 import { randomInt } from 'node:crypto';
 import { join } from 'node:path';
@@ -545,22 +546,27 @@ function findRaopService(address: string): Promise<{ port: number; txt: Record<s
 }
 
 /**
- * `atv raop-stream <ipv4> <file.pcm>` (experimental): stream raw PCM16LE stereo 44.1 kHz to a legacy
- * RAOP receiver via RaopStream. Ctrl+C cancels and tears the session down.
+ * `atv raop-stream <ipv4> <file-or-url>` (experimental): adapt finite audio to PCM16LE stereo
+ * 44.1 kHz before streaming it to a legacy RAOP receiver. Ctrl+C tears both source and RAOP down.
  */
-async function cmdRaopStream(address: string, file: string) {
-  if (!existsSync(file)) throw new Error(`No such file: ${file}`);
-  console.error(`Resolving _raop._tcp at ${address}...`);
-  const { port, txt } = await findRaopService(address);
-  const sender = new RaopStream(address, port, txt);
+async function cmdRaopStream(address: string, input: string) {
+  const remote = /^https?:\/\//i.test(input) || /^pcm:https?:\/\//i.test(input);
+  if (!remote && !existsSync(input)) throw new Error(`No such file: ${input}`);
   const cancellation = new AbortController();
   const cancel = () => cancellation.abort(new Error('RAOP aborted'));
   process.once('SIGINT', cancel);
+  let source: RaopInput | undefined;
   try {
-    console.error(`Streaming ${file} to ${address}:${port} (Ctrl+C to stop)...`);
-    await sender.stream(createReadStream(file, { highWaterMark: 65536 }), { signal: cancellation.signal });
+    // Start ffmpeg before discovery so a missing dependency cannot establish a playback session.
+    source = await openRaopInput(input, cancellation.signal);
+    console.error(`Resolving _raop._tcp at ${address}...`);
+    const { port, txt } = await findRaopService(address);
+    const sender = new RaopStream(address, port, txt);
+    console.error(`Streaming ${input} to ${address}:${port} (Ctrl+C to stop)...`);
+    await sender.stream(source.source, { signal: cancellation.signal });
     console.log('Stream complete.');
   } finally {
+    source?.close();
     process.removeListener('SIGINT', cancel);
   }
 }
@@ -596,8 +602,9 @@ function help(): void {
                                        its deviceid (MAC) or pi will time out
   atv dmap-pair <local-ipv4>           Pair a legacy (DMAP) Apple TV; address is THIS computer's
   atv dmap <command|state> [device]    Legacy DMAP control: ${Object.keys(DMAP_COMMANDS).join(', ')}
-  atv raop-stream <ipv4> <file.pcm>    Experimental: stream raw PCM16LE stereo 44.1 kHz to a legacy
-                                       RAOP receiver (no WAV header, no PIN/HAP receivers)
+  atv raop-stream <ipv4> <file-or-url>
+                                       Experimental: PCM16LE .pcm; compatible .wav; otherwise ffmpeg
+                                       decodes/resamples local files and HTTP(S) URLs (pcm:https://... is raw PCM)
   atv remote | state | queue | messages | keyboard | companion-test [device]
   atv artwork [device] [output.jpg]
   atv help | --help | -h
@@ -689,7 +696,7 @@ export async function main(argv: string[]): Promise<void> {
       if (args.length !== 1 || !isIPv4(args[0])) throw new Error('Usage: atv dmap-pair <local-ipv4>');
       return cmdDmapPair(args[0]);
     case 'raop-stream':
-      if (args.length !== 2 || !isIPv4(args[0]) || !args[1].trim()) throw new Error('Usage: atv raop-stream <ipv4> <file.pcm>');
+      if (args.length !== 2 || !isIPv4(args[0]) || !args[1].trim()) throw new Error('Usage: atv raop-stream <ipv4> <file-or-url>');
       return cmdRaopStream(args[0], args[1]);
     case 'stop': case 'power':
       argumentsFor(args, 0, `${cmd} [device]`);

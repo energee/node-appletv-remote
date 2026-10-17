@@ -36,9 +36,10 @@ Hardware status: AirPlay 2 realtime audio, RAOP discovery and `wavPcm` are verif
 [tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on); legacy receivers
 and legacy PIN pairing are verified only against loopback tests. HomePods and other receivers needing transient pairing,
 AirPlay 2 buffered audio, RSA/FairPlay/MFi authentication, password digest auth,
-ALAC, transcoding, multiroom, live sources, artwork,
+ALAC, multiroom, live sources, artwork,
 and progress are excluded. `atv raop-stream` wraps this API
-for PIN-less legacy receivers (it supplies neither a `legacySeed` nor HAP credentials).
+for PIN-less legacy receivers (it supplies neither a `legacySeed` nor HAP credentials). Its CLI adapter can
+use an installed `ffmpeg` to decode finite files and HTTP(S) URLs; transcoding is not part of `RaopStream`.
 
 `scan()` browses `_raop._tcp` and fills `raopAddress`, `raopPort` and `raopTxt` (see
 [Discovery](internals.md#discovery-and-transport-selection)). End to end, discovering a receiver and
@@ -171,7 +172,8 @@ chunk before `fmt `, or a file that ends before the declared data length throws 
 `Invalid WAV` error. Other chunks (such as `LIST`) are skipped, honoring odd-size pad
 bytes, and nothing after `data` is read. The Readable is destroyed when iteration
 ends. Other formats need converting first (for example with ffmpeg); this library
-does not transcode.
+does not transcode. The `atv raop-stream` CLI performs that conversion for finite local files,
+incompatible WAV files, and HTTP(S) URLs when `ffmpeg` is installed; see [the CLI reference](cli.md).
 
 ```typescript
 import { createReadStream } from 'node:fs';
