@@ -248,7 +248,8 @@ export class AppleTV extends EventEmitter {
       setShuffle: Command.ChangeShuffleMode,
     };
     const id = commands[feature];
-    const transport = this.connection ? 'mrp' : this.companionConnection ? 'companion' : undefined;
+    const transport = this.connection && this.readyTransports.has(this.connection) ? 'mrp' :
+      this.companionConnection && this.readyTransports.has(this.companionConnection) ? 'companion' : undefined;
     if (id !== undefined) {
       if (transport === 'companion') {
         if (this.companionMediaControls === undefined) return 'unknown';
@@ -887,8 +888,8 @@ export class AppleTV extends EventEmitter {
    * open; a Companion-only session never creates an MRP connection.
    */
   protected controlTransport(_feature: Feature): 'mrp' | 'companion' {
-    if (this.connection) return 'mrp';
-    if (this.companionConnection) return 'companion';
+    if (this.connection && this.readyTransports.has(this.connection)) return 'mrp';
+    if (this.companionConnection && this.readyTransports.has(this.companionConnection)) return 'companion';
     throw new Error('Not connected: no usable control transport');
   }
 
@@ -1121,7 +1122,8 @@ export class AppleTV extends EventEmitter {
 
   private updateCompanionMediaControls(content: OpackValue | undefined, connection: CompanionConnection): void {
     const flags = content instanceof Map ? content.get('_mcF') : undefined;
-    const next = typeof flags === 'number' && Number.isFinite(flags) && Number.isInteger(flags) && flags >= 0 ? flags : undefined;
+    const next = content instanceof Map && flags === undefined ? 0 :
+      typeof flags === 'number' && Number.isFinite(flags) && Number.isInteger(flags) && flags >= 0 ? flags : undefined;
     if (next !== this.companionMediaControls) {
       this.companionMediaControls = next;
       this.emit('featureAvailability');
@@ -1235,14 +1237,19 @@ export class AppleTV extends EventEmitter {
     }
   }
 
-  /** Discard runtime evidence when its transport session ends. */
+  /** Discard MRP runtime evidence when its transport session ends. */
   private resetRuntimeState(): void {
     this.playerState = new PlayerState();
     this.volumeAvailability = undefined;
     this.outputDeviceUID = undefined;
     this.mrpVolume = undefined;
-    this.volume = undefined;
     this.nowPlaying = new NowPlayingInfo({ hasPlayback: false }, {});
+    const companionReady = this.companionConnection && this.readyTransports.has(this.companionConnection);
+    const nextVolume = companionReady ? this.companionVolume : undefined;
+    if (this.volume !== nextVolume) {
+      this.volume = nextVolume;
+      if (nextVolume !== undefined) this.emit('volume', nextVolume);
+    }
     this.emit('featureAvailability');
   }
 
