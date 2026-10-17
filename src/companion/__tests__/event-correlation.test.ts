@@ -82,6 +82,8 @@ describe('Companion request and event correlation', () => {
     const { connection, requests, receive } = fixture();
     const tv = new AppleTV({ name: 'synthetic', address: '127.0.0.1', port: 0, deviceId: 'test', model: 'test', companionPort: 1 });
     Object.assign(tv, { companionConnection: connection });
+    const readyTransports = Reflect.get(tv, 'readyTransports');
+    if (readyTransports instanceof WeakSet) readyTransports.add(connection);
     try {
       const skip = tv.skipBackward(2.5);
       const request = requests[0];
@@ -101,6 +103,23 @@ describe('Companion request and event correlation', () => {
       expect((up.get('_c') as OpackDict)).toEqual(new Map([['_hBtS', 2], ['_hidC', 13]]));
       receive(new Map<OpackValue, OpackValue>([['_x', up.get('_x')!], ['_t', 3], ['_c', new Map()]]));
       await wake;
+    } finally { connection.close(); }
+  });
+
+  it('treats an _iMC content map without _mcF as no advertised controls', async () => {
+    const { connection } = fixture();
+    const tv = new AppleTV({ name: 'synthetic', address: '127.0.0.1', port: 0, deviceId: 'test', model: 'test', companionPort: 1 });
+    Object.assign(tv, { companionConnection: connection });
+    const readyTransports = Reflect.get(tv, 'readyTransports');
+    if (readyTransports instanceof WeakSet) readyTransports.add(connection);
+    const update = Reflect.get(tv, 'updateCompanionMediaControls');
+    if (typeof update !== 'function') throw new Error('Missing Companion media control handler');
+    try {
+      update.call(tv, new Map(), connection);
+      expect(tv.featureAvailability('play')).toBe('unavailable');
+      expect(tv.featureAvailability('setVolume')).toBe('unavailable');
+      expect(tv.featureAvailability('stop')).toBe('unknown');
+      await expect(tv.setVolume(50)).rejects.toThrow('volume control is unavailable');
     } finally { connection.close(); }
   });
 

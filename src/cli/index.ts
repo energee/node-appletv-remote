@@ -244,7 +244,8 @@ async function cmdCommand(command: string, action?: InputAction, deviceId?: stri
   const companion = button !== undefined || COMPANION_CONTROL_COMMANDS[command] === true;
   if (!button && !COMMAND_SET.has(command)) throw new Error(`Unknown command: ${command}. Run "atv --help".`);
   if (action && !button && !HID_KEY_MAP[command]) throw new Error(`Action modes are not supported for ${command}`);
-  const atv = await (companion && loadCredentials(deviceId).credentials.companionCredentials ? connectToCompanion(deviceId) : connectToDevice(deviceId));
+  const useCompanion = button !== undefined || (companion && Boolean(loadCredentials(deviceId).credentials.companionCredentials));
+  const atv = await (useCompanion ? connectToCompanion(deviceId) : connectToDevice(deviceId));
   try {
     // An undefined action takes each method's 'singleTap' default.
     if (button) await atv[button](action);
