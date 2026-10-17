@@ -44,11 +44,13 @@ function validate(document: unknown): asserts document is StorageDocument {
   const d = document as Record<string, unknown>;
   if (d.version !== STORAGE_VERSION) throw new Error(`Unsupported storage document version: ${String(d.version)}`);
   if (!Array.isArray(d.devices)) bad('devices must be an array');
-  const owners = new Map<string, string>();
+  const owners = new Map<string, string>(); const keys = new Set<string>();
   for (const record of d.devices) {
     if (!record || typeof record !== 'object') bad('device must be an object');
     const r = record as DeviceRecord;
     if (typeof r.key !== 'string' || !r.key) bad('device keys must be nonempty strings');
+    if (keys.has(r.key.toLowerCase())) bad('device keys must be unique case-insensitively');
+    keys.add(r.key.toLowerCase());
     if (!Array.isArray(r.aliases) || r.aliases.some(a => typeof a !== 'string' || !a)) bad('aliases must be nonempty strings');
     for (const identifier of [r.key, ...r.aliases]) {
       const normalized = identifier.toLowerCase();
@@ -58,14 +60,24 @@ function validate(document: unknown): asserts document is StorageDocument {
     }
     for (const protocol of ['airplay', 'mrp', 'companion', 'unclassified'] as const) if (r.credentials?.[protocol]) hap(r.credentials[protocol], protocol);
     if (r.credentials?.raop) { if (typeof r.credentials.raop.clientId !== 'string' || !/^[0-9A-F]{16}$/i.test(r.credentials.raop.clientId)) bad('raop clientId must be 16 hex characters'); hex(r.credentials.raop.seed, 32, 'raop.seed'); }
-    if (r.credentials?.dmap && (typeof r.credentials.dmap.guid !== 'string' || !/^(?:0x)?[0-9A-F]{16}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(r.credentials.dmap.guid))) bad('dmap guid must be a pairing GUID');
+    if (r.credentials?.dmap && (typeof r.credentials.dmap.guid !== 'string' || !/^0x[0-9A-F]{16}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(r.credentials.dmap.guid))) bad('dmap guid must be a pairing GUID');
+    endpoint(r.hints, 'hints');
     for (const [protocol, settings] of Object.entries(r.settings ?? {})) {
       if (!['airplay', 'mrp', 'companion', 'dmap', 'raop'].includes(protocol) || !settings || typeof settings !== 'object') bad('settings must be protocol objects');
       const value = settings as ProtocolSettings;
-      if (value.settleMs !== undefined && (!Number.isFinite(value.settleMs) || value.settleMs < 0)) bad('settleMs must be nonnegative');
-      if (value.controllerName !== undefined && (typeof value.controllerName !== 'string' || !value.controllerName)) bad('controllerName must be nonempty');
+      endpoint(value.endpoint, `${protocol}.endpoint`);
+      if (value.settleMs !== undefined && ((protocol !== 'airplay' && protocol !== 'mrp') || !Number.isFinite(value.settleMs) || value.settleMs < 0)) bad('settleMs is supported only by airplay/mrp');
+      if (value.controllerName !== undefined && (protocol !== 'dmap' || typeof value.controllerName !== 'string' || !value.controllerName)) bad('controllerName is supported only by dmap');
     }
   }
+}
+function endpoint(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (!value || typeof value !== 'object') bad(`${label} must be an object`);
+  const hint = value as Record<string, unknown>;
+  for (const field of ['name', 'model', 'address', 'companionAddress', 'mrpAddress', 'dmapAddress', 'raopAddress']) if (hint[field] !== undefined && typeof hint[field] !== 'string') bad(`${label}.${field} must be a string`);
+  for (const field of ['port', 'companionPort', 'mrpPort', 'dmapPort', 'raopPort']) if (hint[field] !== undefined && (!Number.isInteger(hint[field]) || (hint[field] as number) < 1 || (hint[field] as number) > 65535)) bad(`${label}.${field} must be a port`);
+  if (hint.mrpEnabled !== undefined && typeof hint.mrpEnabled !== 'boolean') bad(`${label}.mrpEnabled must be boolean`);
 }
 function encodeHap(value: HAPCredentials): EncodedHap { return { clientId: value.clientId, clientLTSK: value.clientLTSK.toString('hex'), clientLTPK: value.clientLTPK.toString('hex'), serverLTPK: value.serverLTPK.toString('hex'), serverId: value.serverId }; }
 function decodeHap(value: EncodedHap): HAPCredentials { hap(value, 'credential'); return { clientId: value.clientId, clientLTSK: Buffer.from(value.clientLTSK, 'hex'), clientLTPK: Buffer.from(value.clientLTPK, 'hex'), serverLTPK: Buffer.from(value.serverLTPK, 'hex'), serverId: value.serverId }; }
