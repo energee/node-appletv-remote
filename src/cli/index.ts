@@ -201,8 +201,9 @@ async function findDevice(id: string, need: 'mrp' | 'companion' | 'dmap'): Promi
 async function connectCached<T>(id: string, need: 'mrp' | 'companion' | 'dmap', connect: (device: DiscoveredDeviceInfo) => Promise<T>): Promise<T> {
   const store = await storage();
   const record = store.get(id);
-  if (record && (record.hints?.address || record.settings?.endpoint?.address)) {
-    const hints = { ...record.hints, ...record.settings?.endpoint };
+  const endpointSettings = record?.settings?.[need === 'mrp' ? (record.settings.airplay ? 'airplay' : 'mrp') : need]?.endpoint;
+  if (record && (record.hints?.address || endpointSettings?.address)) {
+    const hints = { ...record.hints, ...endpointSettings };
     const cached: DiscoveredDeviceInfo = { name: hints.name ?? record.key, deviceId: record.key, model: hints.model ?? '', address: hints.address!, port: hints.port ?? 0, companionAddress: hints.companionAddress, companionPort: hints.companionPort, mrpAddress: hints.mrpAddress, mrpPort: hints.mrpPort, mrpEnabled: hints.mrpEnabled, dmapAddress: hints.dmapAddress, dmapPort: hints.dmapPort, raopAddress: hints.raopAddress, raopPort: hints.raopPort };
     try { return await connect(cached); } catch { /* Stale hints fall through to discovery. */ }
   }
@@ -265,8 +266,11 @@ async function cmdCommand(command: string, action?: InputAction, deviceId?: stri
   const companion = button !== undefined || COMPANION_CONTROL_COMMANDS[command] === true;
   if (!button && !COMMAND_SET.has(command)) throw new Error(`Unknown command: ${command}. Run "atv --help".`);
   if (action && !button && !HID_KEY_MAP[command]) throw new Error(`Action modes are not supported for ${command}`);
-  const stored = companion ? await loadCredentials(deviceId) : undefined;
-  const atv = await (stored?.credentials.companionCredentials ? connectToCompanion(deviceId) : connectToDevice(deviceId));
+  let useCompanion = button !== undefined;
+  if (!useCompanion && companion) {
+    try { await loadRecord('companion', deviceId); useCompanion = true; } catch { /* MRP remains the fallback when Companion is unpaired. */ }
+  }
+  const atv = await (useCompanion ? connectToCompanion(deviceId) : connectToDevice(deviceId));
   try {
     // An undefined action takes each method's 'singleTap' default.
     if (button) await atv[button](action);

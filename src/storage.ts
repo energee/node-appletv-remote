@@ -18,10 +18,12 @@ export type ProtocolCredentials = Partial<Record<'airplay' | 'mrp' | 'companion'
   dmap?: { guid: string };
 };
 export interface EndpointHints { name?: string; model?: string; address?: string; port?: number; companionAddress?: string; companionPort?: number; mrpAddress?: string; mrpPort?: number; mrpEnabled?: boolean; dmapAddress?: string; dmapPort?: number; raopAddress?: string; raopPort?: number; }
-export interface DeviceSettings { controllerName?: string; endpoint?: Partial<EndpointHints>; }
+export interface ProtocolSettings { endpoint?: Partial<EndpointHints>; settleMs?: number; controllerName?: string; }
+export type DeviceSettings = Partial<Record<Protocol, ProtocolSettings>>;
 export interface DeviceRecord { key: string; aliases: string[]; credentials?: ProtocolCredentials; settings?: DeviceSettings; hints?: EndpointHints; }
 export interface StorageDocument { version: typeof STORAGE_VERSION; devices: DeviceRecord[]; }
 export interface StorageAdapter { load(): Promise<StorageDocument | undefined>; save(document: StorageDocument): Promise<void>; }
+export interface ConnectionResolution { protocol: Protocol; endpoint: EndpointHints; credentials?: HAPCredentials; settleMs?: number; controllerName?: string; }
 export interface FileStorageOptions { mode?: number; }
 
 function clone<T>(value: T): T { return structuredClone(value); }
@@ -56,6 +58,12 @@ function validate(document: unknown): asserts document is StorageDocument {
     for (const protocol of ['airplay', 'mrp', 'companion', 'unclassified'] as const) if (r.credentials?.[protocol]) hap(r.credentials[protocol], protocol);
     if (r.credentials?.raop) { if (typeof r.credentials.raop.clientId !== 'string' || !/^[0-9A-F]{16}$/i.test(r.credentials.raop.clientId)) bad('raop clientId must be 16 hex characters'); hex(r.credentials.raop.seed, 32, 'raop.seed'); }
     if (r.credentials?.dmap && (typeof r.credentials.dmap.guid !== 'string' || !/^(?:0x)?[0-9A-F]{16}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(r.credentials.dmap.guid))) bad('dmap guid must be a pairing GUID');
+    for (const [protocol, settings] of Object.entries(r.settings ?? {})) {
+      if (!['airplay', 'mrp', 'companion', 'dmap', 'raop'].includes(protocol) || !settings || typeof settings !== 'object') bad('settings must be protocol objects');
+      const value = settings as ProtocolSettings;
+      if (value.settleMs !== undefined && (!Number.isFinite(value.settleMs) || value.settleMs < 0)) bad('settleMs must be nonnegative');
+      if (value.controllerName !== undefined && (typeof value.controllerName !== 'string' || !value.controllerName)) bad('controllerName must be nonempty');
+    }
   }
 }
 function encodeHap(value: HAPCredentials): EncodedHap { return { clientId: value.clientId, clientLTSK: value.clientLTSK.toString('hex'), clientLTPK: value.clientLTPK.toString('hex'), serverLTPK: value.serverLTPK.toString('hex'), serverId: value.serverId }; }
@@ -79,6 +87,15 @@ export class DeviceStorage {
   hap(key: string, protocol: 'airplay' | 'mrp' | 'companion'): HAPCredentials | undefined { const value = this.get(key)?.credentials?.[protocol]; return value ? decodeHap(value) : undefined; }
   /** Preserve old credentials without assigning them to AirPlay or standalone MRP. */
   setUnclassifiedHap(key: string, credentials: HAPCredentials, aliases = [key]): void { const record = this.get(key) ?? { key, aliases }; record.credentials = { ...record.credentials, unclassified: encodeHap(credentials) }; this.upsert(record); }
+  /** Resolve explicit options over stored protocol settings over nonsecret discovery hints. */
+  resolveConnection(key: string, protocol: Protocol, explicit: ProtocolSettings = {}): ConnectionResolution {
+    const record = this.get(key);
+    if (!record) throw new Error(`No storage record matches "${key}"`);
+    const stored = record.settings?.[protocol] ?? {};
+    const endpoint = { ...record.hints, ...stored.endpoint, ...explicit.endpoint };
+    const credentials = protocol === 'airplay' || protocol === 'mrp' || protocol === 'companion' ? this.hap(record.key, protocol) : undefined;
+    return { protocol, endpoint, credentials, settleMs: explicit.settleMs ?? stored.settleMs, controllerName: explicit.controllerName ?? stored.controllerName };
+  }
   async save(): Promise<void> { this.ready(); if (!this.dirty) return; const revision = this.revision; const snapshot = clone(this.document); validate(snapshot); await this.adapter.save(snapshot); if (this.revision === revision) this.savedRevision = revision; }
 }
 
