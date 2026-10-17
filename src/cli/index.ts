@@ -244,7 +244,7 @@ async function cmdCommand(command: string, action?: InputAction, deviceId?: stri
   const companion = button !== undefined || COMPANION_CONTROL_COMMANDS[command] === true;
   if (!button && !COMMAND_SET.has(command)) throw new Error(`Unknown command: ${command}. Run "atv --help".`);
   if (action && !button && !HID_KEY_MAP[command]) throw new Error(`Action modes are not supported for ${command}`);
-  const atv = await (companion ? connectToCompanion(deviceId) : connectToDevice(deviceId));
+  const atv = await (companion && loadCredentials(deviceId).credentials.companionCredentials ? connectToCompanion(deviceId) : connectToDevice(deviceId));
   try {
     // An undefined action takes each method's 'singleTap' default.
     if (button) await atv[button](action);
@@ -258,7 +258,8 @@ async function cmdCommand(command: string, action?: InputAction, deviceId?: stri
 
 /** `atv remote [device]`: interactive prompt that sends each typed key name. */
 async function cmdRemote(deviceId?: string) {
-  const atv = await connectToDevice(deviceId);
+  const companion = Boolean(loadCredentials(deviceId).credentials.companionCredentials);
+  const atv = await (companion ? connectToCompanion(deviceId) : connectToDevice(deviceId));
 
   console.log(`Connected. Type commands to send (${COMMAND_NAMES.join(', ')})`);
   console.log('Type "quit" or "exit" to disconnect.\n');
@@ -282,6 +283,8 @@ async function cmdRemote(deviceId?: string) {
     }
     if (!COMMAND_SET.has(input)) {
       console.log(`Unknown: ${input}. Type "help" for commands.`);
+    } else if (companion && !COMPANION_CONTROL_COMMANDS[input]) {
+      console.log(`Error: ${input} requires an MRP connection.`);
     } else {
       try {
         await atv.sendKeyCommand(input as Key);
@@ -709,7 +712,7 @@ export async function main(argv: string[]): Promise<void> {
       argumentsFor(args, 1, `${cmd} <number> [device]`);
       const value = numberArgument(args[0], 0, cmd === 'volume' ? 100 : Infinity, cmd.startsWith('skip-'));
       device = args[1];
-      companion = cmd !== 'seek';
+      companion = cmd !== 'seek' && Boolean(loadCredentials(device).credentials.companionCredentials);
       acknowledged = companion;
       operation = (atv) => cmd === 'seek' ? atv.setPosition(value) : cmd === 'volume' ? atv.setVolume(value) :
         cmd === 'skip-forward' ? atv.skipForward(value) : atv.skipBackward(value);

@@ -23,7 +23,7 @@ it('reports transport errors instead of throwing the special error event', async
   const { main } = await import('../cli/index.js');
   await main(['command', 'up']);
   expect(state.tv).toBeDefined();
-  expect(() => state.tv!.emit('error', new Error('late transport failure'))).not.toThrow();
+  expect(() => state.tv!.emit('companionError', new Error('late transport failure'))).not.toThrow();
   expect(errors.mock.calls.flat().join(' ')).toContain('setup transport failure');
   expect(errors.mock.calls.flat().join(' ')).toContain('late transport failure');
 });

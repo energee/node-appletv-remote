@@ -256,7 +256,8 @@ export class AppleTV extends EventEmitter {
           play: 0x0001, pause: 0x0002, next: 0x0004, previous: 0x0008,
           skipForward: 0x0200, skipBackward: 0x0400,
         };
-        return this.companionMediaControls & (flag[feature] ?? 0) ? 'supported' : 'unavailable';
+        const capability = flag[feature];
+        return capability === undefined ? 'unknown' : this.companionMediaControls & capability ? 'supported' : 'unavailable';
       }
       const advertised = this.playerState.commands;
       if (!advertised) return 'unknown';
@@ -451,8 +452,7 @@ export class AppleTV extends EventEmitter {
         ['_idsID', credentials.clientId], ['_pubID', this.deviceId], ['_sf', 256], ['_sv', '170.18'],
         ['model', this.model], ['name', this.name],
       ]));
-      // Capability advertisements are optional; an unavailable subscription must not fail setup.
-      try { connection.sendMessage('_interest', new Map([['_regEvents', ['_iMC']]])); } catch { /* no active Companion session */ }
+      connection.sendMessage('_interest', new Map([['_regEvents', ['_iMC']]]));
       // The TV pushes _tiStarted/_tiStopped only to clients with an open RTI session.
       // Best effort: a TV that rejects _tiStart still serves every other Companion request.
       await this.startTextSession().catch((err: Error) => this.emit('companionError', err));
@@ -583,6 +583,7 @@ export class AppleTV extends EventEmitter {
   async setVolume(level: number): Promise<void> {
     if (!(Number.isFinite(level) && level >= 0 && level <= 100)) throw new Error('Volume must be 0..100');
     if (this.controlTransport('setVolume') === 'companion') {
+      if (this.featureAvailability('setVolume') !== 'supported') throw new Error('Companion volume control is unavailable');
       await this.checkedCompanion(this.requireCompanion(), '_mcc', new Map<OpackValue, OpackValue>([['_mcc', 6], ['_vol', new OpackFloat(level / 100)]]));
       return;
     }

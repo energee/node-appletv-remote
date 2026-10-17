@@ -58,11 +58,12 @@ describe('button action modes', () => {
     // Action words are case-insensitive, so a miscased action never becomes a device selector.
     [['command', 'up', 'doubletap'], ['up', 'doubleTap']],
     [['command', 'up', 'HOLD', 'device'], ['up', 'hold']],
-  ] as const)('sends %j as an MRP key with its action', async (args, expected) => {
+  ] as const)('sends %j as a Companion key with its action', async (args, expected) => {
     const send = vi.spyOn(AppleTV.prototype, 'sendKeyCommand').mockResolvedValue(undefined);
     await run([...args]);
     expect(send).toHaveBeenCalledWith(...expected);
-    expect(AppleTV.prototype.connect).toHaveBeenCalledOnce();
+    expect(AppleTV.prototype.connectCompanion).toHaveBeenCalledOnce();
+    expect(AppleTV.prototype.connect).not.toHaveBeenCalled();
   });
   it('passes the action to Companion buttons', async () => {
     const guide = vi.spyOn(AppleTV.prototype, 'guide').mockResolvedValue(undefined);
