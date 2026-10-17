@@ -101,6 +101,10 @@ async function selectDevice<T>(devices: T[], none: string, label: (device: T) =>
   if (!selected) console.log('Invalid selection.');
   return selected;
 }
+/** Preserve each advertised identity once; scan includes deviceId in identifiers. */
+function deviceAliases(device: DiscoveredDeviceInfo): string[] {
+  return [...new Map([device.deviceId, ...(device.identifiers ?? [])].map(alias => [alias.toLowerCase(), alias])).values()];
+}
  
 
 /** `atv scan`: list Apple TVs and AirPlay receivers found via mDNS within 5 s, with each `psi` output ID. */
@@ -125,7 +129,7 @@ async function cmdPair() {
   console.log(`Pairing with ${atv.name}...`);
   const hapCreds = await (await atv.startPairing()).finish(await prompt('Enter PIN shown on Apple TV: '));
   const store = await storage();
-  store.setHap(device.deviceId, device.port ? 'airplay' : 'mrp', hapCreds, [device.deviceId, ...(device.identifiers ?? [])]);
+  store.setHap(device.deviceId, device.port ? 'airplay' : 'mrp', hapCreds, deviceAliases(device));
   await store.save();
   console.log(`Paired! Credentials saved to ${STORAGE_FILE}`);
 }
@@ -193,11 +197,17 @@ async function findDevice(id: string, need: 'mrp' | 'companion' | 'dmap'): Promi
 }
 
 /** Scan for a device, then retain only nonsecret endpoint hints for the next CLI invocation. */
+/** Try a stored nonsecret endpoint hint first, then rescan and refresh it after a successful connection. */
 async function connectCached<T>(id: string, need: 'mrp' | 'companion' | 'dmap', connect: (device: DiscoveredDeviceInfo) => Promise<T>): Promise<T> {
-  const device = await findDevice(id, need);
-  const result = await connect(device);
   const store = await storage();
   const record = store.get(id);
+  if (record?.hints?.address) {
+    const hints = record.hints;
+    const cached: DiscoveredDeviceInfo = { name: record.key, deviceId: record.key, model: '', address: hints.address!, port: hints.port ?? 0, companionPort: hints.companionPort, mrpPort: hints.mrpPort, dmapAddress: hints.dmapAddress, dmapPort: hints.dmapPort, raopAddress: hints.raopAddress, raopPort: hints.raopPort };
+    try { return await connect(cached); } catch { /* Stale hints fall through to discovery. */ }
+  }
+  const device = await findDevice(id, need);
+  const result = await connect(device);
   if (record) {
     const hints: EndpointHints = { address: device.address, port: device.port, companionPort: device.companionPort, mrpPort: device.mrpPort, dmapAddress: device.dmapAddress, dmapPort: device.dmapPort, raopAddress: device.raopAddress, raopPort: device.raopPort };
     if (JSON.stringify(record.hints) !== JSON.stringify(hints)) { record.hints = hints; store.upsert(record); await store.save(); }
@@ -396,7 +406,7 @@ async function cmdCompanionPair() {
   console.log(`Companion pairing with ${atv.name} on port ${device.companionPort}...`);
   const companionCreds = await (await atv.startCompanionPairing()).finish(await prompt('Enter PIN shown on Apple TV: '));
   const store = await storage();
-  store.setHap(device.deviceId, 'companion', companionCreds, [device.deviceId, ...(device.identifiers ?? [])]);
+  store.setHap(device.deviceId, 'companion', companionCreds, deviceAliases(device));
   await store.save();
   console.log(`Companion paired! Credentials saved to ${STORAGE_FILE}`);
 }
@@ -507,7 +517,7 @@ async function cmdDmapPair(localAddress: string) {
   }
 
   const store = await storage();
-  const record: DeviceRecord = store.get(device.deviceId) ?? { key: device.deviceId, aliases: [device.deviceId, ...(device.identifiers ?? [])] };
+  const record: DeviceRecord = store.get(device.deviceId) ?? { key: device.deviceId, aliases: deviceAliases(device) };
   record.credentials = { ...record.credentials, dmap: { guid } };
   store.upsert(record);
   await store.save();

@@ -40,17 +40,21 @@ function validate(document: unknown): asserts document is StorageDocument {
   const d = document as Record<string, unknown>;
   if (d.version !== STORAGE_VERSION) throw new Error(`Unsupported storage document version: ${String(d.version)}`);
   if (!Array.isArray(d.devices)) bad('devices must be an array');
-  const keys = new Set<string>(); const aliases = new Set<string>();
+  const owners = new Map<string, string>();
   for (const record of d.devices) {
     if (!record || typeof record !== 'object') bad('device must be an object');
     const r = record as DeviceRecord;
-    if (typeof r.key !== 'string' || !r.key || keys.has(r.key)) bad('device keys must be unique nonempty strings');
-    keys.add(r.key);
+    if (typeof r.key !== 'string' || !r.key) bad('device keys must be nonempty strings');
     if (!Array.isArray(r.aliases) || r.aliases.some(a => typeof a !== 'string' || !a)) bad('aliases must be nonempty strings');
-    for (const alias of r.aliases) { const id = alias.toLowerCase(); if (aliases.has(id)) bad(`alias ${alias} belongs to more than one record`); aliases.add(id); }
+    for (const identifier of [r.key, ...r.aliases]) {
+      const normalized = identifier.toLowerCase();
+      const owner = owners.get(normalized);
+      if (owner && owner !== r.key) bad(`identifier ${identifier} belongs to more than one record`);
+      owners.set(normalized, r.key);
+    }
     for (const protocol of ['airplay', 'mrp', 'companion', 'unclassified'] as const) if (r.credentials?.[protocol]) hap(r.credentials[protocol], protocol);
-    if (r.credentials?.raop) { if (typeof r.credentials.raop.clientId !== 'string' || !r.credentials.raop.clientId) bad('raop lacks clientId'); hex(r.credentials.raop.seed, 32, 'raop.seed'); }
-    if (r.credentials?.dmap && (typeof r.credentials.dmap.guid !== 'string' || !r.credentials.dmap.guid)) bad('dmap lacks guid');
+    if (r.credentials?.raop) { if (typeof r.credentials.raop.clientId !== 'string' || !/^[0-9A-F]{16}$/i.test(r.credentials.raop.clientId)) bad('raop clientId must be 16 hex characters'); hex(r.credentials.raop.seed, 32, 'raop.seed'); }
+    if (r.credentials?.dmap && (typeof r.credentials.dmap.guid !== 'string' || !/^(?:0x)?[0-9A-F]{16}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(r.credentials.dmap.guid))) bad('dmap guid must be a pairing GUID');
   }
 }
 function encodeHap(value: HAPCredentials): EncodedHap { return { clientId: value.clientId, clientLTSK: value.clientLTSK.toString('hex'), clientLTPK: value.clientLTPK.toString('hex'), serverLTPK: value.serverLTPK.toString('hex'), serverId: value.serverId }; }
