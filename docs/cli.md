@@ -5,7 +5,7 @@ Every `atv` command, its arguments, and how it picks a device. `atv --help` prin
 ```bash
 atv scan                          # find Apple TVs (and AirPlay receivers' psi output IDs)
 atv pair                          # AirPlay pairing (enter the PIN shown on the TV)
-atv companion-pair                # Companion pairing, needed for apps/accounts/power
+atv companion-pair                # Companion pairing, needed for Companion-only controls/apps/accounts/power
 
 atv command <command> [action] [deviceId]  # send one command, e.g. `atv command play`
 atv command up doubleTap [deviceId]  # action: singleTap (default), doubleTap, hold
@@ -17,17 +17,18 @@ atv messages [deviceId]           # stream raw MRP messages until Ctrl+C
 atv keyboard [deviceId]           # stream keyboard/text events
 atv --help                       # complete syntax and available keys
 
-# AirPlay/MRP playback
+# AirPlay/MRP only
+atv remote [deviceId]             # interactive remote
 atv stop [deviceId]
-atv seek 120.5 [deviceId]          # absolute position in seconds (>= 0)
-atv skip-forward 30 [deviceId]    # positive seconds; skip-backward also supported
+atv seek 120.5 [deviceId]         # absolute position in seconds (>= 0)
 atv shuffle songs [deviceId]      # off, albums, songs
 atv repeat all [deviceId]         # off, track, all
-atv volume 40 [deviceId]          # absolute volume, 0..100
 atv output list [deviceId]        # selected outputs, tab-separated ID and name
 atv output add <psi-uuid>[,<psi-uuid>...] [deviceId]  # also remove, set
 
 # Companion only (requires atv companion-pair)
+atv skip-forward 30 [deviceId]    # positive seconds; skip-backward also supported
+atv volume 40 [deviceId]          # absolute volume, 0..100, when advertised
 atv text set "search words" [deviceId]  # prints the new text; fails if no field is focused
 atv text append " more" [deviceId]
 atv text clear [deviceId]
@@ -52,7 +53,7 @@ atv raop-stream 192.168.1.20 track.pcm  # raw PCM16LE stereo 44.1 kHz, no WAV he
 
 Credentials are saved to `~/.atv-credentials.json`. Leave out `deviceId` to use the most recently paired device. An explicit selector matches a paired device ID case-insensitively; blank or unmatched selectors fail instead of silently selecting the last device. Each device's last working address is cached in `~/.atv-devices.json`, so commands skip the network scan. If the TV has moved, the CLI rescans automatically; an address that silently drops packets fails over after a 5 s connect timeout rather than the OS TCP timeout (about 75 s on macOS).
 
-Playback and output commands open only AirPlay/MRP; text/app/account/power/click/swipe commands and extra buttons open only Companion. `command` (alias `cmd`) still accepts `skip_forward` / `skip_backward` for the app's default interval; use the hyphenated commands to specify seconds. Extra Companion buttons are `channel_up`, `channel_down`, `screensaver`, `guide`, `page_up`, and `page_down` (not available in the MRP-only interactive remote). An optional action (`singleTap`, `doubleTap`, `hold`; case-insensitive) may follow navigation/HID keys and Companion buttons; media keys, `wake`, `suspend`, skips and `home_hold` reject it before connecting. When both an action and a device are given, an unrecognized action word is rejected as an invalid action instead of being treated as a device selector.
+One-shot `command` uses Companion for navigation (except `top_menu`/`home_hold`), media, volume buttons, wake, and suspend; `skip-forward`, `skip-backward`, and `volume` are also Companion-only. The interactive `remote` remains MRP-only. Text/app/account/power/click/swipe commands and extra buttons open only Companion. `command` (alias `cmd`) accepts `skip_forward` / `skip_backward` for Companion's default 10-second interval; use the hyphenated commands to specify seconds. Extra Companion buttons are `channel_up`, `channel_down`, `screensaver`, `guide`, `page_up`, and `page_down` (not available in the MRP-only interactive remote). An optional action (`singleTap`, `doubleTap`, `hold`; case-insensitive) may follow navigation/HID keys and Companion buttons; media keys, `wake`, `suspend`, skips and `home_hold` reject it before connecting. A successful Companion command is accepted by the TV, not confirmation of UI, media, volume, or power state.
 
 Output IDs must be the receiver's AirPlay **`psi`** UUID, which `atv scan` prints as `psi=...`; its `deviceid` (MAC) and `pi` are ignored by the TV and time out after five seconds. Comma-separated IDs are trimmed and must be unique and nonblank (checked before connecting). `output add/remove/set` print the confirmed selected outputs afterward; `atv output set ""` is rejected, so the CLI cannot clear all outputs.
 

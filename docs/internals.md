@@ -55,9 +55,9 @@ const reply = await atv.sendCompanionRequest('FetchAttentionState', new Map());
 atv.sendCompanionMessage('_interest', new Map([['_regEvents', ['SystemStatus']]]));
 ```
 
-- A reply carrying an `_em` error rejects with `Companion <id> failed: <_em>` instead of resolving with an empty `_c`.
+- A reply carrying `_em` or a present, nonzero `_ec` rejects; a request is accepted only after its correlated reply.
 - Plain content is wrapped as `{ _i, _t, _c, _x }`. `_t` is 2 for a request and 1 for a message. If you pass a prebuilt envelope (with `_t`, `_c` or `_x`), only `_i` and `_x` get filled in.
-- Wrap whole numbers in `new OpackFloat(n)` when the protocol expects a float, such as skip seconds or volume 0/1. Use `bigint` for unsigned 64-bit IDs.
+- Companion HID controls use `_hidC` content `{ _hBtS: 1|2, _hidC: code }`; media controls use `_mcc`. `_skpS` and `_vol` must be `new OpackFloat(...)` because Companion requires float64 even for whole values.
 - Request IDs stay in 1..127, since Apple TVs read larger single-byte IDs as negative. A timed-out ID stays reserved for 30s so a late reply can't resolve the wrong request.
 
 The OPACK and framing tests use independent wire fixtures, including published OPACK examples.

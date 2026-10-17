@@ -20,7 +20,7 @@ import { Message } from './message.js';
 import { CompanionConnection } from './companion/connection.js';
 import { CompanionPairSetup } from './companion/pair-setup.js';
 import { readTextSession, rtiClearTextPayload, rtiInputTextPayload } from './companion/text-input.js';
-import type { OpackDict, OpackValue } from './companion/opack.js';
+import { OpackFloat, type OpackDict, type OpackValue } from './companion/opack.js';
 import type { HAPCredentials } from './auth/types.js';
 import type { DiscoveredDeviceInfo } from './discovery.js';
 
@@ -153,14 +153,11 @@ export interface UserAccount {
   id: string;
 }
 
-/** Companion `_hidC` button codes for buttons MRP has no HID usage for. */
+/** Companion `_hidC` button codes. */
 const COMPANION_HID = {
-  screensaver: 11,
-  channelUp: 15,
-  channelDown: 16,
-  guide: 17,
-  pageUp: 18,
-  pageDown: 19,
+  up: 1, down: 2, left: 3, right: 4, menu: 5, select: 6, home: 7,
+  volumeUp: 8, volumeDown: 9, screensaver: 11, suspend: 12, wake: 13,
+  playPause: 14, channelUp: 15, channelDown: 16, guide: 17, pageUp: 18, pageDown: 19,
 } as const;
 
 /** Companion SystemStatus `state`: 1 asleep, 2 screensaver, 3 awake, 4 idle. */
@@ -214,7 +211,7 @@ export class AppleTV extends EventEmitter {
   private airPlayErrorSource?: MRPConnection;
   private playerState = new PlayerState();
   private volumeAvailability?: Record<string, unknown>;
-  /** Last normalized active-player snapshot; also emitted as nowPlaying. */
+  private companionMediaControls?: number;
   nowPlaying = new NowPlayingInfo({ hasPlayback: false }, {});
 
   /**
@@ -251,13 +248,26 @@ export class AppleTV extends EventEmitter {
       setShuffle: Command.ChangeShuffleMode,
     };
     const id = commands[feature];
+    const transport = this.connection ? 'mrp' : this.companionConnection ? 'companion' : undefined;
     if (id !== undefined) {
+      if (transport === 'companion') {
+        if (this.companionMediaControls === undefined) return 'unknown';
+        const flag: Partial<Record<Feature, number>> = {
+          play: 0x0001, pause: 0x0002, next: 0x0004, previous: 0x0008,
+          skipForward: 0x0200, skipBackward: 0x0400,
+        };
+        return this.companionMediaControls & (flag[feature] ?? 0) ? 'supported' : 'unavailable';
+      }
       const advertised = this.playerState.commands;
       if (!advertised) return 'unknown';
       const command = advertised.find(cmd => cmd.command === id);
       return !command ? 'unsupported' : command.enabled ? 'supported' : 'unavailable';
     }
     if (feature === 'setVolume' || feature === 'volumeUp' || feature === 'volumeDown') {
+      if (transport === 'companion') {
+        if (this.companionMediaControls === undefined) return 'unknown';
+        return this.companionMediaControls & 0x0100 ? 'supported' : 'unavailable';
+      }
       const volume = this.volumeAvailability;
       if (typeof volume?.volumeControlAvailable !== 'boolean') return 'unknown';
       if (!volume.volumeControlAvailable) return 'unavailable';
@@ -283,9 +293,10 @@ export class AppleTV extends EventEmitter {
   private activeTouch?: { x: number; y: number };
   private gestureController?: AbortController;
   private gestureBusy = false;
-  /** Last absolute volume (0..100) reported by VolumeDidChange for our output device; undefined until one arrives. A TV that reports no absolute volume control (`setVolume` unavailable or unsupported) has not been seen to send one. */
+  private companionVolume?: number;
+  private mrpVolume?: number;
+  /** Last absolute volume (0..100) reported by the selected transport; undefined until one arrives. */
   volume?: number;
-  /** Last power state from fetchPowerState() or a SystemStatus event. */
   powerState: PowerState = PowerState.Unknown;
   /** Last text-field focus from Companion RTI; set by connectCompanion()'s `_tiStart` reply, then `_tiStarted`/`_tiStopped` events; unknown before Companion connects and after it closes. */
   textFocusState: KeyboardFocusState = KeyboardFocusState.Unknown;
@@ -381,6 +392,8 @@ export class AppleTV extends EventEmitter {
     this.reportedOutputs = [];
     this.reportedLeader = undefined;
     this.resetRuntimeState();
+    this.clearCompanionControlState();
+    this.updatePowerState(PowerState.Unknown);
     this.updateTextFocusState(KeyboardFocusState.Unknown);
     if (companion && this.readyTransports.has(companion)) this.emit('companionClose');
     if (connection && this.readyTransports.has(connection)) this.emit('close');
@@ -419,13 +432,15 @@ export class AppleTV extends EventEmitter {
       this.touchSession = undefined;
       this.activeTouch = undefined;
       this.companionConnection = undefined;
+      this.clearCompanionControlState();
+      this.updatePowerState(PowerState.Unknown);
       this.updateTextFocusState(KeyboardFocusState.Unknown);
       if (this.readyTransports.has(connection)) this.emit('companionClose');
     });
     connection.on('error', (err) => { if (this.companionErrorSource === connection) this.emit('companionError', err); });
     connection.on('event', (event: CompanionEvent) => {
       if (this.companionConnection !== connection) return;
-      this.handleCompanionEvent(event);
+      this.handleCompanionEvent(event, connection);
     });
 
     try {
@@ -436,6 +451,8 @@ export class AppleTV extends EventEmitter {
         ['_idsID', credentials.clientId], ['_pubID', this.deviceId], ['_sf', 256], ['_sv', '170.18'],
         ['model', this.model], ['name', this.name],
       ]));
+      // Capability advertisements are optional; an unavailable subscription must not fail setup.
+      try { connection.sendMessage('_interest', new Map([['_regEvents', ['_iMC']]])); } catch { /* no active Companion session */ }
       // The TV pushes _tiStarted/_tiStopped only to clients with an open RTI session.
       // Best effort: a TV that rejects _tiStart still serves every other Companion request.
       await this.startTextSession().catch((err: Error) => this.emit('companionError', err));
@@ -519,37 +536,33 @@ export class AppleTV extends EventEmitter {
 
   // --- Remote control commands ---
 
-  /** MRP HID buttons accept single/double taps or a one-second hold, each with release and flush. */
-  async up(action: InputAction = 'singleTap'): Promise<void> { await this.sendKey('up', action); }
-  async down(action: InputAction = 'singleTap'): Promise<void> { await this.sendKey('down', action); }
-  async left(action: InputAction = 'singleTap'): Promise<void> { await this.sendKey('left', action); }
-  async right(action: InputAction = 'singleTap'): Promise<void> { await this.sendKey('right', action); }
-  async select(action: InputAction = 'singleTap'): Promise<void> { await this.sendKey('select', action); }
-  async menu(action: InputAction = 'singleTap'): Promise<void> { await this.sendKey('menu', action); }
-  async home(action: InputAction = 'singleTap'): Promise<void> { await this.sendKey('home', action); }
+  /** Navigation buttons route to Companion when it is the only open control transport. */
+  async up(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('up', COMPANION_HID.up, action); }
+  async down(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('down', COMPANION_HID.down, action); }
+  async left(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('left', COMPANION_HID.left, action); }
+  async right(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('right', COMPANION_HID.right, action); }
+  async select(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('select', COMPANION_HID.select, action); }
+  async menu(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('menu', COMPANION_HID.menu, action); }
+  async home(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('home', COMPANION_HID.home, action); }
   /** Press Home and hold it for one second before releasing. */
-  async homeHold(): Promise<void> { await this.sendKey('home', 'hold'); }
+  async homeHold(): Promise<void> { await this.home('hold'); }
   async topMenu(action: InputAction = 'singleTap'): Promise<void> { await this.sendKey('top_menu', action); }
-  async playPause(action: InputAction = 'singleTap'): Promise<void> { await this.sendKey('play_pause', action); }
+  async playPause(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('playPause', COMPANION_HID.playPause, action); }
   /** Skip forward; `seconds` overrides the app's default interval. */
-  async skipForward(seconds?: number): Promise<void> {
-    await this.sendMediaCommand(18, seconds ? { skipInterval: seconds } : undefined);
-  }
+  async skipForward(seconds?: number): Promise<void> { await this.controlMedia('skipForward', 18, 7, seconds, 1); }
   /** Skip backward; `seconds` overrides the app's default interval. */
-  async skipBackward(seconds?: number): Promise<void> {
-    await this.sendMediaCommand(19, seconds ? { skipInterval: seconds } : undefined);
-  }
-  async volumeUp(action: InputAction = 'singleTap'): Promise<void> { await this.sendKey('volume_up', action); }
-  async volumeDown(action: InputAction = 'singleTap'): Promise<void> { await this.sendKey('volume_down', action); }
+  async skipBackward(seconds?: number): Promise<void> { await this.controlMedia('skipBackward', 19, 7, seconds, -1); }
+  async volumeUp(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('volumeUp', COMPANION_HID.volumeUp, action); }
+  async volumeDown(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('volumeDown', COMPANION_HID.volumeDown, action); }
 
   // --- Media commands ---
 
-  /** MRP SendCommand media commands; IDs are Command enum values. */
-  async play(): Promise<void> { await this.sendMediaCommand(1); }
-  async pause(): Promise<void> { await this.sendMediaCommand(2); }
+  /** MRP SendCommand media commands; Companion-only sessions use `_mcc`. */
+  async play(): Promise<void> { await this.controlMedia('play', 1, 1); }
+  async pause(): Promise<void> { await this.controlMedia('pause', 2, 2); }
   async stop(): Promise<void> { await this.sendMediaCommand(4); }
-  async next(): Promise<void> { await this.sendMediaCommand(5); }
-  async previous(): Promise<void> { await this.sendMediaCommand(6); }
+  async next(): Promise<void> { await this.controlMedia('next', 5, 3); }
+  async previous(): Promise<void> { await this.controlMedia('previous', 6, 4); }
 
   /** Seek to an absolute position in seconds. */
   async setPosition(seconds: number): Promise<void> {
@@ -566,11 +579,15 @@ export class AppleTV extends EventEmitter {
     await this.sendMediaCommand(46, { repeatMode: state, sendOptions: 0 });
   }
 
-  /** Set absolute volume, 0..100. Needs the output device the Apple TV reported on connect; ignored by a TV without absolute volume (check `featureAvailability('setVolume')`). */
+  /** Set absolute volume, 0..100; an accepted Companion request is not a volume observation. */
   async setVolume(level: number): Promise<void> {
+    if (!(Number.isFinite(level) && level >= 0 && level <= 100)) throw new Error('Volume must be 0..100');
+    if (this.controlTransport('setVolume') === 'companion') {
+      await this.checkedCompanion(this.requireCompanion(), '_mcc', new Map<OpackValue, OpackValue>([['_mcc', 6], ['_vol', new OpackFloat(level / 100)]]));
+      return;
+    }
     const conn = this.requireConnection();
     if (!this.outputDeviceUID) throw new Error('No output device known for volume control');
-    if (!(level >= 0 && level <= 100)) throw new Error('Volume must be 0..100');
     await conn.sendMRPMessage(await MRPMessage.setVolume(this.outputDeviceUID, level / 100));
   }
 
@@ -649,10 +666,13 @@ export class AppleTV extends EventEmitter {
 
   // --- Device power ---
 
-  /** Put the device to sleep by pressing the HID System Sleep key. */
+  /** Put the device to sleep. */
   async suspend(): Promise<void> {
+    if (this.controlTransport('suspend') === 'companion') {
+      await this.companionButton(COMPANION_HID.suspend);
+      return;
+    }
     const conn = this.requireConnection();
-    // Send HID suspend key (usagePage 1, usage 0x82 = SystemSleep)
     const downMsg = await MRPMessage.sendHIDEvent(1, 0x82, true);
     await conn.sendMRPMessage(downMsg);
     await delay(50);
@@ -660,11 +680,14 @@ export class AppleTV extends EventEmitter {
     await conn.sendMRPMessage(upMsg);
   }
 
-  /** Wake the device (MRP WakeDeviceMessage). */
+  /** Wake the device. */
   async wake(): Promise<void> {
+    if (this.controlTransport('wake') === 'companion') {
+      await this.companionButton(COMPANION_HID.wake);
+      return;
+    }
     const conn = this.requireConnection();
-    const msg = await MRPMessage.wakeDevice();
-    await conn.sendMRPMessage(msg);
+    await conn.sendMRPMessage(await MRPMessage.wakeDevice());
   }
 
   // --- Text input ---
@@ -833,6 +856,16 @@ export class AppleTV extends EventEmitter {
       case Key.SkipForward: return this.skipForward();
       case Key.SkipBackward: return this.skipBackward();
       case Key.HomeHold: return this.homeHold();
+      case Key.Up: return this.up(action);
+      case Key.Down: return this.down(action);
+      case Key.Left: return this.left(action);
+      case Key.Right: return this.right(action);
+      case Key.Select: return this.select(action);
+      case Key.Menu: return this.menu(action);
+      case Key.Home: return this.home(action);
+      case Key.PlayPause: return this.playPause(action);
+      case Key.VolumeUp: return this.volumeUp(action);
+      case Key.VolumeDown: return this.volumeDown(action);
       default: return this.sendKey(key, action);
     }
   }
@@ -844,6 +877,33 @@ export class AppleTV extends EventEmitter {
     if (!this.connection) throw new Error('Not connected');
     return this.connection;
   }
+  /**
+   * Internal control routing seam. Existing callers keep MRP priority when both transports are
+   * open; a Companion-only session never creates an MRP connection.
+   */
+  protected controlTransport(_feature: Feature): 'mrp' | 'companion' {
+    if (this.connection) return 'mrp';
+    if (this.companionConnection) return 'companion';
+    throw new Error('Not connected: no usable control transport');
+  }
+
+  private async controlButton(feature: Feature, companionCode: number, action: InputAction): Promise<void> {
+    validateAction(action);
+    if (this.controlTransport(feature) === 'companion') await this.companionButton(companionCode, action);
+    else await this.sendKey(feature === 'playPause' ? 'play_pause' : feature === 'volumeUp' ? 'volume_up' : feature === 'volumeDown' ? 'volume_down' : feature, action);
+  }
+
+  private async controlMedia(feature: Feature, mrpCommand: number, companionCommand: number, seconds?: number, sign?: 1 | -1): Promise<void> {
+    if (this.controlTransport(feature) === 'mrp') {
+      await this.sendMediaCommand(mrpCommand, seconds ? { skipInterval: seconds } : undefined);
+      return;
+    }
+    if (seconds !== undefined && !(Number.isFinite(seconds) && seconds > 0)) throw new Error('Skip interval must be a finite positive number of seconds');
+    const content: OpackDict = new Map([['_mcc', companionCommand]]);
+    if (sign) content.set('_skpS', new OpackFloat((seconds ?? 10) * sign));
+    await this.checkedCompanion(this.requireCompanion(), '_mcc', content);
+  }
+
 
   /** Send an MRP SendCommand with optional CommandOptions fields. */
   private async sendMediaCommand(command: number, options?: Record<string, unknown>): Promise<void> {
@@ -1041,8 +1101,8 @@ export class AppleTV extends EventEmitter {
     this.emit('textFocusState', state);
   }
 
-  /** Re-emit every Companion event; update power state from SystemStatus/TVSystemStatus and text focus from `_tiStarted`/`_tiStopped`. */
-  private handleCompanionEvent(event: CompanionEvent): void {
+  /** Re-emit every Companion event and update Companion-derived observational state. */
+  private handleCompanionEvent(event: CompanionEvent, connection: CompanionConnection): void {
     this.emit('companionEvent', event);
     const content = event.data.get('_c');
     if (event.identifier === 'SystemStatus' || event.identifier === 'TVSystemStatus') {
@@ -1051,6 +1111,42 @@ export class AppleTV extends EventEmitter {
     if (event.identifier === '_tiStarted' || event.identifier === '_tiStopped') {
       this.updateTextFocusState(content instanceof Map ? textFocusFrom(content) : KeyboardFocusState.Unfocused);
     }
+    if (event.identifier === '_iMC') this.updateCompanionMediaControls(content, connection);
+  }
+
+  private updateCompanionMediaControls(content: OpackValue | undefined, connection: CompanionConnection): void {
+    const flags = content instanceof Map ? content.get('_mcF') : undefined;
+    const next = typeof flags === 'number' && Number.isFinite(flags) && Number.isInteger(flags) && flags >= 0 ? flags : undefined;
+    if (next !== this.companionMediaControls) {
+      this.companionMediaControls = next;
+      this.emit('featureAvailability');
+    }
+    if (next !== undefined && next & 0x0100) {
+      void this.fetchCompanionVolume(connection).catch(error => {
+        if (this.companionConnection === connection) this.emit('companionError', error);
+      });
+    }
+  }
+
+  private async fetchCompanionVolume(connection: CompanionConnection): Promise<void> {
+    const reply = await this.checkedCompanion(connection, '_mcc', new Map([['_mcc', 5]]));
+    if (this.companionConnection !== connection) return;
+    const content = reply.get('_c');
+    const volume = content instanceof Map ? content.get('_vol') : undefined;
+    if (!(typeof volume === 'number' && Number.isFinite(volume) && volume >= 0 && volume <= 1)) return;
+    this.companionVolume = Math.round(volume * 1000) / 10;
+    if (!this.connection && this.volume !== this.companionVolume) {
+      this.volume = this.companionVolume;
+      this.emit('volume', this.volume);
+    }
+  }
+
+  private clearCompanionControlState(): void {
+    const hadControls = this.companionMediaControls !== undefined;
+    this.companionMediaControls = undefined;
+    this.companionVolume = undefined;
+    if (!this.connection) this.volume = undefined;
+    if (hadControls) this.emit('featureAvailability');
   }
 
   /** Emit `message` for every MRP message, plus typed events for the ones this class understands. */
@@ -1098,8 +1194,9 @@ export class AppleTV extends EventEmitter {
     // VolumeDidChange (type 52): track absolute volume for our output device as 0..100
     if (msg.type === MessageType.VolumeDidChange) {
       const vol = msg['.volumeDidChangeMessage'] as Record<string, unknown> | undefined;
-      if (vol && vol.outputDeviceUID === this.outputDeviceUID && typeof vol.volume === 'number') {
-        this.volume = Math.round(vol.volume * 1000) / 10;
+      if (vol && vol.outputDeviceUID === this.outputDeviceUID && typeof vol.volume === 'number' && Number.isFinite(vol.volume)) {
+        this.mrpVolume = Math.round(vol.volume * 1000) / 10;
+        this.volume = this.mrpVolume;
         this.emit('volume', this.volume);
       }
     }
@@ -1138,6 +1235,7 @@ export class AppleTV extends EventEmitter {
     this.playerState = new PlayerState();
     this.volumeAvailability = undefined;
     this.outputDeviceUID = undefined;
+    this.mrpVolume = undefined;
     this.volume = undefined;
     this.nowPlaying = new NowPlayingInfo({ hasPlayback: false }, {});
     this.emit('featureAvailability');

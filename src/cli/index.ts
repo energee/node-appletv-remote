@@ -208,6 +208,7 @@ async function connectToCompanion(deviceId?: string): Promise<AppleTV> {
   return connectCached(id, 'companion', async (device) => {
     if (!device.companionPort) throw new Error('Device has no companion-link port');
     const atv = new AppleTV(device);
+    atv.on('companionError', (err: Error) => console.error(`Companion error: ${err.message}`));
     console.error(`Connecting companion to ${device.name} (${device.address}:${device.companionPort})...`);
     try {
       await atv.connectCompanion(credentials.companionCredentials!);
@@ -225,6 +226,13 @@ const COMPANION_BUTTONS = {
   guide: 'guide', page_up: 'pageUp', page_down: 'pageDown',
 } as const;
 
+/** One-shot commands implemented by Companion control requests. */
+const COMPANION_CONTROL_COMMANDS: Record<string, true> = {
+  up: true, down: true, left: true, right: true, select: true, menu: true, home: true,
+  play_pause: true, volume_up: true, volume_down: true, play: true, pause: true,
+  next: true, previous: true, skip_forward: true, skip_backward: true, wake: true, suspend: true,
+};
+
 /**
  * Send a validated key or Companion button, optionally with an action mode, then close even if
  * sending fails. Only HID keys and Companion buttons accept an action; media keys, wake/suspend,
@@ -233,9 +241,10 @@ const COMPANION_BUTTONS = {
 async function cmdCommand(command: string, action?: InputAction, deviceId?: string) {
   const button = Object.hasOwn(COMPANION_BUTTONS, command)
     ? COMPANION_BUTTONS[command as keyof typeof COMPANION_BUTTONS] : undefined;
+  const companion = button !== undefined || COMPANION_CONTROL_COMMANDS[command] === true;
   if (!button && !COMMAND_SET.has(command)) throw new Error(`Unknown command: ${command}. Run "atv --help".`);
   if (action && !button && !HID_KEY_MAP[command]) throw new Error(`Action modes are not supported for ${command}`);
-  const atv = await (button ? connectToCompanion(deviceId) : connectToDevice(deviceId));
+  const atv = await (companion ? connectToCompanion(deviceId) : connectToDevice(deviceId));
   try {
     // An undefined action takes each method's 'singleTap' default.
     if (button) await atv[button](action);
@@ -700,6 +709,8 @@ export async function main(argv: string[]): Promise<void> {
       argumentsFor(args, 1, `${cmd} <number> [device]`);
       const value = numberArgument(args[0], 0, cmd === 'volume' ? 100 : Infinity, cmd.startsWith('skip-'));
       device = args[1];
+      companion = cmd !== 'seek';
+      acknowledged = companion;
       operation = (atv) => cmd === 'seek' ? atv.setPosition(value) : cmd === 'volume' ? atv.setVolume(value) :
         cmd === 'skip-forward' ? atv.skipForward(value) : atv.skipBackward(value);
       break;

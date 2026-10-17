@@ -38,18 +38,18 @@ atv.on('nowPlaying', info => console.log(info.toString()));
 await atv.close();
 ```
 
-Apps, accounts, power and text input need a second, Companion pairing: `startCompanionPairing()` then `connectCompanion()`. See the [library guide](https://github.com/energee/node-appletv-remote/blob/main/docs/library.md).
+Apps, accounts, text input, and Companion-only navigation/media/volume/power control need a second, Companion pairing: `startCompanionPairing()` then `connectCompanion()`. A successful Companion control reply acknowledges acceptance, not a resulting UI, playback, volume, or power-state change; observe the normal state events separately. See the [library guide](https://github.com/energee/node-appletv-remote/blob/main/docs/library.md).
 
 ## CLI
 
 ```bash
 atv scan                          # find Apple TVs
 atv pair                          # AirPlay pairing (enter the PIN shown on the TV)
-atv companion-pair                # Companion pairing, needed for apps/accounts/power/text
-atv remote                        # interactive remote; type `help`
-atv command play                  # one key: up, down, select, menu, home, play_pause, ...
-atv state                         # what's playing
-atv volume 40
+atv companion-pair                # Companion pairing, needed for Companion-only controls/apps/accounts/power/text
+atv remote                        # interactive MRP remote; type `help`
+atv command play                  # Companion-only one-shot navigation/media/power command
+atv state                         # what's playing (MRP)
+atv volume 40                     # Companion-only absolute volume when advertised
 atv app launch com.netflix.Netflix
 atv text set "search words"
 atv --help                        # every command
@@ -73,10 +73,10 @@ Other models and tvOS versions are untested; reports are welcome.
 | Feature | Status |
 |---|---|
 | Discovery, AirPlay and Companion pairing | Verified |
-| Navigation, media commands, button tap/double-tap/hold, touch swipes | Verified |
-| Now playing, playback queue, artwork | Verified (some apps, e.g. YouTube, send no artwork) |
-| Apps, accounts, power, app launch by URL | Verified |
-| Volume | Capability reporting verified; reading absolute volume unverified (#39) |
+| Navigation/media/power over Companion alone | Protocol fixtures only; hardware unverified |
+| Navigation, media commands, button tap/double-tap/hold, touch swipes | Verified over MRP |
+| Apps, accounts, power state, app launch by URL | Verified |
+| Volume | MRP capability reporting verified; Companion control/reading unverified |
 | Audio output routing | Add/remove verified; `setOutputDevices` and routing errors unverified (#46) |
 | IPv6 (global, ULA, link-local) | Verified for MRP and Companion |
 | AirPlay 2 audio streaming (`RaopStream`) | Verified, incl. WAV input and volume; text metadata not shown on screen (#22) |
