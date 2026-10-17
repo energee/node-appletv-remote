@@ -201,15 +201,15 @@ async function findDevice(id: string, need: 'mrp' | 'companion' | 'dmap'): Promi
 async function connectCached<T>(id: string, need: 'mrp' | 'companion' | 'dmap', connect: (device: DiscoveredDeviceInfo) => Promise<T>): Promise<T> {
   const store = await storage();
   const record = store.get(id);
-  if (record?.hints?.address) {
-    const hints = record.hints;
-    const cached: DiscoveredDeviceInfo = { name: record.key, deviceId: record.key, model: '', address: hints.address!, port: hints.port ?? 0, companionPort: hints.companionPort, mrpPort: hints.mrpPort, dmapAddress: hints.dmapAddress, dmapPort: hints.dmapPort, raopAddress: hints.raopAddress, raopPort: hints.raopPort };
+  if (record && (record.hints?.address || record.settings?.endpoint?.address)) {
+    const hints = { ...record.hints, ...record.settings?.endpoint };
+    const cached: DiscoveredDeviceInfo = { name: hints.name ?? record.key, deviceId: record.key, model: hints.model ?? '', address: hints.address!, port: hints.port ?? 0, companionAddress: hints.companionAddress, companionPort: hints.companionPort, mrpAddress: hints.mrpAddress, mrpPort: hints.mrpPort, mrpEnabled: hints.mrpEnabled, dmapAddress: hints.dmapAddress, dmapPort: hints.dmapPort, raopAddress: hints.raopAddress, raopPort: hints.raopPort };
     try { return await connect(cached); } catch { /* Stale hints fall through to discovery. */ }
   }
   const device = await findDevice(id, need);
   const result = await connect(device);
   if (record) {
-    const hints: EndpointHints = { address: device.address, port: device.port, companionPort: device.companionPort, mrpPort: device.mrpPort, dmapAddress: device.dmapAddress, dmapPort: device.dmapPort, raopAddress: device.raopAddress, raopPort: device.raopPort };
+    const hints: EndpointHints = { name: device.name, model: device.model, address: device.address, port: device.port, companionAddress: device.companionAddress, companionPort: device.companionPort, mrpAddress: device.mrpAddress, mrpPort: device.mrpPort, mrpEnabled: device.mrpEnabled, dmapAddress: device.dmapAddress, dmapPort: device.dmapPort, raopAddress: device.raopAddress, raopPort: device.raopPort };
     if (JSON.stringify(record.hints) !== JSON.stringify(hints)) { record.hints = hints; store.upsert(record); await store.save(); }
   }
   return result;

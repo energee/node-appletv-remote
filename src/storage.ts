@@ -17,8 +17,9 @@ export type ProtocolCredentials = Partial<Record<'airplay' | 'mrp' | 'companion'
   raop?: { clientId: string; seed: string };
   dmap?: { guid: string };
 };
-export interface EndpointHints { address?: string; port?: number; companionPort?: number; mrpPort?: number; dmapAddress?: string; dmapPort?: number; raopAddress?: string; raopPort?: number; }
-export interface DeviceRecord { key: string; aliases: string[]; credentials?: ProtocolCredentials; hints?: EndpointHints; }
+export interface EndpointHints { name?: string; model?: string; address?: string; port?: number; companionAddress?: string; companionPort?: number; mrpAddress?: string; mrpPort?: number; mrpEnabled?: boolean; dmapAddress?: string; dmapPort?: number; raopAddress?: string; raopPort?: number; }
+export interface DeviceSettings { controllerName?: string; endpoint?: Partial<EndpointHints>; }
+export interface DeviceRecord { key: string; aliases: string[]; credentials?: ProtocolCredentials; settings?: DeviceSettings; hints?: EndpointHints; }
 export interface StorageDocument { version: typeof STORAGE_VERSION; devices: DeviceRecord[]; }
 export interface StorageAdapter { load(): Promise<StorageDocument | undefined>; save(document: StorageDocument): Promise<void>; }
 export interface FileStorageOptions { mode?: number; }
