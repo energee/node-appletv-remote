@@ -594,7 +594,7 @@ async function cmdRaopStream(address: string, file: string) {
 function help(): void {
   console.log(`Usage:
   atv scan | pair | companion-pair
-  atv command <key> [action] [device]  Send an MRP key or Companion button (alias: cmd);
+  atv command <key> [action] [device]  Send a routed key or Companion button (alias: cmd);
                                        action: singleTap (default), doubleTap, hold
                                        (case-insensitive)
   atv stop [device]
@@ -627,7 +627,7 @@ function help(): void {
   atv artwork [device] [output.jpg]
   atv help | --help | -h
 
-MRP keys: ${COMMAND_NAMES.join(', ')}
+Remote keys (provider-dependent): ${COMMAND_NAMES.join(', ')}
 Companion buttons: ${Object.keys(COMPANION_BUTTONS).join(', ')}`);
 }
 

@@ -102,7 +102,7 @@ Setup state is coalesced until that source is ready. Loss invalidates its cached
 availability; later calls may choose another already-ready provider. DMAP terminal authentication
 loss participates in that invalidation. `connection` distinguishes `ready`, unexpected `lost`,
 intentional `closed`, and optional setup `failed`. `close()` cancels setup and owned transports,
-detaches forwarding, and is idempotent. Sessions are single-use: no reconnect or automatic retry.
+detaches forwarding, and is idempotent. Sessions are single-use and add no reconnect or cross-protocol retry.
 
 Verification uses synthetic MRP/Companion fixtures and a real local HTTP DMAP peer. Physical
 mixed-protocol/Companion-only interoperability remains unverified for this session API.

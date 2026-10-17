@@ -52,7 +52,17 @@ atv dmap state [deviceId]         # title, artist, album, play state
 atv raop-stream 192.168.1.20 track.pcm  # raw PCM16LE stereo 44.1 kHz, no WAV header
 ```
 
-Credentials, DMAP GUIDs, and nonsecret endpoint hints are saved in `~/.atv-storage.json`, the public versioned `FileStorage` format. On the first run without that file, the CLI validates and imports `~/.atv-credentials.json`, `~/.atv-dmap.json`, and `~/.atv-devices.json` without deleting or modifying those legacy files. A malformed legacy file fails rather than being silently replaced. Old modern HAP records did not record whether they paired AirPlay or standalone MRP, so they are retained as unclassified and require a new `atv pair` before connection; a legacy record whose outer and bundled Companion credentials are identical is imported as Companion-only. The plaintext file is mode `0600`, but is not a keychain. Leave out `deviceId` to use the most recently paired device. An explicit selector matches a paired device ID case-insensitively; blank or unmatched selectors fail instead of silently selecting the last device. Commands rescan discovery and retain only last-known endpoint hints after a successful connection.
+Credentials, protocol settings, DMAP GUIDs and nonsecret endpoint hints use
+`~/.atv-storage.json`, the public versioned `FileStorage` format (plaintext, mode `0600`,
+not a keychain). The first run without that file validates and imports old
+`~/.atv-credentials.json`, `~/.atv-dmap.json` and `~/.atv-devices.json` without deleting them.
+Old HAP records without pairing-carrier provenance remain unclassified until re-pairing;
+duplicate outer/Companion keys import as Companion-only. Corrupt imports reject.
+Omit `deviceId` for the latest eligible record; selectors match keys/known aliases
+case-insensitively, and blank, missing or ambiguous selectors reject.
+Stored endpoint overrides take precedence over discovery hints. Connections try validated
+cached hints first and rescan only after setup failure, before any action is sent.
+Discovery matches known aliases exactly, never by a friendly-name substring.
 
 Control commands use the public `DeviceSession` operation policy, not a separate CLI router.
 Navigation/media/volume prefer eligible AirPlay MRP, enabled standalone MRP, then Companion
@@ -71,7 +81,12 @@ not confirmation of UI, media, volume, or power state.
 
 Output IDs must be the receiver's AirPlay **`psi`** UUID, which `atv scan` prints as `psi=...`; its `deviceid` (MAC) and `pi` are ignored by the TV and time out after five seconds. Comma-separated IDs are trimmed and must be unique and nonblank (checked before connecting). `output add/remove/set` print the confirmed selected outputs afterward; `atv output set ""` is rejected, so the CLI cannot clear all outputs.
 
-`atv dmap-pair` advertises this computer as a Remote on the given local IPv4 interface, prints a random PIN, waits up to five minutes for the TV, and stores the pairing GUID in `~/.atv-dmap.json` (separate from modern credentials, keyed by the device ID shown in the selection list: the AirPlay `deviceid` when the TV also advertises AirPlay on that address, which Apple TV 2/3 normally do, otherwise `dmap:<instance>`). It fails immediately once five wrong PINs lock pairing or the window expires; Ctrl+C cancels, closes the callback server and unpublishes the advertisement. `atv dmap` logs in with that GUID; `[deviceId]` selects among DMAP pairings the same way. Its address is cached like the others. `state` is a one-shot snapshot; the CLI does not use the library's DMAP push updates.
+`atv dmap-pair` advertises this computer as a Remote on the selected local IPv4 interface,
+prints a random PIN and stores the successful GUID under that device's DMAP carrier in
+`~/.atv-storage.json`. Five wrong PINs, expiry or Ctrl+C close the pairing server and
+unpublish the advertisement. `atv dmap` logs in with that GUID, applies DMAP endpoint
+settings over cached hints and uses the same selector rules. `state` is a one-shot
+snapshot; the CLI does not start DMAP push polling.
 
 `atv raop-stream` resolves the receiver's `_raop._tcp` TXT record by browsing mDNS for up to five seconds at the given IPv4 address, then streams the file with `RaopStream`. It supports only receivers that accept unencrypted legacy PCM without a PIN (receivers requiring a legacy seed, password or HAP fail before streaming). Ctrl+C cancels and tears the session down.
 
