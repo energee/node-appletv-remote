@@ -3,7 +3,7 @@
  * contract accepted by RaopStream. Decoding stays outside the packet sender.
  */
 import { spawn } from 'node:child_process';
-import { closeSync, createReadStream, openSync, readSync } from 'node:fs';
+import { closeSync, createReadStream, fstatSync, openSync, readSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import type { ReadableStream } from 'node:stream/web';
 import { wavPcm } from '../raop/wav.js';
@@ -21,84 +21,76 @@ export interface RaopInput {
 function isCompatibleWav(path: string): boolean {
   const fd = openSync(path, 'r');
   try {
+    const length = fstatSync(fd).size;
     const header = Buffer.alloc(12);
-    if (readSync(fd, header, 0, header.length, 0) !== header.length ||
-        header.toString('latin1', 0, 4) !== 'RIFF' || header.toString('latin1', 8, 12) !== 'WAVE') return false;
-    let position = 12;
-    for (;;) {
+    if (length < 20 || readSync(fd, header, 0, 12, 0) !== 12 ||
+        header.toString('latin1', 0, 4) !== 'RIFF' || header.toString('latin1', 8, 12) !== 'WAVE' ||
+        header.readUInt32LE(4) + 8 > length) return false;
+    let position = 12; let compatible = false;
+    while (position + 8 <= length) {
       const chunk = Buffer.alloc(8);
-      if (readSync(fd, chunk, 0, chunk.length, position) !== chunk.length) return false;
-      const size = chunk.readUInt32LE(4);
-      if (chunk.toString('latin1', 0, 4) === 'fmt ') {
-        if (size < 16 || size > 1024) return false;
+      if (readSync(fd, chunk, 0, 8, position) !== 8) return false;
+      const size = chunk.readUInt32LE(4); const end = position + 8 + size + size % 2;
+      if (end > length || end < position) return false;
+      const id = chunk.toString('latin1', 0, 4);
+      if (id === 'data') return compatible;
+      if (id === 'fmt ') {
+        if (compatible || size < 16 || size > 1024) return false;
         const format = Buffer.alloc(16);
-        if (readSync(fd, format, 0, format.length, position + 8) !== format.length) return false;
-        return format.readUInt16LE(0) === 1 && format.readUInt16LE(2) === 2 &&
+        if (readSync(fd, format, 0, 16, position + 8) !== 16) return false;
+        compatible = format.readUInt16LE(0) === 1 && format.readUInt16LE(2) === 2 &&
           format.readUInt32LE(4) === 44100 && format.readUInt16LE(14) === 16;
+        if (!compatible) return false;
       }
-      // Avoid an unbounded or overflowing probe on malformed input. It is decoded by ffmpeg.
-      if (size > 16 * 1024 * 1024 || position > Number.MAX_SAFE_INTEGER - size - 9) return false;
-      position += 8 + size + size % 2;
+      position = end;
     }
-  } finally {
-    closeSync(fd);
-  }
+    return false;
+  } finally { closeSync(fd); }
 }
 
 async function ffmpegInput(input: string, signal: AbortSignal): Promise<RaopInput> {
-  const child = spawn('ffmpeg', ['-nostdin', '-v', 'error', '-i', input, '-f', 's16le', '-ar', '44100', '-ac', '2', 'pipe:1'], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let stderr = '';
-  let startupError: Error | undefined;
-  let exitError: Error | undefined;
-  let exited = false;
+  const child = spawn('ffmpeg', ['-nostdin', '-v', 'error', '-i', input, '-f', 's16le', '-ar', '44100', '-ac', '2', 'pipe:1'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stderr = ''; let startupError: Error | undefined; let exitError: Error | undefined; let stdoutError: Error | undefined;
+  let exited = false; let stopping = false;
   const close = () => {
-    child.stdout.destroy();
-    child.stderr.destroy();
+    stopping = true;
+    child.stdout.destroy(); child.stderr.destroy();
     if (!child.killed && !exited) child.kill('SIGTERM');
   };
   child.stderr.on('data', (data: Buffer) => {
     if (stderr.length < MAX_STDERR) stderr += data.toString('utf8', 0, MAX_STDERR - stderr.length);
   });
+  child.stdout.on('error', (error: Error) => { stdoutError = error; close(); });
   const started = new Promise<void>((resolve, reject) => {
     child.once('spawn', resolve);
     child.once('error', (error: NodeJS.ErrnoException) => {
-      startupError = error.code === 'ENOENT' ? new Error(FFMPEG_MISSING) : error;
-      reject(startupError);
+      startupError = error.code === 'ENOENT' ? new Error(FFMPEG_MISSING) : error; reject(startupError);
     });
   });
-  const finished = new Promise<void>((resolve) => child.once('close', (code, killed) => {
+  const finished = new Promise<void>((resolve) => child.once('close', (code, terminationSignal) => {
     exited = true;
-    if (!startupError && code !== 0 && !killed) exitError = new Error(`ffmpeg exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`);
+    if (!startupError && !stopping && (code !== 0 || typeof terminationSignal === 'string')) {
+      exitError = new Error(`ffmpeg exited ${terminationSignal ? `from ${terminationSignal}` : `with code ${code}`}${stderr ? `: ${stderr.trim()}` : ''}`);
+    }
     resolve();
   }));
   const abort = () => close();
   signal.addEventListener('abort', abort, { once: true });
-  try {
-    await started;
-    if (signal.aborted) throw signal.reason;
-  } catch (error) {
-    signal.removeEventListener('abort', abort);
-    close();
-    await finished;
-    throw error;
-  }
+  try { await started; if (signal.aborted) throw signal.reason; }
+  catch (error) { signal.removeEventListener('abort', abort); close(); await finished; throw error; }
   const source = (async function* (): AsyncIterable<Buffer> {
     try {
       if (signal.aborted) throw signal.reason;
+      if (stdoutError) throw stdoutError;
       for await (const chunk of child.stdout) {
         if (signal.aborted) throw signal.reason;
         if (!Buffer.isBuffer(chunk)) throw new Error('ffmpeg stdout must yield Buffers');
         for (let offset = 0; offset < chunk.length; offset += MAX_CHUNK) yield chunk.subarray(offset, offset + MAX_CHUNK);
       }
       await finished;
+      if (stdoutError) throw stdoutError;
       if (exitError) throw exitError;
-    } finally {
-      signal.removeEventListener('abort', abort);
-      close();
-      await finished;
-    }
+    } finally { signal.removeEventListener('abort', abort); close(); await finished; }
   })();
   return { source, close };
 }
@@ -109,7 +101,10 @@ export async function openRaopInput(input: string, signal: AbortSignal): Promise
     const url = input.slice(4);
     const source = (async function* (): AsyncIterable<Buffer> {
       const response = await fetch(url, { signal });
-      if (!response.ok || !response.body) throw new Error(`Unable to fetch raw PCM: HTTP ${response.status}`);
+      if (!response.ok || !response.body) {
+        await response.body?.cancel();
+        throw new Error(`Unable to fetch raw PCM: HTTP ${response.status}`);
+      }
       const body = Readable.fromWeb(response.body as ReadableStream);
       try {
         for await (const chunk of body) {
@@ -122,8 +117,17 @@ export async function openRaopInput(input: string, signal: AbortSignal): Promise
   }
   if (/^https?:\/\//i.test(input)) return ffmpegInput(input, signal);
   if (input.toLowerCase().endsWith('.pcm')) {
-    const source = createReadStream(input, { highWaterMark: MAX_CHUNK });
-    return { source, close: () => source.destroy?.() };
+    const readable = createReadStream(input, { highWaterMark: MAX_CHUNK });
+    let readError: Error | undefined;
+    readable.on('error', (error) => { readError = error; });
+    const source = (async function* (): AsyncIterable<Buffer> {
+      if (readError) throw readError;
+      try {
+        for await (const chunk of readable) yield chunk;
+        if (readError) throw readError;
+      } finally { readable.destroy(); }
+    })();
+    return { source, close: () => readable.destroy() };
   }
   if (input.toLowerCase().endsWith('.wav') && isCompatibleWav(input)) {
     const readable = createReadStream(input, { highWaterMark: MAX_CHUNK });

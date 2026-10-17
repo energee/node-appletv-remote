@@ -523,25 +523,24 @@ async function cmdDmap(command: keyof typeof DMAP_COMMANDS | 'state', deviceId?:
 }
 
 /** Browse `_raop._tcp` for up to 5 s and return the port and normalized TXT of the service at `address`. */
-function findRaopService(address: string): Promise<{ port: number; txt: Record<string, string> }> {
+function findRaopService(address: string, signal?: AbortSignal): Promise<{ port: number; txt: Record<string, string> }> {
   return new Promise((resolve, reject) => {
-    const bonjour = new Bonjour();
-    let found: Service | undefined;
-    let done = false;
-    const finish = () => {
+    const bonjour = new Bonjour(); let found: Service | undefined; let done = false;
+    const finish = (error?: Error) => {
       if (done) return;
-      done = true;
-      clearTimeout(timer);
-      browser.stop();
-      bonjour.destroy();
-      if (found) resolve({ port: found.port, txt: normalizeTxt(found.txt) });
+      done = true; clearTimeout(timer); browser.stop(); bonjour.destroy();
+      signal?.removeEventListener('abort', abort);
+      if (error) reject(error);
+      else if (found) resolve({ port: found.port, txt: normalizeTxt(found.txt) });
       else reject(new Error(`No _raop._tcp service found at ${address}`));
     };
-    // Stop on the next tick so a callback fired during find() never touches an unassigned browser.
     const browser = bonjour.find({ type: 'raop', protocol: 'tcp' }, (service: Service) => {
       if (!found && service.port && service.addresses?.includes(address)) { found = service; setImmediate(finish); }
     });
     const timer = setTimeout(finish, 5000);
+    const abort = () => finish(signal?.reason instanceof Error ? signal.reason : new Error('RAOP aborted'));
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
   });
 }
 
@@ -560,7 +559,7 @@ async function cmdRaopStream(address: string, input: string) {
     // Start ffmpeg before discovery so a missing dependency cannot establish a playback session.
     source = await openRaopInput(input, cancellation.signal);
     console.error(`Resolving _raop._tcp at ${address}...`);
-    const { port, txt } = await findRaopService(address);
+    const { port, txt } = await findRaopService(address, cancellation.signal);
     const sender = new RaopStream(address, port, txt);
     console.error(`Streaming ${input} to ${address}:${port} (Ctrl+C to stop)...`);
     await sender.stream(source.source, { signal: cancellation.signal });
