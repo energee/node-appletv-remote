@@ -12,6 +12,8 @@ export const STORAGE_VERSION = 1;
 export type Protocol = 'airplay' | 'mrp' | 'companion' | 'raop' | 'dmap';
 type EncodedHap = { clientId: string; clientLTSK: string; clientLTPK: string; serverLTPK: string; serverId: string };
 export type ProtocolCredentials = Partial<Record<'airplay' | 'mrp' | 'companion', EncodedHap>> & {
+  /** Imported old CLI HAP credentials whose original carrier was not recorded; never auto-selected. */
+  unclassified?: EncodedHap;
   raop?: { clientId: string; seed: string };
   dmap?: { guid: string };
 };
@@ -46,7 +48,7 @@ function validate(document: unknown): asserts document is StorageDocument {
     keys.add(r.key);
     if (!Array.isArray(r.aliases) || r.aliases.some(a => typeof a !== 'string' || !a)) bad('aliases must be nonempty strings');
     for (const alias of r.aliases) { const id = alias.toLowerCase(); if (aliases.has(id)) bad(`alias ${alias} belongs to more than one record`); aliases.add(id); }
-    for (const protocol of ['airplay', 'mrp', 'companion'] as const) if (r.credentials?.[protocol]) hap(r.credentials[protocol], protocol);
+    for (const protocol of ['airplay', 'mrp', 'companion', 'unclassified'] as const) if (r.credentials?.[protocol]) hap(r.credentials[protocol], protocol);
     if (r.credentials?.raop) { if (typeof r.credentials.raop.clientId !== 'string' || !r.credentials.raop.clientId) bad('raop lacks clientId'); hex(r.credentials.raop.seed, 32, 'raop.seed'); }
     if (r.credentials?.dmap && (typeof r.credentials.dmap.guid !== 'string' || !r.credentials.dmap.guid)) bad('dmap lacks guid');
   }
@@ -70,6 +72,8 @@ export class DeviceStorage {
   remove(key: string): boolean { this.ready(); const index = this.document.devices.findIndex(r => r.key === key); if (index < 0) return false; this.document.devices.splice(index, 1); this.changed = true; return true; }
   setHap(key: string, protocol: 'airplay' | 'mrp' | 'companion', credentials: HAPCredentials, aliases = [key]): void { const record = this.get(key) ?? { key, aliases }; record.credentials = { ...record.credentials, [protocol]: encodeHap(credentials) }; this.upsert(record); }
   hap(key: string, protocol: 'airplay' | 'mrp' | 'companion'): HAPCredentials | undefined { const value = this.get(key)?.credentials?.[protocol]; return value ? decodeHap(value) : undefined; }
+  /** Preserve old credentials without assigning them to AirPlay or standalone MRP. */
+  setUnclassifiedHap(key: string, credentials: HAPCredentials, aliases = [key]): void { const record = this.get(key) ?? { key, aliases }; record.credentials = { ...record.credentials, unclassified: encodeHap(credentials) }; this.upsert(record); }
   async save(): Promise<void> { this.ready(); if (!this.changed) return; validate(this.document); await this.adapter.save(clone(this.document)); this.changed = false; }
 }
 

@@ -44,8 +44,13 @@ async function storage(): Promise<FileStorage> {
     const cached = existsSync(DEVICES_FILE) ? JSON.parse(readFileSync(DEVICES_FILE, 'utf8')) as Record<string, EndpointHints> : {};
     for (const [key, serialized] of Object.entries(modern)) {
       const credentials = Credentials.deserialize(serialized);
-      store.setHap(key, 'airplay', credentials, [key]);
-      if (credentials.companionCredentials) store.setHap(key, 'companion', credentials.companionCredentials, [key]);
+      const companion = credentials.companionCredentials;
+      if (companion && credentials.clientId === companion.clientId && credentials.clientLTSK.equals(companion.clientLTSK) && credentials.clientLTPK.equals(companion.clientLTPK) && credentials.serverLTPK.equals(companion.serverLTPK) && credentials.serverId === companion.serverId) {
+        store.setHap(key, 'companion', companion, [key]);
+      } else {
+        store.setUnclassifiedHap(key, credentials, [key]);
+        if (companion) store.setHap(key, 'companion', companion, [key]);
+      }
     }
     for (const [key, guid] of Object.entries(dmap)) {
       if (typeof guid !== 'string' || !guid) throw new Error('Legacy DMAP credentials contain an invalid GUID');
@@ -111,17 +116,16 @@ async function cmdScan() {
   });
 }
 
-/** `atv pair`: save AirPlay credentials only after pair-setup proved them. */
+/** `atv pair`: persist credentials under the carrier actually selected by discovery. */
 async function cmdPair() {
   console.log('Scanning for Apple TVs...');
   const device = await selectDevice(await scan({ timeout: 5000 }), 'No Apple TVs found.', String);
   if (!device) return;
   const atv = new AppleTV(device);
   console.log(`Pairing with ${atv.name}...`);
-  const pairSetup = await atv.startPairing();
-  const hapCreds = await pairSetup.finish(await prompt('Enter PIN shown on Apple TV: '));
+  const hapCreds = await (await atv.startPairing()).finish(await prompt('Enter PIN shown on Apple TV: '));
   const store = await storage();
-  store.setHap(device.deviceId, 'airplay', hapCreds, [device.deviceId, ...(device.identifiers ?? [])]);
+  store.setHap(device.deviceId, device.port ? 'airplay' : 'mrp', hapCreds, [device.deviceId, ...(device.identifiers ?? [])]);
   await store.save();
   console.log(`Paired! Credentials saved to ${STORAGE_FILE}`);
 }
@@ -152,12 +156,16 @@ async function loadRecord(protocol: 'airplay' | 'companion' | 'dmap', deviceId?:
   return record;
 }
 
-/** Load modern credentials from their separately typed protocol entries. */
+/** Load a typed modern credential; old unclassified imports intentionally require re-pairing. */
 async function loadCredentials(deviceId?: string): Promise<{ id: string; credentials: Credentials }> {
-  const record = await loadRecord('airplay', deviceId);
+  if (deviceId !== undefined && !deviceId.trim()) throw new Error('Device selector must be nonblank');
   const store = await storage();
-  const airplay = store.hap(record.key, 'airplay')!;
-  return { id: record.key, credentials: new Credentials(airplay, store.hap(record.key, 'companion')) };
+  const records = store.records().filter(record => Boolean(record.credentials?.airplay || record.credentials?.mrp));
+  if (records.length === 0) throw new Error('No typed AirPlay/MRP credentials found. Re-pair this device to classify its transport.');
+  const record = deviceId === undefined ? records[records.length - 1] : records.find(r => r.key.toLowerCase().includes(deviceId.toLowerCase()));
+  if (!record) throw new Error(`No paired device matches "${deviceId}"`);
+  const credential = store.hap(record.key, 'airplay') ?? store.hap(record.key, 'mrp');
+  return { id: record.key, credentials: new Credentials(credential!, store.hap(record.key, 'companion')) };
 }
 
 /**
