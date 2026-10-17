@@ -43,4 +43,9 @@ describe('storage', () => {
     await second.load();
     expect(second.hap('tv', 'airplay')?.serverId).toBe('server-c');
   });
+  it('loads a DMAP-only endpoint whose absent AirPlay port is zero', async () => {
+    const store = new MemoryStorage({ version: 1, devices: [{ key: 'dmap:tv', aliases: ['dmap:tv'], hints: { address: '192.0.2.10', port: 0, dmapPort: 3689 } }] });
+    await store.load();
+    expect(store.resolveConnection('dmap:tv', 'dmap').endpoint).toMatchObject({ port: 0, dmapPort: 3689 });
+  });
 });

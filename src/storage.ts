@@ -76,7 +76,7 @@ function endpoint(value: unknown, label: string): void {
   if (!value || typeof value !== 'object') bad(`${label} must be an object`);
   const hint = value as Record<string, unknown>;
   for (const field of ['name', 'model', 'address', 'companionAddress', 'mrpAddress', 'dmapAddress', 'raopAddress']) if (hint[field] !== undefined && typeof hint[field] !== 'string') bad(`${label}.${field} must be a string`);
-  for (const field of ['port', 'companionPort', 'mrpPort', 'dmapPort', 'raopPort']) if (hint[field] !== undefined && (!Number.isInteger(hint[field]) || (hint[field] as number) < 1 || (hint[field] as number) > 65535)) bad(`${label}.${field} must be a port`);
+  for (const field of ['port', 'companionPort', 'mrpPort', 'dmapPort', 'raopPort']) if (hint[field] !== undefined && (!Number.isInteger(hint[field]) || (hint[field] as number) < (field === 'port' ? 0 : 1) || (hint[field] as number) > 65535)) bad(`${label}.${field} must be a port`);
   if (hint.mrpEnabled !== undefined && typeof hint.mrpEnabled !== 'boolean') bad(`${label}.mrpEnabled must be boolean`);
 }
 function encodeHap(value: HAPCredentials): EncodedHap { return { clientId: value.clientId, clientLTSK: value.clientLTSK.toString('hex'), clientLTPK: value.clientLTPK.toString('hex'), serverLTPK: value.serverLTPK.toString('hex'), serverId: value.serverId }; }
