@@ -47,26 +47,21 @@ precedence over library defaults. Unknown versions and malformed credentials rej
 they are never silently reset. Use `remove(key)` for deletion.
 
 
-## Remote control (AirPlay/MRP)
+## Remote control
 
 ```typescript
-await atv.connect(credentials);
-
-await atv.up();            // also down, left, right, select, menu, home, topMenu
-await atv.playPause();     // also play, pause, stop, next, previous
-await atv.skipForward();   // app's default interval, or pass seconds: skipBackward(30)
-await atv.setPosition(120);
-await atv.setShuffle(ShuffleState.Songs);
-await atv.setRepeat(RepeatState.All);
-await atv.setVolume(40);   // 0–100; also volumeUp, volumeDown
-await atv.wake();          // also suspend
-
-const state = await atv.getNowPlaying(); // unified NowPlayingInfo
-const rawState = await atv.getState();  // raw SetState, retained for compatibility
-const art = await atv.requestArtwork(400, 400); // null if the app has none
-
-await atv.close();
+await atv.connect(credentials); // MRP remains preferred when both transports are open
+await atv.up();                 // also down, left, right, select, menu, home, topMenu
+await atv.playPause();          // also play, pause, stop, next, previous
+await atv.skipForward();        // app default interval, or skipBackward(30)
+await atv.setPosition(120);     // MRP only
+await atv.setShuffle(ShuffleState.Songs); // MRP only
+await atv.setRepeat(RepeatState.All);     // MRP only
+await atv.setVolume(40);        // 0–100; also volumeUp, volumeDown
+await atv.wake();               // also suspend
 ```
+
+With only `connectCompanion(companionCredentials)`, navigation (except `topMenu`), `playPause`, play/pause/next/previous, skip, volume buttons, absolute volume, wake, and suspend use encrypted, acknowledged Companion requests. `stop`, absolute seek, shuffle/repeat, output routing, and now-playing APIs remain MRP-only. Companion HID actions retain single-tap, double-tap, and one-second hold semantics. A completed Companion request means only that the TV accepted the request; navigation, playback, volume, and power state are observational and are not changed optimistically.
 
 ## Media results, state and runtime availability
 
@@ -119,17 +114,14 @@ atv.on('featureAvailability', () => {
 ```
 
 Availability is `supported` (advertised and enabled), `unavailable` (advertised but
-currently disabled), `unsupported` (missing from a received command list), or
-`unknown` (no runtime evidence). Media commands use the active player's command
-list plus client defaults. Volume uses explicit relative/absolute capability
-flags and the known output UID. The flags come from a pushed VolumeControlAvailability
-(type 17), from the reply (type 63) to the GetVolumeControlCapabilities request the
-handshake sends (tvOS 26 does not always push type 17), and from
-VolumeControlCapabilitiesDidChange (type 64) pushes for our output device. A type 63 or
-64 without capabilities leaves earlier flags unchanged. Other public capabilities remain `unknown` rather
-than being guessed from model or service presence. Availability is advisory and
-may change at any time; device errors still reject. The event has no payload:
-re-query the capabilities relevant to your application.
+currently disabled), `unsupported` (missing from a received MRP command list), or
+`unknown` (no runtime evidence). On a Companion-only connection, `_iMC` media-control
+flags provide supported/unavailable evidence for play, pause, next, previous, skip, and
+volume; navigation and play/pause stay unknown because `_iMC` has no defined flags for
+them. A volume-capable `_iMC` update requests the reported volume and emits `volume` only
+for a finite 0–1 reply. Availability is advisory and may change at any time; device
+errors still reject. The event has no payload: re-query capabilities relevant to your
+application.
 
 **Volume on tvOS 26 (#39):** on the tested devices `volume` stayed `undefined` and the
 `volume` event never fired when the TV offered no absolute volume, and `setVolume` sent

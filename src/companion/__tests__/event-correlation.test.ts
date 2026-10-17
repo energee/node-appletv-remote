@@ -4,6 +4,7 @@ import { CompanionConnection } from '../connection.js';
 import { CompanionSession } from '../companion-session.js';
 import { FrameType } from '../framing.js';
 import { opackDecode, opackEncode, type OpackDict, type OpackValue } from '../opack.js';
+import { AppleTV } from '../../appletv.js';
 
 function fixture() {
   const key = Buffer.alloc(32, 7);
@@ -74,6 +75,32 @@ describe('Companion request and event correlation', () => {
       expect(reply.get('_t')).toBe(3);
       expect((reply.get('_c') as OpackDict).get('_vol')).toBe(0.25);
       expect(events).toHaveLength(1);
+    } finally { connection.close(); }
+  });
+
+  it('routes Companion-only controls through encrypted correlated requests', async () => {
+    const { connection, requests, receive } = fixture();
+    const tv = new AppleTV({ name: 'synthetic', address: '127.0.0.1', port: 0, deviceId: 'test', model: 'test', companionPort: 1 });
+    Object.assign(tv, { companionConnection: connection });
+    try {
+      const skip = tv.skipBackward(2.5);
+      const request = requests[0];
+      expect(request.get('_i')).toBe('_mcc');
+      const content = request.get('_c') as OpackDict;
+      expect(content.get('_mcc')).toBe(7);
+      expect(content.get('_skpS')).toBe(-2.5);
+      receive(new Map<OpackValue, OpackValue>([['_x', request.get('_x')!], ['_t', 3], ['_c', new Map()]]));
+      await skip;
+
+      const wake = tv.wake();
+      const down = requests[1];
+      expect((down.get('_c') as OpackDict)).toEqual(new Map([['_hBtS', 1], ['_hidC', 13]]));
+      receive(new Map<OpackValue, OpackValue>([['_x', down.get('_x')!], ['_t', 3], ['_c', new Map()]]));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const up = requests[2];
+      expect((up.get('_c') as OpackDict)).toEqual(new Map([['_hBtS', 2], ['_hidC', 13]]));
+      receive(new Map<OpackValue, OpackValue>([['_x', up.get('_x')!], ['_t', 3], ['_c', new Map()]]));
+      await wake;
     } finally { connection.close(); }
   });
 

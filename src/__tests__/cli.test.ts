@@ -35,7 +35,7 @@ describe('CLI timing defaults', () => {
     expect(AppleTV.prototype.close).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await done;
-    expect(AppleTV.prototype.connect).toHaveBeenCalledWith(expect.anything(), { settleMs: 500 });
+    expect(AppleTV.prototype.connectCompanion).toHaveBeenCalledOnce();
     expect(AppleTV.prototype.close).toHaveBeenCalledOnce();
   });
   it.each([[['power'], 'fetchPowerState', 'on'], [['text', 'focus'], 'fetchTextFocusState', 'focused'], [['app', 'list'], 'appList', []], [['account', 'list'], 'accountList', []]] as const)(
@@ -63,7 +63,7 @@ describe('CLI timing defaults', () => {
   it('honors explicit zero for both waits', async () => {
     vi.spyOn(AppleTV.prototype, 'sendKeyCommand').mockResolvedValue(undefined);
     await run(['command', 'select']);
-    expect(AppleTV.prototype.connect).toHaveBeenCalledWith(expect.anything(), { settleMs: 0 });
+    expect(AppleTV.prototype.connectCompanion).toHaveBeenCalledOnce();
   });
 });
 
@@ -94,12 +94,13 @@ describe('CLI operations', () => {
     [['skip-forward', '10'], 'skipForward', [10]], [['skip-backward', '3'], 'skipBackward', [3]],
     [['shuffle', 'albums'], 'setShuffle', [ShuffleState.Albums]], [['repeat', 'track'], 'setRepeat', [RepeatState.Track]],
     [['volume', '0'], 'setVolume', [0]],
-  ] as const)('dispatches %j over MRP', async (args, method, values) => {
+  ] as const)('dispatches %j over its required transport', async (args, method, values) => {
     const call = vi.spyOn(AppleTV.prototype, method).mockResolvedValue(undefined);
     await run([...args, 'device']);
     expect(call).toHaveBeenCalledWith(...values);
-    expect(AppleTV.prototype.connect).toHaveBeenCalledTimes(1);
-    expect(AppleTV.prototype.connectCompanion).not.toHaveBeenCalled();
+    const companion = args[0] === 'skip-forward' || args[0] === 'skip-backward' || args[0] === 'volume';
+    expect(AppleTV.prototype.connectCompanion).toHaveBeenCalledTimes(companion ? 1 : 0);
+    expect(AppleTV.prototype.connect).toHaveBeenCalledTimes(companion ? 0 : 1);
     expect(AppleTV.prototype.close).toHaveBeenCalledTimes(1);
   });
   it.each([
