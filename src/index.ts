@@ -21,6 +21,8 @@ export { Message } from './message.js';
 export { AirPlayConnection } from './connection.js';
 export type { HAPCredentials } from './auth/types.js';
 export type { ScanOptions, DiscoveredDevice, DiscoveredDeviceInfo } from './discovery.js';
+export { DeviceStorage, MemoryStorage, FileStorage, CustomStorage, STORAGE_VERSION } from './storage.js';
+export type { StorageAdapter, StorageDocument, DeviceRecord, EndpointHints, ProtocolCredentials, Protocol, FileStorageOptions } from './storage.js';
 
 export { LegacyMRPConnection } from './mrp/legacy-connection.js';
 export { MRPConnection } from './mrp/connection.js';
