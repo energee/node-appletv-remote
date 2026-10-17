@@ -1,7 +1,11 @@
 /** Authenticated AirPlay 2 URL playback over the tvOS 18+ remote-control queue. */
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram';
 import { randomUUID, randomBytes } from 'node:crypto';
-import { isIPv6, type Socket } from 'node:net';
+import { createReadStream, promises as fs, type ReadStream, type Stats } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { lookup } from 'node:dns/promises';
+import { isIP, isIPv6, type Socket } from 'node:net';
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
 import { connectSocket, hostForURL, parseHTTPMessage, type ParsedHTTP } from './connection.js';
@@ -25,6 +29,146 @@ export interface AirPlayPlaybackStatus {
   duration?: number;
   position?: number;
   rate?: number;
+}
+
+/** Controls the temporary, single-file HTTP listener created by {@link AirPlayPlaybackSession.playFile}. */
+export interface AirPlayFilePlaybackOptions {
+  /** Concrete local IPv4 or IPv6 address to advertise and bind. Defaults to the route to the receiver. */
+  address?: string;
+}
+
+interface ByteRange { start: number; end: number; }
+
+function parseRange(value: string | undefined, size: number): ByteRange | undefined {
+  if (!value) return;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(value);
+  if (!match || (!match[1] && !match[2]) || size === 0) throw new Error('Invalid range');
+  if (!match[1]) {
+    const length = Number(match[2]);
+    if (!Number.isSafeInteger(length) || length < 1) throw new Error('Invalid range');
+    return { start: Math.max(0, size - length), end: size - 1 };
+  }
+  const start = Number(match[1]);
+  const requestedEnd = match[2] ? Number(match[2]) : size - 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start > requestedEnd || start >= size) throw new Error('Invalid range');
+  return { start, end: Math.min(requestedEnd, size - 1) };
+}
+
+async function routedAddress(host: string, port: number): Promise<string> {
+  const remote = await lookup(host);
+  const socket = createSocket(remote.family === 6 ? 'udp6' : 'udp4');
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.once('error', reject);
+      socket.connect(port, remote.address, () => { socket.removeListener('error', reject); resolve(); });
+    });
+    return socket.address().address;
+  } finally {
+    socket.close();
+  }
+}
+
+class LocalFileServer {
+  private readonly server: Server;
+  private readonly streams = new Set<ReadStream>();
+  private listening = false;
+  private closed = false;
+
+  private constructor(
+    private readonly file: FileHandle,
+    private readonly path: string,
+    private readonly stat: Stats,
+    private readonly token: string,
+    private readonly onError: (error: Error) => void,
+  ) {
+    this.server = createServer((request, response) => { void this.respond(request, response); });
+    this.server.on('error', error => {
+      if (this.listening && !this.closed) {
+        this.close();
+        this.onError(error);
+      }
+    });
+  }
+
+  static async open(path: string, address: string, onError: (error: Error) => void): Promise<LocalFileServer> {
+    const file = await fs.open(path, 'r');
+    try {
+      const stat = await file.stat();
+      if (!stat.isFile()) throw new Error('Local media path must be a regular file');
+      const server = new LocalFileServer(file, path, stat, randomBytes(32).toString('base64url'), onError);
+      await new Promise<void>((resolve, reject) => {
+        server.server.once('error', reject);
+        server.server.listen({ host: address, port: 0 }, () => {
+          server.server.removeListener('error', reject);
+          server.listening = true;
+          resolve();
+        });
+      });
+      return server;
+    } catch (error) {
+      await file.close();
+      throw error;
+    }
+  }
+
+  get url(): string {
+    const address = this.server.address();
+    if (!address || typeof address === 'string') throw new Error('Local media listener is not available');
+    return `http://${hostForURL(address.address)}:${address.port}/${this.token}`;
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const stream of this.streams) stream.destroy();
+    this.streams.clear();
+    this.server.close(() => {
+      void this.file.close().catch(error => {
+        if ((error as NodeJS.ErrnoException).code !== 'EBADF') throw error;
+      });
+    });
+    this.server.closeAllConnections();
+  }
+
+  private async respond(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (this.closed) { response.destroy(); return; }
+    if (request.url !== `/${this.token}`) { response.writeHead(404).end(); return; }
+    if (request.method !== 'GET' && request.method !== 'HEAD') { response.writeHead(405, { Allow: 'GET, HEAD' }).end(); return; }
+    let current: Stats;
+    try {
+      current = await this.file.stat();
+      if (!current.isFile() || current.dev !== this.stat.dev || current.ino !== this.stat.ino || current.size !== this.stat.size || current.mtimeMs !== this.stat.mtimeMs || current.ctimeMs !== this.stat.ctimeMs) throw new Error('Local media file changed while serving');
+    } catch (error) {
+      response.destroy(error instanceof Error ? error : new Error(String(error)));
+      this.close();
+      this.onError(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    let range: ByteRange | undefined;
+    try {
+      range = parseRange(request.headers.range, current.size);
+    } catch {
+      response.writeHead(416, { 'Content-Range': `bytes */${current.size}` }).end();
+      return;
+    }
+    const length = range ? range.end - range.start + 1 : current.size;
+    response.writeHead(range ? 206 : 200, {
+      'Accept-Ranges': 'bytes',
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': String(length),
+      ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${current.size}` } : {}),
+    });
+    if (request.method === 'HEAD') { response.end(); return; }
+    const stream = createReadStream(this.path, { fd: this.file.fd, autoClose: false, start: range?.start, end: range?.end });
+    this.streams.add(stream);
+    stream.once('close', () => this.streams.delete(stream));
+    stream.once('error', error => {
+      response.destroy(error);
+      this.close();
+      this.onError(error);
+    });
+    stream.pipe(response);
+  }
 }
 
 /**
@@ -64,8 +208,29 @@ export class AirPlayPlaybackSession {
   private readonly dacp = randomBytes(8).toString('hex');
   private readonly rtspId = Math.floor(Math.random() * 0xffffffff);
   private failure?: Error;
+  private localFile?: LocalFileServer;
+
 
   constructor(private host: string, private port: number, private credentials: HAPCredentials) {}
+
+  /**
+   * Queue one local regular file through an opaque, temporary HTTP URL. The receiver must be able
+   * to reach the selected LAN address; this serves bytes only and does not transcode media.
+   */
+  async playFile(path: string, position = 0, options: AirPlayFilePlaybackOptions = {}): Promise<void> {
+    if (this.started || this.closed) throw new Error('Playback session already started or closed');
+    const address = options.address ?? await routedAddress(this.host, this.port);
+    if (!isIP(address) || address === '0.0.0.0' || address === '::') throw new Error('Local media address must be a concrete IP address');
+    const localFile = await LocalFileServer.open(path, address, error => this.fail(error));
+    this.localFile = localFile;
+    try {
+      await this.playUrl(localFile.url, position);
+    } catch (error) {
+      this.localFile = undefined;
+      localFile.close();
+      throw error;
+    }
+  }
 
   /** Queue a reachable HTTP(S) media URL. Resolves when accepted, not when media starts or ends; position is seconds. */
   async playUrl(url: string, position = 0): Promise<void> {
@@ -170,6 +335,7 @@ export class AirPlayPlaybackSession {
       const received = info.playbackState ?? 'loading';
       if (typeof received !== 'string' || !['loading', 'playing', 'paused', 'stopped'].includes(received)) throw new Error('Invalid playback state');
       const state = received === 'playing' || received === 'paused' ? received : 'idle';
+      if (received === 'stopped') this.localFile?.close();
       if (info.rate !== undefined && (typeof info.rate !== 'number' || !Number.isFinite(info.rate))) throw new Error('Invalid playback rate');
       return { state, duration: cmTime(info.duration), position: cmTime(info.position), rate: info.rate as number | undefined };
     } catch (error) { this.fail(error as Error); throw error; }
@@ -183,7 +349,10 @@ export class AirPlayPlaybackSession {
     if (!Buffer.isBuffer(data)) return; // updateInfo and other receiver notices carry no nested data.
     const event = parseBuffer(data)[0] as Record<string, unknown>;
     if (event.kind === 'response' && typeof event.messageID === 'number') this.infoWaiters.get(event.messageID)?.resolve(event.info as Record<string, unknown> ?? {});
-    else if (event.type === 'playbackState' && typeof event.name === 'string') this.pushedState = event.name;
+    else if (event.type === 'playbackState' && typeof event.name === 'string') {
+      this.pushedState = event.name;
+      if (event.name === 'stopped') this.localFile?.close();
+    }
   }
 
   /** POST a remote-control command; the receiver expects its plist nested as params.data. */
@@ -202,6 +371,7 @@ export class AirPlayPlaybackSession {
     this.pending = undefined;
     for (const waiter of this.infoWaiters.values()) waiter.reject(reason);
     this.infoWaiters.clear();
+    this.localFile?.close(); this.localFile = undefined;
     this.socket?.destroy(); this.events?.destroy();
     this.socket = undefined; this.events = undefined;
     this.cancelTimingBind?.(); this.cancelTimingBind = undefined;

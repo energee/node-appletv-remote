@@ -3,6 +3,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { createServer, type Socket } from 'node:net';
 import { createSocket } from 'node:dgram';
 import { generateKeyPairSync, diffieHellman, createPublicKey, sign, verify, type KeyObject } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
 import * as api from '../index.js';
@@ -306,6 +309,96 @@ describe('AirPlay URL playback', () => {
     const fake = await receiver(); const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
     try { await expect(playback.playUrl(url)).rejects.toThrow(/HTTP|URL/); expect(fake.requests).toHaveLength(0); }
     finally { playback.close(); await fake.close(); }
+  });
+  it('serves one opaque local file with exact GET, HEAD, and single-range semantics until explicit close', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'atv-local-media-'));
+    const file = join(directory, 'media.bin');
+    const fake = await receiver({ info: { readyToPlay: false, item: { uuid: 'ITEM' } } });
+    const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
+    try {
+      await writeFile(file, 'abcdef');
+      await playback.playFile(file, 1.5, { address: '127.0.0.1' });
+      const url = String((fake.commands[0].item as Record<string, unknown>)['Content-Location']);
+      expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]{43}$/);
+      expect((fake.commands[0].item as Record<string, unknown>)['Start-Position']).toEqual({ value: 1500, timescale: 1000, flags: 1, epoch: 0 });
+      expect(await playback.getStatus()).toEqual({ state: 'idle' });
+      const full = await fetch(url);
+      expect([full.status, await full.text(), full.headers.get('content-length'), full.headers.get('accept-ranges'), full.headers.get('content-type')]).toEqual([200, 'abcdef', '6', 'bytes', 'application/octet-stream']);
+      const head = await fetch(url, { method: 'HEAD' });
+      expect([head.status, await head.text(), head.headers.get('content-length')]).toEqual([200, '', '6']);
+      for (const [range, status, body, contentRange] of [
+        ['bytes=1-3', 206, 'bcd', 'bytes 1-3/6'],
+        ['bytes=4-', 206, 'ef', 'bytes 4-5/6'],
+        ['bytes=-2', 206, 'ef', 'bytes 4-5/6'],
+        ['bytes=4-99', 206, 'ef', 'bytes 4-5/6'],
+      ] as Array<[string, number, string, string]>) {
+        const response = await fetch(url, { headers: { Range: range } });
+        expect([response.status, await response.text(), response.headers.get('content-range'), response.headers.get('content-length')]).toEqual([status, body, contentRange, String(body.length)]);
+      }
+      for (const range of ['bytes=2-1', 'bytes=0-1,3-4', 'bytes=-0', 'items=0-1', 'bytes=9-']) {
+        const response = await fetch(url, { headers: { Range: range } });
+        expect([response.status, response.headers.get('content-range')]).toEqual([416, 'bytes */6']);
+      }
+      expect((await fetch(`${url}?token=leak`)).status).toBe(404);
+      expect((await fetch(`${new URL(url).origin}/not-the-token`)).status).toBe(404);
+      expect((await fetch(url, { method: 'POST' })).status).toBe(405);
+      playback.close();
+      await expect(fetch(url)).rejects.toThrow();
+    } finally {
+      playback.close(); await fake.close(); await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it('rejects unsafe local inputs and cleans the listener on playback failure, file mutation, and receiver completion', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'atv-local-media-'));
+    const file = join(directory, 'media.bin');
+    const failed = await receiver({ commandCode: 500 });
+    const failedPlayback = new Playback('127.0.0.1', failed.port, failed.credentials);
+    try {
+      await writeFile(file, 'abcdef');
+      await expect(failedPlayback.playFile(directory, 0, { address: '127.0.0.1' })).rejects.toThrow(/regular file/);
+      await expect(failedPlayback.playFile(file, 0, { address: '0.0.0.0' })).rejects.toThrow(/concrete/);
+      await expect(failedPlayback.playFile(file, 0, { address: '127.0.0.1' })).rejects.toThrow(/500/);
+      const failedUrl = String((failed.commands[0].item as Record<string, unknown>)['Content-Location']);
+      await expect(fetch(failedUrl)).rejects.toThrow();
+    } finally {
+      failedPlayback.close(); await failed.close();
+    }
+    const fake = await receiver();
+    const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
+    try {
+      await playback.playFile(file, 0, { address: '127.0.0.1' });
+      const url = String((fake.commands[0].item as Record<string, unknown>)['Content-Location']);
+      await writeFile(file, 'changed');
+      await expect(fetch(url)).rejects.toThrow();
+      await expect(playback.getStatus()).rejects.toThrow(/changed/);
+    } finally {
+      playback.close(); await fake.close();
+    }
+    const completed = await receiver();
+    const completionPlayback = new Playback('127.0.0.1', completed.port, completed.credentials);
+    try {
+      await writeFile(file, 'abcdef');
+      await completionPlayback.playFile(file, 0, { address: '127.0.0.1' });
+      const url = String((completed.commands[0].item as Record<string, unknown>)['Content-Location']);
+      completed.push({ type: 'playbackState', name: 'stopped', reason: 'ended' });
+      await vi.waitFor(() => expect(completionPlayback.state).toBe('stopped'), { interval: 5 });
+      await expect(fetch(url)).rejects.toThrow();
+    } finally {
+      completionPlayback.close(); await completed.close(); await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it('brackets an IPv6 local-file URL', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'atv-local-media-'));
+    const file = join(directory, 'media.bin');
+    const fake = await receiver();
+    const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
+    try {
+      await writeFile(file, 'abcdef');
+      await playback.playFile(file, 0, { address: '::1' });
+      expect((fake.commands[0].item as Record<string, unknown>)['Content-Location']).toMatch(/^http:\/\/\[::1\]:\d+\//);
+    } finally {
+      playback.close(); await fake.close(); await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

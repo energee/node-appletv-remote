@@ -54,7 +54,7 @@ export function createClient(info: DiscoveredDeviceInfo, protocol?: 'airplay' | 
 }
 
 export { AirPlayPlaybackSession } from './airplay-playback.js';
-export type { AirPlayPlaybackStatus } from './airplay-playback.js';
+export type { AirPlayFilePlaybackOptions, AirPlayPlaybackStatus } from './airplay-playback.js';
 
 /** One-shot PCM audio streaming to legacy RAOP receivers or, with HAP `credentials`, AirPlay 2 realtime receivers (experimental, #22). */
 export { RaopStream } from './raop/stream.js';
