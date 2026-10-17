@@ -15,6 +15,8 @@ const FFMPEG_MISSING = 'ffmpeg is required for this input. Install ffmpeg, or us
 
 export interface RaopInput {
   source: RaopPcmSource;
+  /** Resolves on an asynchronous pre-consumption source failure. */
+  failure?: Promise<Error>;
   close(): void;
 }
 
@@ -33,7 +35,7 @@ function isCompatibleWav(path: string): boolean {
       const size = chunk.readUInt32LE(4); const end = position + 8 + size + size % 2;
       if (end > length || end < position) return false;
       const id = chunk.toString('latin1', 0, 4);
-      if (id === 'data') return compatible;
+      if (id === 'data') return compatible && size % 4 === 0;
       if (id === 'fmt ') {
         if (compatible || size < 16 || size > 1024) return false;
         const format = Buffer.alloc(16);
@@ -60,7 +62,8 @@ async function ffmpegInput(input: string, signal: AbortSignal): Promise<RaopInpu
   child.stderr.on('data', (data: Buffer) => {
     if (stderr.length < MAX_STDERR) stderr += data.toString('utf8', 0, MAX_STDERR - stderr.length);
   });
-  child.stdout.on('error', (error: Error) => { stdoutError = error; close(); });
+  const failure = Promise.withResolvers<Error>();
+  child.stdout.on('error', (error: Error) => { stdoutError = error; failure.resolve(error); close(); });
   const started = new Promise<void>((resolve, reject) => {
     child.once('spawn', resolve);
     child.once('error', (error: NodeJS.ErrnoException) => {
@@ -92,7 +95,7 @@ async function ffmpegInput(input: string, signal: AbortSignal): Promise<RaopInpu
       if (exitError) throw exitError;
     } finally { signal.removeEventListener('abort', abort); close(); await finished; }
   })();
-  return { source, close };
+  return { source, failure: failure.promise, close };
 }
 
 /** Select a finite CLI input route without buffering a track. `pcm:` makes remote raw PCM explicit. */
@@ -117,21 +120,18 @@ export async function openRaopInput(input: string, signal: AbortSignal): Promise
   }
   if (/^https?:\/\//i.test(input)) return ffmpegInput(input, signal);
   if (input.toLowerCase().endsWith('.pcm')) {
-    const readable = createReadStream(input, { highWaterMark: MAX_CHUNK });
-    let readError: Error | undefined;
-    readable.on('error', (error) => { readError = error; });
     const source = (async function* (): AsyncIterable<Buffer> {
-      if (readError) throw readError;
-      try {
-        for await (const chunk of readable) yield chunk;
-        if (readError) throw readError;
-      } finally { readable.destroy(); }
+      const readable = createReadStream(input, { highWaterMark: MAX_CHUNK });
+      try { yield* readable; } finally { readable.destroy(); }
     })();
-    return { source, close: () => readable.destroy() };
+    return { source, close: () => {} };
   }
   if (input.toLowerCase().endsWith('.wav') && isCompatibleWav(input)) {
-    const readable = createReadStream(input, { highWaterMark: MAX_CHUNK });
-    return { source: wavPcm(readable), close: () => readable.destroy?.() };
+    const source = (async function* (): AsyncIterable<Buffer> {
+      const readable = createReadStream(input, { highWaterMark: MAX_CHUNK });
+      yield* wavPcm(readable);
+    })();
+    return { source, close: () => {} };
   }
   return ffmpegInput(input, signal);
 }

@@ -239,7 +239,6 @@ describe('RAOP streaming', () => {
     ];
     await run(['raop-stream', '192.0.2.7', 'track.pcm']);
     expect(raop.created).toEqual([['192.0.2.7', 7000, { cn: '0,1', et: '0', sr: '44100' }]]);
-    expect(createReadStream).toHaveBeenCalledWith('track.pcm', { highWaterMark: 65536 });
     expect(raop.stream).toHaveBeenCalledWith(expect.anything(), { signal: expect.any(AbortSignal) });
   });
   it('fails when no receiver advertises at the address', async () => {

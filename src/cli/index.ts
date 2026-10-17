@@ -559,7 +559,10 @@ async function cmdRaopStream(address: string, input: string) {
     // Start ffmpeg before discovery so a missing dependency cannot establish a playback session.
     source = await openRaopInput(input, cancellation.signal);
     console.error(`Resolving _raop._tcp at ${address}...`);
-    const { port, txt } = await findRaopService(address, cancellation.signal);
+    const discovery = findRaopService(address, cancellation.signal);
+    const { port, txt } = source.failure
+      ? await Promise.race([discovery, source.failure.then((error) => { cancellation.abort(error); throw error; })])
+      : await discovery;
     const sender = new RaopStream(address, port, txt);
     console.error(`Streaming ${input} to ${address}:${port} (Ctrl+C to stop)...`);
     await sender.stream(source.source, { signal: cancellation.signal });
