@@ -17,8 +17,7 @@ atv messages [deviceId]           # stream raw MRP messages until Ctrl+C
 atv keyboard [deviceId]           # stream keyboard/text events
 atv --help                       # complete syntax and available keys
 
-# AirPlay/MRP only
-atv remote [deviceId]             # interactive remote
+# AirPlay/MRP-only operations
 atv stop [deviceId]
 atv seek 120.5 [deviceId]         # absolute position in seconds (>= 0)
 atv shuffle songs [deviceId]      # off, albums, songs
@@ -26,9 +25,11 @@ atv repeat all [deviceId]         # off, track, all
 atv output list [deviceId]        # selected outputs, tab-separated ID and name
 atv output add <psi-uuid>[,<psi-uuid>...] [deviceId]  # also remove, set
 
-# Companion only (requires atv companion-pair)
+# Shared MRP/Companion controls
 atv skip-forward 30 [deviceId]    # positive seconds; skip-backward also supported
 atv volume 40 [deviceId]          # absolute volume, 0..100, when advertised
+
+# Companion-only operations (requires atv companion-pair)
 atv text set "search words" [deviceId]  # prints the new text; fails if no field is focused
 atv text append " more" [deviceId]
 atv text clear [deviceId]
@@ -53,7 +54,20 @@ atv raop-stream 192.168.1.20 track.pcm  # raw PCM16LE stereo 44.1 kHz, no WAV he
 
 Credentials, DMAP GUIDs, and nonsecret endpoint hints are saved in `~/.atv-storage.json`, the public versioned `FileStorage` format. On the first run without that file, the CLI validates and imports `~/.atv-credentials.json`, `~/.atv-dmap.json`, and `~/.atv-devices.json` without deleting or modifying those legacy files. A malformed legacy file fails rather than being silently replaced. Old modern HAP records did not record whether they paired AirPlay or standalone MRP, so they are retained as unclassified and require a new `atv pair` before connection; a legacy record whose outer and bundled Companion credentials are identical is imported as Companion-only. The plaintext file is mode `0600`, but is not a keychain. Leave out `deviceId` to use the most recently paired device. An explicit selector matches a paired device ID case-insensitively; blank or unmatched selectors fail instead of silently selecting the last device. Commands rescan discovery and retain only last-known endpoint hints after a successful connection.
 
-One-shot `command` uses Companion for navigation (except `top_menu`/`home_hold`), media, volume buttons, wake, and suspend; `skip-forward`, `skip-backward`, and `volume` are also Companion-only. The interactive `remote` remains MRP-only. Text/app/account/power/click/swipe commands and extra buttons open only Companion. `command` (alias `cmd`) accepts `skip_forward` / `skip_backward` for Companion's default 10-second interval; use the hyphenated commands to specify seconds. Extra Companion buttons are `channel_up`, `channel_down`, `screensaver`, `guide`, `page_up`, and `page_down` (not available in the MRP-only interactive remote). An optional action (`singleTap`, `doubleTap`, `hold`; case-insensitive) may follow navigation/HID keys and Companion buttons; media keys, `wake`, `suspend`, skips and `home_hold` reject it before connecting. A successful Companion command is accepted by the TV, not confirmation of UI, media, volume, or power state.
+Control commands use the public `DeviceSession` operation policy, not a separate CLI router.
+Navigation/media/volume prefer eligible AirPlay MRP, enabled standalone MRP, then Companion
+and supported DMAP controls; wake/suspend prefer Companion. A one-shot opens only the selected
+operation's provider. `remote` opens configured credential-bearing providers and reports a clear
+unavailable-operation error instead of fabricating a Companion stop/seek/queue implementation.
+Text/app/account/power/click/swipe and extra buttons use only Companion. Keys remain paired
+to their actual carrier; the CLI never sends standalone MRP credentials to an AirPlay endpoint.
+Once an action is dispatched its error is propagated, never retried through another protocol.
+`command` (alias `cmd`) accepts `skip_forward` / `skip_backward` for the provider's default;
+use hyphenated commands to specify seconds. Extra buttons are `channel_up`, `channel_down`,
+`screensaver`, `guide`, `page_up`, and `page_down`. Optional `singleTap`, `doubleTap`, and `hold`
+actions follow supported HID/buttons; media commands, wake/suspend and `home_hold` reject
+modifiers before connection. DMAP does not support hold/double-tap. Companion acceptance is
+not confirmation of UI, media, volume, or power state.
 
 Output IDs must be the receiver's AirPlay **`psi`** UUID, which `atv scan` prints as `psi=...`; its `deviceid` (MAC) and `pi` are ignored by the TV and time out after five seconds. Comma-separated IDs are trimmed and must be unique and nonblank (checked before connecting). `output add/remove/set` print the confirmed selected outputs afterward; `atv output set ""` is rejected, so the CLI cannot clear all outputs.
 

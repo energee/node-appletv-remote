@@ -40,22 +40,27 @@ await atv.close();
 
 Apps, accounts, text input, and Companion-only navigation/media/volume/power control need a second, Companion pairing: `startCompanionPairing()` then `connectCompanion()`. A successful Companion control reply acknowledges acceptance, not a resulting UI, playback, volume, or power-state change; observe the normal state events separately. See the [library guide](https://github.com/energee/node-appletv-remote/blob/main/docs/library.md).
 
+`DeviceSession` offers typed, per-operation routing over separately paired AirPlay, standalone
+MRP, Companion and legacy DMAP clients. It selects before sending and never replays a failed
+action through another protocol; see [routed sessions](docs/library.md#routed-sessions).
+This orchestration API is synthetic-peer verified; physical mixed-protocol validation is pending.
+
 ## CLI
 
 ```bash
 atv scan                          # find Apple TVs
 atv pair                          # AirPlay pairing (enter the PIN shown on the TV)
 atv companion-pair                # Companion pairing, needed for Companion-only controls/apps/accounts/power/text
-atv remote                        # interactive MRP remote; type `help`
-atv command play                  # Companion-only one-shot navigation/media/power command
-atv state                         # what's playing (MRP)
-atv volume 40                     # Companion-only absolute volume when advertised
+atv remote                        # interactive remote over configured paired protocols
+atv command play                  # one-shot routed control
+atv state                         # normalized now-playing snapshot
+atv volume 40                     # absolute volume when the selected provider advertises it
 atv app launch com.netflix.Netflix
 atv text set "search words"
 atv --help                        # every command
 ```
 
-Credentials are saved to `~/.atv-credentials.json`; every command takes an optional `deviceId` and defaults to the most recently paired device. See the [CLI reference](https://github.com/energee/node-appletv-remote/blob/main/docs/cli.md).
+Credentials and endpoint hints use `~/.atv-storage.json`; every command takes an optional `deviceId` and defaults to the most recent eligible paired record. Legacy files are imported non-destructively. See the [CLI reference](https://github.com/energee/node-appletv-remote/blob/main/docs/cli.md).
 
 ## Tested on
 

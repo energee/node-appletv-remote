@@ -10,7 +10,7 @@ import type { OpackDict, OpackValue } from '../companion/opack.js';
 const state = vi.hoisted(() => ({
   mrp: [] as Array<EventEmitter & { bytes: Buffer[]; close: () => void }>,
   companion: [] as Array<EventEmitter & { requests: Array<[string, OpackDict]>; close: () => void }>,
-  failMRP: false, failCompanion: false, rejectCommand: false,
+  failMRP: false, failCompanion: false, failAfterCompanionState: false, rejectCommand: false,
   pauseMRP: undefined as undefined | (() => Promise<void>),
 }));
 // Mock factories run before static imports initialize; dynamic imports intentionally establish this transport-module boundary.
@@ -42,6 +42,10 @@ vi.mock('../companion/connection.js', async () => {
     close = vi.fn(() => { this.emit('close'); });
     async sendRequest(identifier: string, content: OpackDict) {
       this.requests.push([identifier, content]);
+      if (state.failAfterCompanionState && identifier === '_systemInfo') {
+        this.emit('event', { identifier: 'SystemStatus', data: new Map<OpackValue, OpackValue>([['_c', new Map([['state', 3]])]]) });
+        throw new Error('Companion setup lost after state');
+      }
       return new Map<OpackValue, OpackValue>([['_c', new Map()]]);
     }
     sendMessage(identifier: string, content: OpackDict) { this.requests.push([identifier, content]); }
@@ -57,7 +61,7 @@ const credentials = { airplay: keys, mrp: keys, companion: keys };
 
 beforeEach(() => {
   state.mrp.length = 0; state.companion.length = 0;
-  state.failMRP = state.failCompanion = state.rejectCommand = false;
+  state.failMRP = state.failCompanion = state.failAfterCompanionState = state.rejectCommand = false;
   state.pauseMRP = undefined;
 });
 
@@ -179,6 +183,20 @@ describe('setup, loss and teardown', () => {
       expect(session.featureAvailability('appList')).toBe('unavailable');
       await session.execute('play');
       expect(state.mrp[0].bytes).toHaveLength(1);
+    } finally { await session.close(); }
+  });
+
+  it('does not publish unready optional-provider state when setup fails', async () => {
+    state.failAfterCompanionState = true;
+    const session = new DeviceSession(device, { credentials: { airplay: keys, companion: keys },
+      transports: { airplay: {}, companion: { required: false } } });
+    const powers: PowerState[] = [];
+    session.on('powerState', power => powers.push(power));
+    await session.connect();
+    try {
+      expect(powers).toEqual([]);
+      expect(session.powerState).toBe(PowerState.Unknown);
+      expect(session.featureAvailability('fetchPowerState')).toBe('unavailable');
     } finally { await session.close(); }
   });
 

@@ -167,7 +167,7 @@ async function findDevice(record: DeviceRecord, accepts: (device: DiscoveredDevi
   console.error('Finding device...');
   const aliases = new Set([record.key, ...record.aliases].map(alias => alias.toLowerCase()));
   const matches = (device: DiscoveredDeviceInfo) => aliases.has(device.deviceId.toLowerCase()) ||
-    device.identifiers?.some(alias => aliases.has(alias.toLowerCase()));
+    !!device.identifiers?.some(alias => aliases.has(alias.toLowerCase()));
   // The public session policy decides endpoint eligibility before any authentication or command.
   const devices = await scan({ timeout: 5000, until: (device) => matches(device) && accepts(device) });
   const matchesFound = devices.filter(device => matches(device) && accepts(device));

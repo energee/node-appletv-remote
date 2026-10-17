@@ -47,6 +47,66 @@ precedence over library defaults. Unknown versions and malformed credentials rej
 they are never silently reset. Use `remove(key)` for deletion.
 
 
+## Routed sessions
+
+`DeviceSession` configures independent clients with credentials keyed by their actual pairing
+carrier. It does not convert AirPlay keys into standalone MRP or Companion keys. Explicit
+credentials cause no storage access. Construct the session before connecting when initial
+events matter:
+
+```typescript
+import { DeviceSession } from 'node-appletv-remote';
+
+const session = new DeviceSession(device, {
+  credentials: { airplay: credentials, companion: companionCredentials },
+  transports: { airplay: {}, companion: { required: false } },
+  preferences: { wake: 'companion' },
+});
+session.on('nowPlaying', info => console.log(info.toString()));
+session.on('connection', event => console.log(event.protocol, event.state));
+session.on('transportError', ({ protocol, error }) => console.error(protocol, error.message));
+await session.connect();
+try {
+  await session.execute('play');
+  await session.execute('appList');
+  console.log(await session.execute('getNowPlaying'));
+} finally {
+  await session.close();
+}
+```
+
+`connectDevice(device, options)` is the convenience form returning an already-ready session.
+`execute(operation, ...arguments)` retains the underlying `AppleTV` argument/result types;
+`sendKeyCommand` and exported `KEY_OPERATIONS` use the same policy. A DMAP provider rejects
+hold/double-tap before transmission instead of silently performing a single action.
+
+Playback/metadata/queue/artwork/routing prefer an eligible AirPlay MRP tunnel, then enabled
+standalone MRP. Shared navigation/media/volume operations can next select Companion, then
+an implemented DMAP operation. Apps, accounts, text, touch and power prefer Companion.
+DMAP normalizes `getNowPlaying` through its existing state request; it does not implement
+MRP queue/routing. Known AppleTV1–3 models never become modern AirPlay tunnels.
+
+`preferences` are strict operation overrides: an unimplemented or unconfigured choice rejects
+before setup; an unavailable override does not choose another protocol. Without an override,
+known unsupported/unavailable implementations are excluded before transmission. `unknown`
+means no device evidence, not no implementation. Selection occurs once per call; errors,
+timeouts and disconnects after dispatch propagate without replay on another protocol.
+
+Omitting `transports` opens eligible credential-bearing providers. Explicit entries default to
+required; required setup failure closes the whole attempt, while optional failure emits
+`connection: failed` and `transportError`. `operations: ['getNowPlaying']` limits setup to
+providers selected for those operations, as used by one-shot CLI commands.
+
+There is one authoritative source per normalized state event, independent of action availability.
+Setup state is coalesced until that source is ready. Loss invalidates its cached state and
+availability; later calls may choose another already-ready provider. DMAP terminal authentication
+loss participates in that invalidation. `connection` distinguishes `ready`, unexpected `lost`,
+intentional `closed`, and optional setup `failed`. `close()` cancels setup and owned transports,
+detaches forwarding, and is idempotent. Sessions are single-use: no reconnect or automatic retry.
+
+Verification uses synthetic MRP/Companion fixtures and a real local HTTP DMAP peer. Physical
+mixed-protocol/Companion-only interoperability remains unverified for this session API.
+
 ## Remote control
 
 ```typescript

@@ -64,7 +64,7 @@ export interface SessionConnectionEvent {
   error?: Error;
 }
 
-type Provider = { protocol: ControlProtocol; client: AppleTV | DmapClient; ready: boolean; required: boolean; closed: boolean; snapshot?: NowPlayingInfo; detach: () => void };
+type Provider = { protocol: ControlProtocol; client: AppleTV | DmapClient; ready: boolean; required: boolean; closed: boolean; snapshot?: NowPlayingInfo; pendingState: Record<string, unknown>; detach: () => void };
 const implementations: Record<ControlProtocol, readonly SessionOperation[]> = {
   airplay: MRP_OPERATIONS, mrp: MRP_OPERATIONS,
   companion: COMPANION_OPERATIONS, dmap: DMAP_OPERATIONS,
@@ -76,6 +76,14 @@ const companionFirst: Partial<Record<SessionOperation, true>> = Object.fromEntri
 const operationFeatures: Partial<Record<SessionOperation, Feature>> = {
   getNowPlaying: 'getState', getState: 'getState', requestPlaybackQueue: 'getState', requestArtwork: 'requestArtwork',
   insertText: 'setText', clearText: 'setText', getText: 'setText',
+};
+const STATE_OPERATIONS: Record<string, SessionOperation> = {
+  nowPlaying: 'getNowPlaying', volume: 'setVolume', outputDevices: 'requestPlaybackQueue',
+  powerState: 'fetchPowerState', textFocusState: 'fetchTextFocusState', keyboard: 'getState', textInput: 'getState',
+};
+const DMAP_ACTION_OPERATIONS: Partial<Record<SessionOperation, true>> = {
+  up: true, down: true, left: true, right: true, select: true, menu: true,
+  topMenu: true, playPause: true, volumeUp: true, volumeDown: true,
 };
 /**
  * One session, separate protocol credentials and clients, no action replay or reconnect.
@@ -155,7 +163,7 @@ export class DeviceSession extends EventEmitter {
         if (generation !== this.generation) throw new Error('Session closed during setup');
         const client = protocol === 'dmap' ? new DmapClient(this.device) :
           new AppleTV({ ...this.device, port: protocol === 'mrp' || protocol === 'companion' ? 0 : this.device.port });
-        const provider: Provider = { protocol, client, ready: false, closed: false,
+        const provider: Provider = { protocol, client, ready: false, closed: false, pendingState: {},
           required: this.requirements[protocol]?.required !== false, detach: () => {} };
         this.providers.set(protocol, provider);
         this.observe(provider);
@@ -166,8 +174,14 @@ export class DeviceSession extends EventEmitter {
           if (generation !== this.generation || this.providers.get(protocol) !== provider) throw new Error('Session closed during setup');
           provider.ready = true;
           this.emit('connection', { protocol, state: 'ready' } satisfies SessionConnectionEvent);
+          if (generation !== this.generation) throw new Error('Session closed during setup');
+          for (const [event, value] of Object.entries(provider.pendingState)) {
+            if (this.authority(STATE_OPERATIONS[event]) === provider) this.publish(event, value);
+          }
+          provider.pendingState = {};
         } catch (cause) {
           provider.ready = false;
+          provider.pendingState = {};
           provider.detach();
           if (!provider.closed) { provider.closed = true; await client.close(); }
           if (generation !== this.generation) throw new Error('Session closed during setup');
@@ -223,14 +237,12 @@ export class DeviceSession extends EventEmitter {
       loss(cause instanceof Error ? cause : new Error('DMAP push connection lost'));
       void client.close();
     });
-    const states: Record<string, SessionOperation> = {
-      nowPlaying: 'getNowPlaying', volume: 'setVolume', outputDevices: 'requestPlaybackQueue',
-      powerState: 'fetchPowerState', textFocusState: 'fetchTextFocusState', keyboard: 'getState', textInput: 'getState',
-    };
-    for (const [event, operation] of Object.entries(states)) listen(event, (...args) => {
+    for (const [event, operation] of Object.entries(STATE_OPERATIONS)) listen(event, (...args) => {
+      if (!current()) return;
       if (event === 'nowPlaying' && args[0] instanceof NowPlayingInfo) provider.snapshot = args[0];
-      // Setup pushes precede ready. They may be published but never treated as a ready action provider.
-      if (current() && this.authority(operation)?.protocol === protocol) this.publish(event, args[0]);
+      // Coalesce setup state, then publish it only after this transport is authenticated and ready.
+      if (!provider.ready) provider.pendingState[event] = args[0];
+      else if (this.authority(operation)?.protocol === protocol) this.publish(event, args[0]);
     });
     for (const event of ['message', 'companionEvent', 'featureAvailability']) listen(event, (...args) => {
       if (current()) this.emit(event, ...args);
@@ -250,7 +262,7 @@ export class DeviceSession extends EventEmitter {
     for (const protocol of this.candidates(operation)) {
       const provider = this.providers.get(protocol);
       // State ownership is independent of whether an action is currently enabled (e.g. a read-only volume source).
-      if (provider && (provider.ready || this.state === 'connecting')) return provider;
+      if (provider?.ready) return provider;
     }
     return undefined;
   }
@@ -292,6 +304,8 @@ export class DeviceSession extends EventEmitter {
     if (this.state !== 'ready') throw new Error('Session is not ready');
     const provider = this.select(operation)!;
     if (!implementations[provider.protocol].includes(operation)) throw new Error(`No implementation for ${operation}`);
+    if (provider.protocol === 'dmap' && DMAP_ACTION_OPERATIONS[operation] &&
+        args[0] !== undefined && args[0] !== 'singleTap') throw new Error('DMAP does not support input action modes');
     const method = provider.client instanceof DmapClient && operation === 'getNowPlaying' ? 'getState' : operation;
     // The implementation table establishes that this in-process method exists; heterogeneous signatures require erasure at dispatch only.
     const callable = (provider.client as unknown as Record<string, (...values: unknown[]) => unknown>)[method];

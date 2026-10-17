@@ -47,6 +47,21 @@ plaintext rather than a keychain. `CustomStorage` accepts an adapter with async
 
 `AppleTV.connect()` and `startPairing()` preserve the AirPlay tunnel when advertised, otherwise select enabled standalone MRP. Companion-only devices use `connectCompanion()` and `startCompanionPairing()`; calling the MRP methods fails before opening a socket. Standalone credentials use the existing `Credentials` format but must be paired with the selected protocol; AirPlay pairing does not imply legacy MRP pairing. A returned PairSetup owns its open pairing carrier: always call `finish(pin)` or `destroy()`; abandoning it without either intentionally leaves pairing open. `PairSetup.clientId` is a public readonly controller pairing identifier (a random UUID per instance); it is sent in M5 and returned as `clientId` in the finished credentials.
 
+`DeviceSession` is the shared high-level routing policy used by the CLI. Each configured
+provider owns its actual `AppleTV` or `DmapClient`, so credentials, request correlation,
+handshake readiness and encryption counters remain per carrier. The operation table
+contains only implemented public methods; discovery ports do not establish runtime support.
+Metadata/queue/routing prefer MRP, while apps/text/touch/power prefer Companion. Explicit
+preferences are strict, and no failure after dispatch triggers a second provider.
+
+Handlers attach before setup. Normalized setup state is coalesced until the provider is
+ready and forwarded only from its authoritative source. Optional failure is observable,
+required failure closes the attempt, and close-during-setup cannot resurrect a provider.
+Terminal DMAP authentication loss emits `close` and invalidates the routed cached state;
+ordinary request errors remain the original operation failure. Session closure detaches
+forwarding before closing each owned client and does not initiate reconnect.
+
+
 A standalone MRP connection sends a heartbeat (a GenericMessage) every 30 s, never overlapping another. Any reply carrying the request's identifier counts, whatever its type; a miss is retried once immediately, and a second miss fails the connection.
 
 Discovery associates modern services by compatible advertised identity, primary-protocol hostname, or overlapping primary-protocol addresses, never by display name. AirPlay `deviceid` and MRP `macAddress` share a MAC namespace; MRP `UniqueIdentifier` and Companion `rpMRtID` share an MRP namespace. Other cross-protocol ID equality does not establish an association. Conflicting IDs within a namespace keep devices separate. Same-protocol records with disjoint addresses and different SRV hosts remain separate even when their IDs match; duplicate device IDs are ambiguous, not verified identities. Primary endpoint overlap is scoped to the selected protocol host. Records matching multiple groups remain separate instead of bridging them, independent of arrival order; an ambiguous result must not be treated as a verified TV.
