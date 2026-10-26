@@ -3,15 +3,17 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AppleTV } from '../appletv.js';
 import { NowPlayingInfo, PlaybackState } from '../now-playing-info.js';
 
-const input = vi.hoisted(() => ({ companion: false, discoveryError: undefined as Error | undefined }));
+const input = vi.hoisted(() => ({ companion: false, airplay: true, second: false, discoveryError: undefined as Error | undefined }));
 vi.mock('node:fs', () => ({ realpathSync: (path: string) => path, existsSync: vi.fn(() => true), readFileSync: vi.fn(() => '{"device":"credentials"}'), writeFileSync: vi.fn(), createReadStream: vi.fn() }));
 vi.mock('node:fs/promises', () => ({
   readFile: async () => JSON.stringify({ version: 1, devices: [{
     key: 'device', aliases: ['device'], credentials: {
-      airplay: { clientId: 'client', clientLTSK: 'a'.repeat(64), clientLTPK: 'b'.repeat(64), serverLTPK: 'c'.repeat(64), serverId: 'server' },
+      ...(input.airplay ? { airplay: { clientId: 'client', clientLTSK: 'a'.repeat(64), clientLTPK: 'b'.repeat(64), serverLTPK: 'c'.repeat(64), serverId: 'server' } } : {}),
       ...(input.companion ? { companion: { clientId: 'companion', clientLTSK: 'd'.repeat(64), clientLTPK: 'e'.repeat(64), serverLTPK: 'f'.repeat(64), serverId: 'server' } } : {}),
     },
-  }] }),
+  }, ...(input.second ? [{ key: 'device-2', aliases: ['device-2'], credentials: {
+    airplay: { clientId: 'client2', clientLTSK: 'a'.repeat(64), clientLTPK: 'b'.repeat(64), serverLTPK: 'c'.repeat(64), serverId: 'server2' },
+  } }] : [])] }),
   mkdir: async () => {}, writeFile: async () => {}, chmod: async () => {}, rename: async () => {}, rm: async () => {},
 }));
 vi.mock('../discovery.js', () => ({ scan: vi.fn() }));
@@ -29,7 +31,7 @@ function capture(chunk: string | Uint8Array, encoding?: BufferEncoding | WriteCa
   return true;
 }
 beforeEach(() => {
-  lines = []; input.companion = false; input.discoveryError = undefined;
+  lines = []; input.companion = false; input.airplay = true; input.second = false; input.discoveryError = undefined;
   vi.clearAllMocks();
   vi.mocked(scan).mockImplementation(async () => {
     if (input.discoveryError) throw input.discoveryError;
@@ -210,6 +212,18 @@ it('cancels setup with one terminal outcome and no cleanup-generated events', as
   process.emit('SIGINT'); await watching;
   expect(records()).toMatchObject([{ command: 'watch-close', data: { reason: 'signal', signal: 'SIGINT', intentional: true } }]);
   expect(process.exitCode).toBe(130);
+});
+
+it('reports an ambiguous device selector as invalid_arguments', async () => {
+  input.second = true;
+  await main(['--json', 'state', 'dev']);
+  expect(records()).toMatchObject([{ type: 'error', command: 'state', data: { code: 'invalid_arguments' } }]);
+});
+
+it('reports an operation no stored pairing can perform as credentials_unavailable', async () => {
+  input.airplay = false; input.companion = true;
+  await main(['--json', 'state']);
+  expect(records()).toMatchObject([{ type: 'error', command: 'state', data: { code: 'credentials_unavailable' } }]);
 });
 
 it('reports Companion setup failure once without mislabeling cleanup as unexpected loss', async () => {

@@ -333,6 +333,24 @@ describe('starting MRP volume', () => {
     await tv.close();
   });
 
+  // Family Room (AppleTV6,2, tvOS 26.6): detaching AirPods pushes capabilities 3 → 1 → 0 for our
+  // output; reattaching pushes 2 → 3. The AirPods level must not linger on the TV speakers.
+  it('clears volume when the output loses absolute volume and asks again when it returns', async () => {
+    vi.useFakeTimers();
+    const { tv, requests, events, conn } = await connected(3, (conn, identifier) =>
+      push(conn, { type: MessageType.GetVolumeResult, identifier, '.getVolumeResultMessage': { volume: 0.75 } }));
+    const capabilities = (volumeCapabilities: number) => push(conn, { type: MessageType.VolumeControlAvailability, '.volumeControlAvailabilityMessage': { volumeControlAvailable: true, volumeCapabilities } });
+    await capabilities(1);
+    expect(tv.volume).toBeUndefined();
+    expect(events).toEqual([75, undefined]);
+    await capabilities(3);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requests).toHaveLength(2);
+    expect(tv.volume).toBe(75);
+    expect(events).toEqual([75, undefined, 75]);
+    await tv.close();
+  });
+
   // tvOS 26.6 answered 0 once with AirPods attaching and absolute volume reported (0.75 later),
   // and answers 0 for any unknown output UID, so 0 is not a reading.
   it.each([

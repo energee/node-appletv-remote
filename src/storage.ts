@@ -12,7 +12,7 @@ export const STORAGE_VERSION = 1;
 export type Protocol = 'airplay' | 'mrp' | 'companion' | 'raop' | 'dmap';
 type EncodedHap = { clientId: string; clientLTSK: string; clientLTPK: string; serverLTPK: string; serverId: string };
 export type ProtocolCredentials = Partial<Record<'airplay' | 'mrp' | 'companion', EncodedHap>> & {
-  /** Imported old CLI HAP credentials whose original carrier was not recorded; never auto-selected. */
+  /** Written only by unreleased pre-0.5.0 imports; still accepted on load, never auto-selected. */
   unclassified?: EncodedHap;
   raop?: { clientId: string; seed: string };
   dmap?: { guid: string };
@@ -98,8 +98,6 @@ export class DeviceStorage {
   remove(key: string): boolean { this.ready(); const index = this.document.devices.findIndex(r => r.key === key); if (index < 0) return false; this.document.devices.splice(index, 1); this.revision++; return true; }
   setHap(key: string, protocol: 'airplay' | 'mrp' | 'companion', credentials: HAPCredentials, aliases = [key]): void { const record = this.get(key) ?? { key, aliases }; record.credentials = { ...record.credentials, [protocol]: encodeHap(credentials) }; this.upsert(record); }
   hap(key: string, protocol: 'airplay' | 'mrp' | 'companion'): HAPCredentials | undefined { const value = this.get(key)?.credentials?.[protocol]; return value ? decodeHap(value) : undefined; }
-  /** Preserve old credentials without assigning them to AirPlay or standalone MRP. */
-  setUnclassifiedHap(key: string, credentials: HAPCredentials, aliases = [key]): void { const record = this.get(key) ?? { key, aliases }; record.credentials = { ...record.credentials, unclassified: encodeHap(credentials) }; this.upsert(record); }
   /** Explicitly remove one protocol credential; omitted fields never erase secrets. */
   removeCredential(key: string, protocol: keyof ProtocolCredentials): boolean {
     this.ready();

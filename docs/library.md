@@ -235,8 +235,9 @@ level shown on the TV. A reply of 0 is ignored, because one came back while
 AirPods were attaching, so an output that really is at 0 stays `undefined` until its volume
 changes. A failed or ignored query is retried on the next MRP message, normally a capability
 update. Detaching and reattaching AirPods pushes capability changes and VolumeDidChange (a
-brief 6.25%, then the real level); when the output loses absolute volume, `volume` keeps the
-last reported level, so check `featureAvailability('setVolume')`.
+brief 6.25%, then the real level). When the output loses absolute volume (for example, AirPods
+detach and audio returns to TV speakers), `volume` becomes `undefined` and `volume` is emitted
+with `undefined`; the next absolute output is queried again.
 
 **Idle Apple TV state (#10):** when no app has a loaded item, an Apple TV (seen on
 both tested models) answers the queue request with a typeless
@@ -386,7 +387,7 @@ Button actions, touch clicks and swipes, cancellation release, and output add/re
 
 ```typescript
 atv.on('nowPlaying', (info) => console.log(info.toString()));  // NowPlayingInfo
-atv.on('volume', (level) => {});           // 0–100
+atv.on('volume', (level) => {});           // 0–100; undefined when absolute volume is lost
 atv.on('powerState', (state) => {});       // after subscribePowerState()
 atv.on('supportedCommands', (cmds) => {}); // SupportedCommand[]
 atv.on('playbackQueue', (queue) => {});

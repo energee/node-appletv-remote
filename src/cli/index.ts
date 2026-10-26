@@ -56,7 +56,11 @@ async function storage(): Promise<FileStorage> {
       if (companion && credentials.clientId === companion.clientId && credentials.clientLTSK.equals(companion.clientLTSK) && credentials.clientLTPK.equals(companion.clientLTPK) && credentials.serverLTPK.equals(companion.serverLTPK) && credentials.serverId === companion.serverId) {
         store.setHap(key, 'companion', companion, [key]);
       } else {
-        store.setUnclassifiedHap(key, credentials, [key]);
+        // Every released `atv pair` (0.2.0–0.4.0) used AirPlay pair-setup; only unreleased builds
+        // paired over standalone MRP, and only for devices cached without an AirPlay port.
+        const hints = cached[key];
+        const carrier = hints && !hints.port && hints.mrpPort ? 'mrp' : 'airplay';
+        store.setHap(key, carrier, credentials, [key]);
         if (companion) store.setHap(key, 'companion', companion, [key]);
       }
     }
@@ -881,9 +885,10 @@ function jsonError(error: unknown): Record<string, unknown> {
   if (error instanceof JsonOutputLimitError) { code = 'output_limit'; message = error.message; }
   else if (/Unsupported in JSON mode/i.test(detail)) { code = 'unsupported'; message = detail; }
   else if (/No text field is focused|not focused/i.test(detail)) { code = 'text_unfocused'; message = 'No text field is focused'; }
-  else if (error instanceof SyntaxError || /credentials|paired device/i.test(detail)) {
+  // "No configured implementation": no stored pairing's protocol can perform the operation.
+  else if (error instanceof SyntaxError || /credentials|paired device|No configured implementation/i.test(detail)) {
     code = 'credentials_unavailable'; message = 'Pairing credentials are unavailable or invalid';
-  } else if (/Usage:|Unknown command|Invalid |must be |nonblank|unsupported/i.test(detail)) {
+  } else if (/Usage:|Unknown command|Invalid |must be |nonblank|unsupported|selector is ambiguous/i.test(detail)) {
     code = 'invalid_arguments'; message = 'Invalid command arguments';
   } else if (typeof protocol === 'number' && Number.isSafeInteger(protocol)) {
     code = 'protocol_error'; message = 'Device rejected the operation';

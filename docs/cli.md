@@ -133,8 +133,9 @@ Credentials, protocol settings, DMAP GUIDs and nonsecret endpoint hints use
 `~/.atv-storage.json`, the public versioned `FileStorage` format (plaintext, mode `0600`,
 not a keychain). The first run without that file validates and imports old
 `~/.atv-credentials.json`, `~/.atv-dmap.json` and `~/.atv-devices.json` without deleting them.
-Old HAP records without pairing-carrier provenance remain unclassified until re-pairing;
-duplicate outer/Companion keys import as Companion-only. Corrupt imports reject.
+Old `atv pair` records import as AirPlay credentials (every released `atv pair` used AirPlay
+pair-setup), or as standalone MRP when the cached hints show only an MRP port; no re-pairing is
+needed. Duplicate outer/Companion keys import as Companion-only. Corrupt imports reject.
 Omit `deviceId` for the latest eligible record; selectors match keys/known aliases
 case-insensitively, and blank, missing or ambiguous selectors reject.
 Stored endpoint overrides take precedence over discovery hints. Connections try validated

@@ -298,7 +298,11 @@ export class AppleTV extends EventEmitter {
   private companionVolume?: number;
   private mrpVolume?: number;
   private mrpVolumeRequested = false;
-  /** Last absolute volume (0..100) reported by the selected transport; undefined until one arrives. */
+  /**
+   * Last absolute volume (0..100) reported by the selected transport; undefined until one
+   * arrives, and again (with a `volume` event carrying undefined) when the MRP output loses
+   * absolute volume.
+   */
   volume?: number;
   powerState: PowerState = PowerState.Unknown;
   /** Last text-field focus from Companion RTI; set by connectCompanion()'s `_tiStart` reply, then `_tiStarted`/`_tiStopped` events; unknown before Companion connects and after it closes. */
@@ -1191,6 +1195,14 @@ export class AppleTV extends EventEmitter {
     const payload = field ? msg[field] as Record<string, unknown> | undefined : undefined;
     if (payload && this.playerState.update(msg.type as number, payload)) this.publishNowPlaying();
     this.handleVolumeCapabilities(msg);
+    // The output lost absolute volume (e.g. AirPods detached): its last level no longer applies,
+    // and the next absolute output is queried again by requestMRPVolume().
+    if (this.mrpVolume !== undefined && this.featureAvailability('setVolume') !== 'supported') {
+      this.mrpVolume = undefined;
+      this.mrpVolumeRequested = false;
+      this.volume = undefined;
+      this.emit('volume', undefined);
+    }
     this.handleOutputMessage(msg);
 
     // DeviceInfo (type 15): remember the output device for SetVolume (clusterID or deviceUID)
