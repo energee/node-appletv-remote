@@ -78,20 +78,21 @@ Other models and tvOS versions are untested; reports are welcome.
 | Feature | Status |
 |---|---|
 | Discovery, AirPlay and Companion pairing | Verified |
-| Navigation/media/power over Companion alone | Protocol fixtures only; hardware unverified |
+| Navigation/media/power over Companion alone | Navigation, play/pause and sleep/wake verified |
 | Navigation, media commands, button tap/double-tap/hold, touch swipes | Verified over MRP |
-| Apps, accounts, power state, app launch by URL | Verified |
-| Volume | MRP capability reporting verified; Companion control/reading unverified |
+| Apps, accounts, power state, app launch by URL | Verified; power is read from MRP, so a sleeping TV reports `off` |
+| Volume | Absolute set/read verified with AirPods output; TV speakers do not allow absolute volume |
 | Audio output routing | Add/remove verified; `setOutputDevices` and routing errors unverified (#46) |
 | IPv6 (global, ULA, link-local) | Verified for MRP and Companion |
-| AirPlay 2 audio streaming (`RaopStream`) | Verified, incl. WAV input and volume; CLI ffmpeg decoding/remote input unverified on receiver hardware; RAOP text/artwork/progress requests accepted but not displayed on tvOS 26.6 (#22, #80) |
-| Text entry and text-focus events | Unverified |
-| Media URL and temporary local-file playback | Unverified |
+| AirPlay 2 audio streaming (`RaopStream`) | Verified, incl. WAV input, ffmpeg-decoded MP3 and cancel; remote (URL) input unverified; RAOP text/artwork/progress requests accepted but not displayed on tvOS 26.6 (#22, #80) |
+| Text entry and text-focus events | Verified (focus, set, clear) |
+| Media URL and temporary local-file playback | HLS verified; progressive MP4 does not play on these two models on tvOS 26.6 ([known limitation](https://github.com/energee/node-appletv-remote/blob/main/docs/audio-and-playback.md#known-limitations)) |
 | Legacy Apple TV 2/3 (DMAP), legacy RAOP receivers, HomePods | Unverified, no hardware available |
 | Standalone MRP (tvOS < 15), Companion-only devices | Unverified, no hardware available |
 
 ## Documentation
 
+- [Changelog](https://github.com/energee/node-appletv-remote/blob/main/CHANGELOG.md): what changed in each release, breaking changes and known limitations
 - [CLI reference](https://github.com/energee/node-appletv-remote/blob/main/docs/cli.md): every command, device selection, timing knobs
 - [Library guide](https://github.com/energee/node-appletv-remote/blob/main/docs/library.md): pairing, remote control, now-playing state, Companion, lifecycle, gestures, routing, events
 - [Media URL playback and audio streaming](https://github.com/energee/node-appletv-remote/blob/main/docs/audio-and-playback.md): `AirPlayPlaybackSession` (`playUrl` and `playFile`), `RaopStream`, `wavPcm`, `extractRaopMetadata`, `LegacyPairSetup`
