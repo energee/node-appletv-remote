@@ -98,4 +98,13 @@ describe('NowPlayingInfo', () => {
     expect(str).toContain('Track');
     expect(str).toContain('[Paused]');
   });
+
+  // Hardware (tvOS 26.6, Plex): a paused item reports Playing with rate 0; a backgrounded one Paused with rate 1.
+  it('reads Playing with a zero rate as Paused and otherwise trusts the reported state', () => {
+    const state = (playbackState: PlaybackState, timing: Record<string, unknown>) => new NowPlayingInfo({ playbackState }, timing).playbackState;
+    expect(state(PlaybackState.Playing, { playbackRate: 0 })).toBe(PlaybackState.Paused);
+    expect(state(PlaybackState.Playing, {})).toBe(PlaybackState.Playing);
+    expect(state(PlaybackState.Playing, { playbackRate: 1 })).toBe(PlaybackState.Playing);
+    expect(state(PlaybackState.Paused, { playbackRate: 1 })).toBe(PlaybackState.Paused);
+  });
 });

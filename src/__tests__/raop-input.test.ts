@@ -14,7 +14,7 @@ class FakeChild extends EventEmitter {
   kill = vi.fn(() => { this.killed = true; this.emit('close', null, true); return true; });
 }
 vi.mock('node:child_process', () => ({ spawn: spawned.spawn }));
-import { FFMPEG_MISSING, openRaopInput } from './raop-input.js';
+import { FFMPEG_MISSING, openRaopInput } from '../cli/raop-input.js';
 
 const paths: string[] = [];
 afterEach(() => {

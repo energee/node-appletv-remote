@@ -21,6 +21,9 @@ const credentials = await pairing.finish(pin);
 const companionPairing = await atv.startCompanionPairing();
 const companionCredentials = await companionPairing.finish(pin);
 ```
+`scan()` repeats its multicast queries 1 s and 3 s after starting, so one lost reply no longer hides
+a device; keep `timeout` above 3000 ms to get both repeats.
+
 When you already know an address, keep ordinary multicast browsing and query that host's mDNS
 endpoint directly:
 
@@ -180,7 +183,8 @@ old-track metadata. Runtime evidence is discarded on disconnect/reconnect. Inact
 an active client/player message selects them; an empty `SetNowPlayingClient` selects the
 empty-bundle client, so an idle TV reports nothing playing. `hasPlayback` distinguishes absent
 metadata from paused/stopped playback; `playbackState` retains the device's explicit
-state (unknown if not reported). `playerIdentifier` and `appBundleIdentifier`
+state (unknown if not reported), except that Playing with a reported rate of 0 reads as Paused
+(Plex on tvOS 26.6 keeps reporting Playing after a pause). `playerIdentifier` and `appBundleIdentifier`
 identify the selected player. Position is a snapshot, not extrapolated. CLI state uses the same summary as
 `NowPlayingInfo.toString()` (percentage progress rather than its former time-pair
 formatter). Metadata-free explicit Playing/Paused/Interrupted/Seeking states are
@@ -307,7 +311,7 @@ Text input uses Companion RTI: restart the text session (`_tiStop`/`_tiStart`), 
 
 Text focus comes from the same RTI session: a `_tiStart` reply carries a `_tiD` archive only while a text field is focused. `connectCompanion()` sends `_tiStart` right after `_systemInfo`, because the TV pushes `_tiStarted`/`_tiStopped` events only to clients with an open RTI session; a TV that rejects it just emits `companionError` and leaves the state `unknown`. Every `_tiStart` reply (from connect, `fetchTextFocusState()` or a text edit) and every `_tiStarted`/`_tiStopped` event updates `textFocusState`, which emits only on change. It starts as `unknown` and returns to `unknown` when Companion closes. This is fixture-tested only; whether a given tvOS version pushes these events to this client is not hardware-verified (tracked in #30). The MRP `keyboard` event is separate and only fires on devices that still send KeyboardMessage.
 
-`connectCompanion()` sends `_systemInfo` after pair-verify. Without it, a tested Apple TV answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on hardware ([tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on)).
+`connectCompanion()` sends `_systemInfo` after pair-verify. Without it, a tested Apple TV answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. It then sends `TVRCSessionStart` (`ProtocolVersionKey` `1.2`): on tvOS 26.6 an Apple TV HD silently dropped power and app-list requests until it arrived (pyatv #2845). Older TVs reject it, which is ignored. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on hardware ([tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on)).
 
 ## Connection and request lifecycle
 

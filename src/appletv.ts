@@ -424,8 +424,9 @@ export class AppleTV extends EventEmitter {
   }
 
   /**
-   * Open the Companion connection, send `_systemInfo`, then open an RTI session (`_tiStart`) so
-   * `textFocusState` is known and `_tiStarted`/`_tiStopped` events can arrive; emits `companionConnect` once ready.
+   * Open the Companion connection, send `_systemInfo`, register a TV Remote session (`TVRCSessionStart`,
+   * best effort), then open an RTI session (`_tiStart`) so `textFocusState` is known and
+   * `_tiStarted`/`_tiStopped` events can arrive; emits `companionConnect` once ready.
    * A rejected `_tiStart` only emits `companionError` and leaves `textFocusState` unknown.
    * @throws If no Companion port was given or discovered, or the TV rejects `_systemInfo`.
    */
@@ -462,6 +463,9 @@ export class AppleTV extends EventEmitter {
         ['model', this.model], ['name', this.name],
       ]));
       connection.sendMessage('_interest', new Map([['_regEvents', ['_iMC']]]));
+      // tvOS 26.4+ (Apple TV HD on 26.6) silently drops power and app-list requests until a TV Remote session
+      // is registered (pyatv #2845). Older TVs reject the message, so failure is ignored.
+      await connection.sendRequest('TVRCSessionStart', new Map([['ProtocolVersionKey', '1.2']])).catch(() => {});
       // The TV pushes _tiStarted/_tiStopped only to clients with an open RTI session.
       // Best effort: a TV that rejects _tiStart still serves every other Companion request.
       await this.startTextSession().catch((err: Error) => this.emit('companionError', err));

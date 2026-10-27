@@ -43,7 +43,7 @@ function readName(packet: Buffer, offset: number, seen = new Set<number>()): [st
     if (!length) { if (!jumped) next = offset; break; }
     labels.push(packet.subarray(offset, offset + length).toString('utf8')); offset += length;
   }
-  const name = labels.join('.').toLowerCase();
+  const name = labels.join('.');
   return Buffer.byteLength(name) <= MAX_NAME_BYTES ? [name, next] : undefined;
 }
 
@@ -60,11 +60,12 @@ export function parsePacket(packet: Buffer): Resource[] {
     if (end > packet.length || (klass & 0x7fff) !== 1) return [];
     let data: Resource['data'] | undefined;
     if (type === 12) { const value = readName(packet, start); if (value && value[1] <= end && value[0]) data = value[0]; }
-    else if (type === 33 && length >= 6) { const host = readName(packet, start + 6); if (host && host[1] <= end && host[0]) data = { port: packet.readUInt16BE(start + 4), host: host[0] }; }
+    else if (type === 33 && length >= 6) { const host = readName(packet, start + 6); if (host && host[1] <= end && host[0]) data = { port: packet.readUInt16BE(start + 4), host: host[0].toLowerCase() }; }
     else if (type === 1 && length === 4) data = Array.from(packet.subarray(start, end)).join('.');
     else if (type === 28 && length === 16) { const parts: string[] = []; for (let part = start; part < end; part += 2) parts.push(packet.readUInt16BE(part).toString(16)); data = parts.join(':'); }
     else if (type === 16) { const txt: Record<string, string> = {}; let cursor = start; let valid = true; while (cursor < end) { const size = packet[cursor++]; if (cursor + size > end) { valid = false; break; } const entry = packet.subarray(cursor, cursor + size).toString('utf8'); const equals = entry.indexOf('='); const key = (equals < 0 ? entry : entry.slice(0, equals)).toLowerCase(); if (key) txt[key] = equals < 0 ? '' : entry.slice(equals + 1); cursor += size; } if (valid) data = txt; }
-    if (data !== undefined) records.push({ name: name[0], type, ttl, flush: Boolean(klass & 0x8000), data }); offset = end;
+    // Owner names and SRV hosts are lowercased lookup keys; a PTR target keeps its case for display.
+    if (data !== undefined) records.push({ name: name[0].toLowerCase(), type, ttl, flush: Boolean(klass & 0x8000), data }); offset = end;
   }
   return records;
 }
@@ -128,5 +129,5 @@ export class TargetedMdns {
     else if ((record.type === 1 || record.type === 28) && typeof record.data === 'string') { const value = record.type === 28 && /^fe[89ab]/i.test(record.data) && state.target.scope ? `${record.data}%${state.target.scope}` : record.data; const values = record.flush ? new Set<string>() : cache.addresses.get(record.name) ?? new Set<string>(); if (record.ttl === 0) values.delete(value); else if (values.size < MAX_RECORDS) values.add(value); if (values.size) cache.addresses.set(record.name, values); else cache.addresses.delete(record.name); }
     cache.records = cache.ptrs.size + cache.srvs.size + cache.txts.size + cache.addresses.size;
   }
-  private emit(state: State): void { for (const type of SERVICE_TYPES) for (const instance of state.cache.ptrs.get(SERVICE_NAMES[type]) ?? []) { const srv = state.cache.srvs.get(instance); const addresses = srv ? [...(state.cache.addresses.get(srv.host) ?? [])] : []; if (!srv || !state.cache.txts.has(instance) || !addresses.length) continue; const service = { type, name: instance.replace(new RegExp(`\\.${SERVICE_NAMES[type]}$`), ''), host: srv.host, port: srv.port, addresses, txt: state.cache.txts.get(instance)!, fqdn: instance }; const key = JSON.stringify(service); if (state.cache.emitted.has(key)) continue; state.cache.emitted.add(key); this.found(service); } }
+  private emit(state: State): void { for (const type of SERVICE_TYPES) for (const instance of state.cache.ptrs.get(SERVICE_NAMES[type]) ?? []) { const lookup = instance.toLowerCase(); const srv = state.cache.srvs.get(lookup); const addresses = srv ? [...(state.cache.addresses.get(srv.host) ?? [])] : []; if (!srv || !state.cache.txts.has(lookup) || !addresses.length) continue; const service = { type, name: instance.replace(new RegExp(`\\.${SERVICE_NAMES[type]}$`, 'i'), ''), host: srv.host, port: srv.port, addresses, txt: state.cache.txts.get(lookup)!, fqdn: instance }; const key = JSON.stringify(service); if (state.cache.emitted.has(key)) continue; state.cache.emitted.add(key); this.found(service); } }
 }

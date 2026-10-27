@@ -2,12 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { scan } from '../discovery.js';
 
-const mock = vi.hoisted(() => ({ callbacks: new Map<string, (service: Record<string, unknown>) => void>(), stopped: vi.fn(), destroyed: vi.fn() }));
+const mock = vi.hoisted(() => ({ callbacks: new Map<string, (service: Record<string, unknown>) => void>(), stopped: vi.fn(), updated: vi.fn(), destroyed: vi.fn() }));
 vi.mock('bonjour-service', () => ({
   Bonjour: class {
     find(options: { type: string }, callback: (service: Record<string, unknown>) => void) {
       mock.callbacks.set(options.type, callback);
-      return { stop: mock.stopped };
+      return { stop: mock.stopped, update: mock.updated };
     }
     destroy() { mock.destroyed(); }
   },
@@ -142,6 +142,25 @@ describe('scan until', () => {
     expect(await pending).toHaveLength(1);
     expect(mock.destroyed).toHaveBeenCalledOnce();
   });
+});
+
+// Hardware: one lost multicast reply hid a TV for a whole 5 s scan in about 1 of 30 sightings.
+it('re-sends each browser query at 1 s and 3 s, and stops re-sending once the scan ends', async () => {
+  const pending = scan({ timeout: 5000 });
+  await vi.advanceTimersByTimeAsync(999);
+  expect(mock.updated).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(mock.updated).toHaveBeenCalledTimes(6);
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(mock.updated).toHaveBeenCalledTimes(12);
+  await vi.advanceTimersByTimeAsync(2000);
+  await pending;
+  mock.updated.mockClear();
+  const early = scan({ timeout: 5000, until: () => true });
+  mock.callbacks.get('airplay')!({ name: 'TV', addresses: ['192.0.2.1'], port: 7000, txt: {} });
+  await early;
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(mock.updated).not.toHaveBeenCalled();
 });
 
 it.each(['filter', 'until'] as const)('rejects throwing scan %s callbacks and cleans Bonjour', async option => {

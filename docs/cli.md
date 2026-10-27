@@ -137,7 +137,8 @@ Old `atv pair` records import as AirPlay credentials (every released `atv pair` 
 pair-setup), or as standalone MRP when the cached hints show only an MRP port; no re-pairing is
 needed. Duplicate outer/Companion keys import as Companion-only. Corrupt imports reject.
 Omit `deviceId` for the latest eligible record; selectors match keys/known aliases
-case-insensitively, and blank, missing or ambiguous selectors reject.
+case-insensitively, or a stored device name whole (`"living room"`, not `living`), and blank,
+missing or ambiguous selectors reject.
 Stored endpoint overrides take precedence over discovery hints. Connections try validated
 cached hints first and rescan only after setup failure, before any action is sent.
 Discovery matches known aliases exactly, never by a friendly-name substring.

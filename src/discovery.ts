@@ -182,6 +182,7 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
     const instance = new Bonjour();
     let done = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let requeries: ReturnType<typeof setTimeout>[] = [];
     let untilQueued = false;
     const browsers: ReturnType<Bonjour['find']>[] = [];
     let targeted: TargetedMdns | undefined;
@@ -247,6 +248,7 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
     const cleanup = (): void => {
       done = true;
       clearTimeout(timer);
+      requeries.forEach(clearTimeout);
       targeted?.close();
       options.signal?.removeEventListener('abort', abort);
       for (const browser of browsers) browser.stop();
@@ -299,6 +301,9 @@ export async function scan(options: ScanOptions = {}): Promise<DiscoveredDevice[
     for (const type of ['airplay', 'raop', 'companion-link', 'mediaremotetv', 'touch-able', 'appletv-v2']) {
       browsers.push(instance.find({ type, protocol: 'tcp' }, (service: Service) => add(type, service)));
     }
+    // bonjour-service queries once; a lost reply hid a TV for the whole scan (~1 in 30 on hardware).
+    // Re-ask at 1 s and 3 s, the RFC 6762 §5.2 doubling interval.
+    requeries = [1000, 3000].map(ms => setTimeout(() => { for (const browser of browsers) browser.update(); }, ms));
     if (targets.length) {
       targeted = new TargetedMdns(targets, (service: TargetedService) => add(service.type, service), error => fail(error));
       targeted.start().catch(fail);

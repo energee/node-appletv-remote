@@ -24,6 +24,8 @@ import type { HAPCredentials } from '../auth/types.js';
  */
 export class CompanionPairSetup {
   private socket: Socket | undefined;
+  /** Set when the TV closes the session; tvOS does so ~35 s after showing the PIN. */
+  private ended = false;
   private buffer: Buffer = Buffer.alloc(0);
   private clientId: string;
   private edPrivateKeyRaw: Buffer;
@@ -75,6 +77,7 @@ export class CompanionPairSetup {
   private async openSocket(): Promise<void> {
     this.socket = await connectSocket(this.host, this.port);
     this.socket.on('error', () => {}); // Post-connect errors surface as reply timeouts.
+    this.socket.on('close', () => { this.ended = true; });
     this.socket.on('data', (data: Buffer) => {
       this.buffer = Buffer.concat([this.buffer, data]);
       this.processFrames();
@@ -267,6 +270,7 @@ export class CompanionPairSetup {
       throw new Error('start() must be called before finish()');
     }
     try {
+      if (this.ended) throw new Error('Apple TV ended pairing: the PIN expired (it shows for about 35 seconds); start pairing again');
       await this.sendM3(pin, this.salt, this.serverPublicKey);
       return await this.sendM5();
     } finally {

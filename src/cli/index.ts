@@ -180,7 +180,9 @@ async function loadRecord(deviceId?: string, protocol?: ControlProtocol): Promis
   if (!records.length) throw new Error('No usable typed credentials found. Pair this device with the required protocol first.');
   if (deviceId === undefined) return records[records.length - 1];
   const selector = deviceId.toLowerCase();
-  const exact = records.filter(record => record.key.toLowerCase() === selector || record.aliases.some(alias => alias.toLowerCase() === selector));
+  // A stored device name ("Living Room") selects only when it matches whole; a partial name is not an identity.
+  const exact = records.filter(record => record.key.toLowerCase() === selector || record.hints?.name?.toLowerCase() === selector ||
+    record.aliases.some(alias => alias.toLowerCase() === selector));
   const matches = exact.length ? exact : records.filter(record => record.key.toLowerCase().includes(selector) || record.aliases.some(alias => alias.toLowerCase().includes(selector)));
   if (matches.length > 1) throw new Error('Device selector is ambiguous; use an explicit record key');
   if (!matches.length) throw new Error(`No paired device matches "${deviceId}"`);
