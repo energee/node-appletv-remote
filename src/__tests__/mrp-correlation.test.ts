@@ -269,12 +269,14 @@ describe('starting MRP volume', () => {
   async function connected(capabilities: number, answer: (conn: AirPlayConnection, identifier: string) => Promise<void> = async () => {}) {
     const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test' });
     const requests: unknown[] = [];
+    const updateConfigs: unknown[] = [];
     vi.spyOn(AirPlayConnection.prototype, 'connect').mockImplementation(async function (this: AirPlayConnection) {
       await push(this, { type: MessageType.DeviceInfo, '.deviceInfoMessage': { deviceUID: 'dev' } });
       await push(this, { type: MessageType.VolumeControlAvailability, '.volumeControlAvailabilityMessage': { volumeControlAvailable: true, volumeCapabilities: capabilities } });
     });
     vi.spyOn(AirPlayConnection.prototype, 'sendMRPMessage').mockImplementation(async function (this: AirPlayConnection, bytes: Buffer) {
       const request = await MRPMessage.decode(bytes);
+      if (request.type === MessageType.ClientUpdatesConfig) updateConfigs.push((request['.clientUpdatesConfigMessage'] as { volumeUpdates?: boolean }).volumeUpdates);
       if (request.type !== MessageType.GetVolume) return;
       requests.push(request['.getVolumeMessage']);
       await answer(this, request.identifier as string);
@@ -283,7 +285,7 @@ describe('starting MRP volume', () => {
     tv.on('volume', level => events.push(level));
     await tv.connect(new Credentials(credentials));
     await vi.advanceTimersByTimeAsync(0);
-    return { tv, requests, events, conn: (tv as any).connection as AirPlayConnection };
+    return { tv, requests, updateConfigs, events, conn: (tv as any).connection as AirPlayConnection };
   }
   afterEach(() => vi.restoreAllMocks());
 
@@ -348,6 +350,28 @@ describe('starting MRP volume', () => {
     expect(requests).toHaveLength(2);
     expect(tv.volume).toBe(75);
     expect(events).toEqual([75, undefined, 75]);
+    await tv.close();
+  });
+
+  // Lab (AppleTV14,1, tvOS 24K5093g): switching from the monitor back to the HomePod sends
+  // DeviceInfoUpdate and capability 0, and no level until the next volume press. Turning volume
+  // updates off and on makes it send UpdateOutputDevice with the real capability; asking did not.
+  it('renews volume updates after an output change, then asks for the volume', async () => {
+    vi.useFakeTimers();
+    const { tv, requests, updateConfigs, conn } = await connected(2, (conn, identifier) =>
+      push(conn, { type: MessageType.GetVolumeResult, identifier, '.getVolumeResultMessage': { volume: 0.325 } }));
+    const capabilities = (volumeCapabilities: number) => ({ volumeControlAvailable: volumeCapabilities > 0, volumeCapabilities });
+    await push(conn, { type: MessageType.VolumeControlCapabilitiesDidChange,
+      '.volumeControlCapabilitiesDidChangeMessage': { outputDeviceUID: 'dev', capabilities: capabilities(0) } });
+    expect(tv.volume).toBeUndefined();
+    await push(conn, { type: MessageType.DeviceInfoUpdate, '.deviceInfoMessage': { deviceUID: 'dev' } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(updateConfigs).toEqual([false, true]);
+    await push(conn, { type: MessageType.UpdateOutputDevice, '.updateOutputDeviceMessage': { clusterAwareOutputDevices: [
+      { name: 'Home Theater', uniqueIdentifier: 'dev', isVolumeControlAvailable: true, volumeCapabilities: 2 }] } });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requests).toHaveLength(2);
+    expect(tv.volume).toBe(32.5);
     await tv.close();
   });
 

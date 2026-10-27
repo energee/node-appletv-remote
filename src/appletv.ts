@@ -232,6 +232,14 @@ export class AppleTV extends EventEmitter {
     } else if (msg.type === MessageType.VolumeControlCapabilitiesDidChange) {
       const change = msg['.volumeControlCapabilitiesDidChangeMessage'] as { capabilities?: Record<string, unknown>; outputDeviceUID?: string } | undefined;
       if (change?.outputDeviceUID && change.outputDeviceUID === this.outputDeviceUID) volume = change.capabilities;
+    } else if (msg.type === MessageType.UpdateOutputDevice) {
+      // After renewed volume updates, tvOS may report the output's capability only here.
+      const update = msg['.updateOutputDeviceMessage'] as Record<string, Record<string, unknown>[] | undefined> | undefined;
+      const device = [...update?.clusterAwareOutputDevices ?? [], ...update?.outputDevices ?? []]
+        .find(entry => this.outputDeviceUID && entry.uniqueIdentifier === this.outputDeviceUID);
+      if (device && typeof device.isVolumeControlAvailable === 'boolean' && typeof device.volumeCapabilities === 'number') {
+        volume = { volumeControlAvailable: device.isVolumeControlAvailable, volumeCapabilities: device.volumeCapabilities };
+      }
     }
     if (!volume) return;
     this.volumeAvailability = { ...this.volumeAvailability, ...volume };
@@ -1216,6 +1224,10 @@ export class AppleTV extends EventEmitter {
       if (uid) { this.outputDeviceUID = uid; this.emit('featureAvailability'); }
     }
 
+    // DeviceInfoUpdate (type 37) follows an output change. Switching back to a HomePod pushes only
+    // capability 0 and no level until the next press; renewed volume updates report the real ones.
+    if (msg.type === MessageType.DeviceInfoUpdate && this.mrpVolume === undefined) this.renewVolumeUpdates();
+
     // VolumeDidChange (type 52): track absolute volume for our output device as 0..100
     if (msg.type === MessageType.VolumeDidChange) {
       const vol = msg['.volumeDidChangeMessage'] as Record<string, unknown> | undefined;
@@ -1280,6 +1292,22 @@ export class AppleTV extends EventEmitter {
     })().catch(() => {}).finally(() => {
       if (this.connection === connection && this.mrpVolume === undefined) this.mrpVolumeRequested = false;
     });
+  }
+
+  /**
+   * Turn volume updates off and on; tvOS then pushes the current capabilities, and an absolute one
+   * lets requestMRPVolume() run. Asking for capabilities, or repeating `true`, reports nothing new.
+   */
+  private renewVolumeUpdates(): void {
+    const connection = this.connection;
+    if (!connection || !this.readyTransports.has(connection)) return;
+    void (async () => {
+      for (const volumeUpdates of [false, true]) {
+        await connection.sendMRPMessage(await MRPMessage.clientUpdatesConfig({
+          artworkUpdates: true, nowPlayingUpdates: true, volumeUpdates, keyboardUpdates: true,
+        }));
+      }
+    })().catch(() => {});
   }
 
   /** Discard MRP runtime evidence when its transport session ends. */
