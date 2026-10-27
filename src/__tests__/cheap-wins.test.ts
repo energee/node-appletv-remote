@@ -209,6 +209,20 @@ describe('Power state', () => {
     expect(seen).toEqual([PowerState.On, PowerState.Off]);
   });
 
+  it('MRP DeviceInfo logicalDeviceCount reports power without Companion (0 asleep, above 0 awake)', async () => {
+    const atv = makeAtv();
+    fakeMrp(atv);
+    const seen: PowerState[] = [];
+    atv.on('powerState', (s: PowerState) => seen.push(s));
+    (atv as any).handleMRPMessage({ type: MessageType.DeviceInfo, '.deviceInfoMessage': { logicalDeviceCount: 0 } });
+    expect(await atv.fetchPowerState()).toBe(PowerState.Off);
+    (atv as any).handleMRPMessage({ type: MessageType.DeviceInfoUpdate, '.deviceInfoMessage': { logicalDeviceCount: 1 } });
+    (atv as any).handleMRPMessage({ type: MessageType.DeviceInfoUpdate, '.deviceInfoMessage': { deviceUID: 'd' } });
+    expect(atv.powerState).toBe(PowerState.On);
+    expect(seen).toEqual([PowerState.Off, PowerState.On]);
+    expect(() => atv.subscribePowerState()).not.toThrow();
+  });
+
   it('subscribePowerState registers interest in both status events', () => {
     const atv = makeAtv();
     const { messages } = fakeCompanion(atv);

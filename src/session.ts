@@ -21,7 +21,7 @@ const MRP_OPERATIONS = [
   'play', 'pause', 'stop', 'next', 'previous', 'skipForward', 'skipBackward', 'volumeUp', 'volumeDown',
   'setPosition', 'setShuffle', 'setRepeat', 'setVolume', 'wake', 'suspend', 'deleteText',
   'getNowPlaying', 'getState', 'requestPlaybackQueue', 'requestArtwork',
-  'addOutputDevices', 'removeOutputDevices', 'setOutputDevices',
+  'addOutputDevices', 'removeOutputDevices', 'setOutputDevices', 'fetchPowerState', 'subscribePowerState',
 ] as const;
 const COMPANION_OPERATIONS = [
   'up', 'down', 'left', 'right', 'select', 'menu', 'home', 'homeHold', 'playPause',

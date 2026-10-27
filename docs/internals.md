@@ -51,7 +51,7 @@ plaintext rather than a keychain. `CustomStorage` accepts an adapter with async
 provider owns its actual `AppleTV` or `DmapClient`, so credentials, request correlation,
 handshake readiness and encryption counters remain per carrier. The operation table
 contains only implemented public methods; discovery ports do not establish runtime support.
-Metadata/queue/routing prefer MRP, while apps/text/touch/power prefer Companion. Explicit
+Metadata/queue/routing/power prefer MRP, while apps/text/touch prefer Companion. Explicit
 preferences are strict, and no failure after dispatch triggers a second provider.
 
 Handlers attach before setup. Normalized setup state is coalesced until the provider is

@@ -103,7 +103,8 @@ hold/double-tap before transmission instead of silently performing a single acti
 
 Playback/metadata/queue/artwork/routing prefer an eligible AirPlay MRP tunnel, then enabled
 standalone MRP. Shared navigation/media/volume operations can next select Companion, then
-an implemented DMAP operation. Apps, accounts, text, touch and power prefer Companion.
+an implemented DMAP operation. Apps, accounts, text and touch prefer Companion. Power prefers MRP,
+which reports sleep in DeviceInfo; a sleeping Apple TV HD rejects every Companion power request.
 DMAP normalizes `getNowPlaying` through its existing state request; it does not implement
 MRP queue/routing. Known AppleTV1–3 models never become modern AirPlay tunnels.
 
@@ -292,6 +293,7 @@ await atv.switchAccount(accounts[0].id);
 
 await atv.fetchPowerState();                 // PowerState.On / Off / Unknown
 atv.subscribePowerState();                   // then listen for 'powerState'
+// With only MRP connected, power comes from DeviceInfo.logicalDeviceCount (0 asleep), pushed on every sleep/wake.
 
 await atv.guide();  // also channelUp, channelDown, pageUp, pageDown, screensaver
 
