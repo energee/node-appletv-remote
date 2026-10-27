@@ -28,15 +28,28 @@ it('sends _systemInfo after pair-verify and before companionConnect', async () =
   const tv = new AppleTV({ name: 'Family Room', address: 'offline', port: 7000, deviceId: 'AA:BB:CC:DD:EE:FF', model: 'AppleTV6,2', companionPort: 1234 });
   vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
   const send = vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockResolvedValue(new Map([['_c', new Map()]]));
-  // _systemInfo goes first; connect then opens an RTI session (_tiStart) before companionConnect.
-  const connected = vi.fn(() => expect(send.mock.calls.map(([id]) => id)).toEqual(['_systemInfo', '_tiStart']));
+  // _systemInfo goes first, then the TV Remote session, then an RTI session (_tiStart) before companionConnect.
+  const connected = vi.fn(() => expect(send.mock.calls.map(([id]) => id)).toEqual(['_systemInfo', 'TVRCSessionStart', '_tiStart']));
   tv.on('companionConnect', connected);
   await tv.connectCompanion(credentials);
   expect(send).toHaveBeenCalledWith('_systemInfo', new Map<string, string | number>([
     ['_bf', 0], ['_cf', 512], ['_clFl', 128], ['_i', 'aabbccddeeff'], ['_idsID', 'test'],
     ['_pubID', 'AA:BB:CC:DD:EE:FF'], ['_sf', 256], ['_sv', '170.18'], ['model', 'AppleTV6,2'], ['name', 'Family Room'],
   ]));
+  expect(send).toHaveBeenCalledWith('TVRCSessionStart', new Map([['ProtocolVersionKey', '1.2']]));
   expect(connected).toHaveBeenCalledOnce();
+});
+// Hardware (Apple TV HD, tvOS 26.6): FetchAttentionState and the app list went unanswered until TVRCSessionStart
+// (pyatv #2845). Older TVs reject it, so a rejection must not fail the connection.
+it('still connects when the TV rejects TVRCSessionStart', async () => {
+  const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test', companionPort: 1234 });
+  vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
+  vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockImplementation(async (id: string) => {
+    if (id === 'TVRCSessionStart') throw new Error('Companion TVRCSessionStart failed: No request handler');
+    return new Map([['_c', new Map()]]);
+  });
+  await tv.connectCompanion(credentials);
+  await expect(tv.sendCompanionRequest('test', new Map())).resolves.toBeInstanceOf(Map);
 });
 it('a rejected _systemInfo fails connectCompanion and leaves no Companion connection', async () => {
   const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test', companionPort: 1234 });

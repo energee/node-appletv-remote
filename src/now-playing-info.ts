@@ -131,8 +131,10 @@ export class NowPlayingInfo {
     this.hasElapsedTime = Number.isFinite(nowPlayingPayload.elapsedTime);
     this.hasPlaybackRate = Number.isFinite(nowPlayingPayload.playbackRate);
     this.timestamp = (nowPlayingPayload.timestamp as number) ?? 0;
-    this.playbackState =
-      (setStatePayload.playbackState as PlaybackState) ?? PlaybackState.Unknown;
+    // Some apps (Plex on tvOS 26.6) keep reporting Playing after a pause; only the rate drops to 0.
+    const reported = (setStatePayload.playbackState as PlaybackState) ?? PlaybackState.Unknown;
+    this.playbackState = reported === PlaybackState.Playing && this.hasPlaybackRate && this.playbackRate === 0
+      ? PlaybackState.Paused : reported;
     this.appDisplayName = (setStatePayload.displayName as string) ?? '';
     const playerPath = setStatePayload.playerPath as { client?: { bundleIdentifier?: string } } | undefined;
     this.appBundleIdentifier = playerPath?.client?.bundleIdentifier ?? '';

@@ -100,7 +100,7 @@ describe('text focus state', () => {
     const seenAtConnect: KeyboardFocusState[] = [];
     atv.on('companionConnect', () => seenAtConnect.push(atv.textFocusState));
     await atv.connectCompanion(credentials);
-    expect(send.mock.calls.map(([id]) => id)).toEqual(['_systemInfo', '_tiStart']);
+    expect(send.mock.calls.map(([id]) => id)).toEqual(['_systemInfo', 'TVRCSessionStart', '_tiStart']);
     expect(seenAtConnect).toEqual([KeyboardFocusState.Focused]);
   });
 

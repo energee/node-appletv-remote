@@ -4,7 +4,7 @@ import { AppleTV } from '../appletv.js';
 import { NowPlayingInfo, PlaybackState } from '../now-playing-info.js';
 
 vi.mock('node:fs', () => ({ realpathSync: (path: string) => path, existsSync: vi.fn(() => true), readFileSync: vi.fn(() => '{"device":"fake"}'), writeFileSync: vi.fn() }));
-vi.mock('node:fs/promises', () => ({ readFile: async () => JSON.stringify({ version: 1, devices: [{ key: 'device', aliases: ['device'], credentials: { airplay: { clientId: 'client', clientLTSK: 'a'.repeat(64), clientLTPK: 'b'.repeat(64), serverLTPK: 'c'.repeat(64), serverId: 'server' }, companion: { clientId: 'companion', clientLTSK: 'd'.repeat(64), clientLTPK: 'e'.repeat(64), serverLTPK: 'f'.repeat(64), serverId: 'server' }, dmap: { guid: '0x0123456789ABCDEF' } } }] }), mkdir: async () => {}, writeFile: async () => {}, chmod: async () => {}, rename: async () => {}, rm: async () => {} }));
+vi.mock('node:fs/promises', () => ({ readFile: async () => JSON.stringify({ version: 1, devices: [{ key: 'device', aliases: ['device'], credentials: { airplay: { clientId: 'client', clientLTSK: 'a'.repeat(64), clientLTPK: 'b'.repeat(64), serverLTPK: 'c'.repeat(64), serverId: 'server' }, companion: { clientId: 'companion', clientLTSK: 'd'.repeat(64), clientLTPK: 'e'.repeat(64), serverLTPK: 'f'.repeat(64), serverId: 'server' }, dmap: { guid: '0x0123456789ABCDEF' } }, hints: { name: 'Living Room' } }] }), mkdir: async () => {}, writeFile: async () => {}, chmod: async () => {}, rename: async () => {}, rm: async () => {} }));
 vi.mock('../discovery.js', () => ({ scan: vi.fn() }));
 import { main as run } from '../cli/index.js';
 import { readFileSync } from 'node:fs';
@@ -105,6 +105,12 @@ describe('CLI operations', () => {
   it('rejects an unmatched device instead of mutating the last device', async () => {
     await expect(run(['stop', 'missing-device'])).rejects.toThrow('No paired device matches');
     expect(AppleTV.prototype.connect).not.toHaveBeenCalled();
+  });
+  it('selects a device by its exact stored name in any case, but not by part of it', async () => {
+    const stop = vi.spyOn(AppleTV.prototype, 'stop').mockResolvedValue(undefined);
+    await run(['stop', 'living room']);
+    expect(stop).toHaveBeenCalledOnce();
+    await expect(run(['stop', 'living'])).rejects.toThrow('No paired device matches');
   });
   it('closes and propagates operation errors', async () => {
     vi.spyOn(AppleTV.prototype, 'stop').mockRejectedValue(new Error('send failed'));

@@ -59,21 +59,24 @@ describe('targeted mDNS', () => {
     expect(records).toEqual([expect.objectContaining({ type: 1, ttl: 30, flush: true, data: '192.0.2.44' })]);
   });
 
-  it('follows PTR records to assemble SRV, TXT and A answers while suppressing duplicates', async () => {
+  // The second case keeps the advertised instance name's case while matching owners case-insensitively.
+  it.each([
+    { instance: 'living-room._airplay._tcp.local', owner: 'living-room._airplay._tcp.local', host: 'living-room.local', shown: 'living-room' },
+    { instance: 'Living Room._airplay._tcp.local', owner: 'living room._airplay._tcp.local', host: 'Living-Room.local', shown: 'Living Room' },
+  ])('follows PTR records to assemble SRV, TXT and A answers while suppressing duplicates ($shown)', async ({ instance, owner, host, shown }) => {
     const { socket: responder, port } = await bind('127.0.0.1');
-    const instance = 'living-room._airplay._tcp.local';
-    const host = 'living-room.local';
     let requestResolve!: () => void;
     const request = new Promise<void>(resolve => { requestResolve = resolve; });
     responder.on('message', (requestPacket, rinfo) => {
-      const response = requestPacket.includes(Buffer.from('living-room')) ? packet(
-        rr(instance, 33, Buffer.concat([Buffer.from([0, 0, 0, 0x00, 0x1b, 0x58]), name(host)])),
-        rr(instance, 16, Buffer.concat([Buffer.from([17]), Buffer.from('deviceid=11:22:33')])),
-        rr(host, 1, Buffer.from([192, 0, 2, 44])),
+      const named = /iving.room/i.test(requestPacket.toString('latin1'));
+      const response = named ? packet(
+        rr(owner, 33, Buffer.concat([Buffer.from([0, 0, 0, 0x00, 0x1b, 0x58]), name(host)])),
+        rr(owner, 16, Buffer.concat([Buffer.from([17]), Buffer.from('deviceid=11:22:33')])),
+        rr(host.toLowerCase(), 1, Buffer.from([192, 0, 2, 44])),
       ) : packet(rr('_airplay._tcp.local', 12, name(instance)));
       responder.send(response, rinfo.port, rinfo.address);
       responder.send(response, rinfo.port, rinfo.address);
-      if (requestPacket.includes(Buffer.from('living-room'))) requestResolve();
+      if (named) requestResolve();
     });
     const services: TargetedService[] = [];
     const resolver = new TargetedMdns(parseTargets(['127.0.0.1']), service => services.push(service), error => { throw error; }, port, 0);
@@ -82,6 +85,6 @@ describe('targeted mDNS', () => {
     // A real UDP socket needs one platform poll turn after the responder's asynchronous send.
     await new Promise<void>(resolve => setTimeout(resolve, 20));
     resolver.close();
-    expect(services).toEqual([expect.objectContaining({ type: 'airplay', name: 'living-room', host, port: 7000, addresses: ['192.0.2.44'], txt: { deviceid: '11:22:33' } })]);
+    expect(services).toEqual([expect.objectContaining({ type: 'airplay', name: shown, host: host.toLowerCase(), port: 7000, addresses: ['192.0.2.44'], txt: { deviceid: '11:22:33' } })]);
   });
 });
