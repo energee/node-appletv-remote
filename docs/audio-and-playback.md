@@ -39,9 +39,29 @@ The listener remains available while the receiver reports `loading`/`idle`, beca
 
 Timing replies are restricted to the connected TCP peer address and, when returned by SETUP, its timing port. Only 32-byte RTP timing requests (payload type `0x52`, or `0xd2` with the marker bit) are answered, whatever their first (version) byte; the reply echoes that byte. Other 32-byte packets get no reply. UDP timing-reply send errors are ignored; timing socket failures still close the session.
 
-HTTP errors, connection loss, malformed status, and `/playback-info` media errors reject and close the failed session. Background heartbeat failures close the session and surface on the next `getStatus`. Requests have a five-second timeout (including URL acceptance); receivers taking longer to probe media will fail. Replies are limited to 1 MiB; duplicate Content-Length framing headers and all Transfer-Encoding responses are rejected. Binary and XML playback-info property lists are supported. A rejected `/play` is surfaced immediately; the authenticated SETUP sequence is not retried.
+HTTP errors, connection loss, malformed status, and `playbackInfo` media errors reject and close the failed session. Background heartbeat failures close the session and surface on the next `getStatus`. Requests have a five-second timeout (including URL acceptance); receivers taking longer to probe media will fail. Replies are limited to 1 MiB; duplicate Content-Length framing headers and all Transfer-Encoding responses are rejected. A rejected queue command is surfaced immediately; the authenticated SETUP sequence is not retried.
 
-The implementation uses same-socket HAP verification, NTP/event SETUP, feedback, RECORD, binary-plist `/play`, rate/property requests, and `/playback-info`. Stop closes the dedicated connection; it does not send a teardown command. Tests use a synthetic loopback receiver and generated keys. **Media/codec compatibility and URL playback on physical hardware remain unverified.** IPv6 receivers are supported: the timing socket binds the matching family and the Host header and RTSP URI bracket the literal. Legacy AirPlay 1, mirroring, DRM, and transcoding are not supported.
+The implementation uses same-socket HAP verification, NTP/event SETUP, feedback, RECORD, then a remote-control stream SETUP (type 130) whose `/command` requests queue the item (`insertPlayQueueItem`), set the rate and ask for `playbackInfo`; the receiver pushes state on the event channel. tvOS 18+ answers the older `/play` + `/playback-info` flow with HTTP 500. Stop closes the dedicated connection; it does not send a teardown command. Tests use a synthetic loopback receiver and generated keys; hardware results are below. IPv6 receivers are supported: the timing socket binds the matching family and the Host header and RTSP URI bracket the literal. Legacy AirPlay 1, mirroring, DRM, and transcoding are not supported.
+
+### Known limitations
+
+**Progressive MP4 does not play on Apple TV HD (AppleTV5,3) or Apple TV 4K 1st gen (AppleTV6,2) on
+tvOS 26.6 (23L773). HLS plays.** Measured on both TVs in October 2026:
+
+- With `playFile`, the TV fetches the whole file (`Range: bytes=0-1`, then the rest) and makes the
+  item current, but `playbackInfo` stays `readyToPlay: false` and the screen stays black. H.264
+  Main/High with AAC-LC and faststart MP4s all behave the same, and so does `video/mp4` instead of
+  `application/octet-stream`.
+- With `playUrl` and a public MP4 (http or https), the TV does not fetch it. It sends the sender an
+  `unhandledURL` request on the event channel (asking the sender to load the URL), which this library
+  does not answer, and stays `loading`.
+- Apple's HLS example stream (`img_bipbop_adv_example_fmp4/master.m3u8`) reaches `playing` on both.
+- pyatv's tvOS 26 rework (robkochman `8144c77c`, from pyatv PR #2846) stalls the same way on these
+  TVs; its testers report MP4 playing on Apple TV 4K (3rd gen) on tvOS 26.5 and 27.0.
+
+Use HLS for these models. Answering `unhandledURL` by proxying the media through the sender may make
+MP4 work; it is not implemented. See also #44 (seeking has no effect on tvOS 26) and #45
+(unreachable URLs never report an error).
 
 ## RAOP and AirPlay 2 audio (experimental, partial #22)
 
