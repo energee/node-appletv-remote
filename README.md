@@ -50,7 +50,7 @@ This orchestration API is synthetic-peer verified; physical mixed-protocol valid
 ```bash
 atv scan                          # find Apple TVs
 atv pair                          # AirPlay pairing (enter the PIN shown on the TV)
-atv companion-pair                # Companion pairing, needed for Companion-only controls/apps/accounts/power/text
+atv companion-pair                # Companion pairing, needed for Companion-only controls/apps/accounts/text
 atv remote                        # interactive remote over configured paired protocols
 atv command play                  # one-shot routed control
 atv state                         # normalized now-playing snapshot

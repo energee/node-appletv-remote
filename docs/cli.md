@@ -5,7 +5,7 @@ Every `atv` command, its arguments, and how it picks a device. `atv --help` prin
 ```bash
 atv scan [--host <ip>]...           # also query each known host's mDNS endpoint directly
 atv pair                          # AirPlay pairing (enter the PIN shown on the TV)
-atv companion-pair                # Companion pairing, needed for Companion-only controls/apps/accounts/power
+atv companion-pair                # Companion pairing, needed for Companion-only controls/apps/accounts
 
 atv command <command> [action] [deviceId]  # send one command, e.g. `atv command play`
 atv command up doubleTap [deviceId]  # action: singleTap (default), doubleTap, hold
@@ -68,7 +68,7 @@ atv --json state living-room
 
 One-shot operations emit exactly one `result` or `error`; successful actions contain `data.acknowledged`. `true` means a correlated protocol reply was received, not proof of a visible device effect. `false` means only the protocol write completed. Lists are arrays (`devices` or `items`), queue items contain only scalar identifiers/title/artist/album, and artwork is written to the requested path with `path`, `bytes`, and `available` in its result. Empty strings and unavailable numeric metadata are represented as `null`; numeric zero is preserved. Enum values are stable lowercase strings, with `unknown` whenever the device has not supplied a value. `deviceId` is the resolved paired identity, not a partial input selector.
 
-`atv --json watch [device]` emits normalized `connection`, `playback`, `volume`, `output-devices`, `text-focus`, and (when Companion is available) subscribed `power` events. Initial values explicitly use `unknown`, `unavailable`, or `null` until a provider reports them; no empty playback or output snapshot is invented. Companion-only watches are supported. Provider absence emits a `source` event. A connection loss emits one last `connection-close` event with `intentional: false` and exits nonzero. SIGINT/SIGTERM emits one last `watch-close` with `reason: "signal"`, closes owned transports, and exits 130/143 respectively, including during discovery or setup. Each watch selects one cached or discovered endpoint; its lifetime is never retried through the address cache, and there is no automatic reconnect.
+`atv --json watch [device]` emits normalized `connection`, `playback`, `volume`, `output-devices`, `text-focus`, and `power` events (from MRP, or from Companion when the TV has only a Companion pairing). Initial values explicitly use `unknown`, `unavailable`, or `null` until a provider reports them; no empty playback or output snapshot is invented. Companion-only watches are supported. Provider absence emits a `source` event. A connection loss emits one last `connection-close` event with `intentional: false` and exits nonzero. SIGINT/SIGTERM emits one last `watch-close` with `reason: "signal"`, closes owned transports, and exits 130/143 respectively, including during discovery or setup. Each watch selects one cached or discovered endpoint; its lifetime is never retried through the address cache, and there is no automatic reconnect.
 
 JSON commands use the same typed `FileStorage` credentials, endpoint overrides, and
 `DeviceSession` provider policy as human commands. Watches attach listeners before
@@ -111,7 +111,7 @@ can be absent independently; a Companion-only watch does not fabricate MRP state
 | `playback` | `{"state":"unknown"}` before observation; afterward the same data shape as `state` above |
 | `volume` | `{"value":32.5,"state":"known"}`; otherwise `value: null` with `state: "unknown"` or `"unavailable"` |
 | `output-devices` | `{"devices":[{"id":"psi-uuid","name":"Speaker"}],"state":"known"}`; unobserved devices are `null`, not an invented empty array |
-| `power` | `{"state":"off"}`; absent Companion reports `{"state":"unknown","available":false}` |
+| `power` | `{"state":"off"}`; with neither MRP nor Companion it reports `{"state":"unknown","available":false}` |
 | `text-focus` | `{"state":"focused"}`; initially `"unknown"` until observed; an unavailable provider has `available: false` |
 | `connection-error` | `{"code":"protocol_error","message":"Device rejected the operation","protocolCode":7}` |
 | `connection-close` | `{"intentional":false,"transport":"companion"}` |
@@ -157,7 +157,8 @@ Navigation/media/volume prefer eligible AirPlay MRP, enabled standalone MRP, the
 and supported DMAP controls; wake/suspend prefer Companion. A one-shot opens only the selected
 operation's provider. `remote` opens configured credential-bearing providers and reports a clear
 unavailable-operation error instead of fabricating a Companion stop/seek/queue implementation.
-Text/app/account/power/click/swipe and extra buttons use only Companion. Keys remain paired
+Text/app/account/click/swipe and extra buttons use only Companion; power comes from MRP when
+available, otherwise Companion. Keys remain paired
 to their actual carrier; the CLI never sends standalone MRP credentials to an AirPlay endpoint.
 Once an action is dispatched its error is propagated, never retried through another protocol.
 `command` (alias `cmd`) accepts `skip_forward` / `skip_backward` for the provider's default;

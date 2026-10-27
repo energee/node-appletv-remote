@@ -131,7 +131,7 @@ describe('CLI operations', () => {
   });
   it('closes a failed Companion connection', async () => {
     vi.mocked(AppleTV.prototype.connectCompanion).mockRejectedValue(new Error('connect failed'));
-    await expect(run(['power'])).rejects.toThrow('connect failed');
+    await expect(run(['text', 'focus'])).rejects.toThrow('connect failed');
     expect(AppleTV.prototype.close).toHaveBeenCalledTimes(1);
   });
   it('passes repeated targeted scan hosts and rejects malformed values before scan I/O', async () => {

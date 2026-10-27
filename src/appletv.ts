@@ -358,6 +358,7 @@ export class AppleTV extends EventEmitter {
       this.reportedOutputs = [];
       this.reportedLeader = undefined;
       this.resetRuntimeState();
+      if (!this.companionConnection) this.updatePowerState(PowerState.Unknown);
       // A failed setup reports through connect()'s rejection, never as `close`.
       if (this.readyTransports.has(connection)) this.emit('close');
     });
@@ -540,17 +541,22 @@ export class AppleTV extends EventEmitter {
   async pageUp(action: InputAction = 'singleTap'): Promise<void> { await this.companionButton(COMPANION_HID.pageUp, action); }
   async pageDown(action: InputAction = 'singleTap'): Promise<void> { await this.companionButton(COMPANION_HID.pageDown, action); }
 
-  // --- Power state (Companion) ---
+  // --- Power state (MRP DeviceInfo, or Companion) ---
 
-  /** Ask the device for its power state (Companion FetchAttentionState) and cache it. */
+  /**
+   * Power state. Over Companion, asks FetchAttentionState and caches the answer. Over MRP alone, returns the
+   * state from the last DeviceInfo, which the TV sends at connect and again on every sleep and wake.
+   */
   async fetchPowerState(): Promise<PowerState> {
+    if (!this.companionConnection && this.connection) return this.powerState;
     const content = await this.companionContent('FetchAttentionState');
     this.updatePowerState(powerStateFromStatus(content.get('state')));
     return this.powerState;
   }
 
-  /** Subscribe to SystemStatus events; changes then emit `powerState`. */
+  /** Subscribe to SystemStatus events; changes then emit `powerState`. MRP pushes DeviceInfoUpdate unasked. */
   subscribePowerState(): void {
+    if (!this.companionConnection && this.connection) return;
     this.requireCompanion().sendMessage(
       '_interest',
       new Map([['_regEvents', ['SystemStatus', 'TVSystemStatus']]]),
@@ -1216,6 +1222,13 @@ export class AppleTV extends EventEmitter {
       this.emit('volume', undefined);
     }
     this.handleOutputMessage(msg);
+
+    // DeviceInfo and DeviceInfoUpdate carry logicalDeviceCount: 0 while the Apple TV sleeps, 1 once awake
+    // (hardware, tvOS 26.6). A sleeping Apple TV HD rejects every Companion power request, so this is the power source.
+    if (msg.type === MessageType.DeviceInfo || msg.type === MessageType.DeviceInfoUpdate) {
+      const count = (msg['.deviceInfoMessage'] as Record<string, unknown> | undefined)?.logicalDeviceCount;
+      if (typeof count === 'number') this.updatePowerState(count > 0 ? PowerState.On : PowerState.Off);
+    }
 
     // DeviceInfo (type 15): remember the output device for SetVolume (clusterID or deviceUID)
     if (msg.type === MessageType.DeviceInfo) {

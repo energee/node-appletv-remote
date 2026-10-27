@@ -66,7 +66,7 @@ beforeEach(() => {
 });
 
 describe('operation policy', () => {
-  it('prefers MRP media but Companion power in a mixed session', async () => {
+  it('prefers MRP media and MRP power in a mixed session', async () => {
     const session = new DeviceSession(device, { credentials: { airplay: keys, companion: keys } });
     await session.connect();
     try {
@@ -77,6 +77,11 @@ describe('operation policy', () => {
       expect(hid.map(([, content]) => [content.get('_hidC'), content.get('_hBtS')])).toEqual([[13, 1], [13, 2]]);
       expect(state.mrp[0].bytes).toHaveLength(1);
       expect(session.powerState).toBe(PowerState.Unknown);
+      // A sleeping Apple TV rejects Companion power requests but MRP still reports logicalDeviceCount 0.
+      state.mrp[0].emit('mrp-message', { type: MessageType.DeviceInfo, '.deviceInfoMessage': { logicalDeviceCount: 0 } });
+      state.companion[0].emit('event', { identifier: 'SystemStatus', data: new Map<OpackValue, OpackValue>([['_c', new Map([['state', 3]])]]) });
+      expect(session.powerState).toBe(PowerState.Off);
+      await expect(session.execute('fetchPowerState')).resolves.toBe(PowerState.Off);
     } finally { await session.close(); }
   });
 
@@ -188,8 +193,9 @@ describe('setup, loss and teardown', () => {
 
   it('does not publish unready optional-provider state when setup fails', async () => {
     state.failAfterCompanionState = true;
+    // Power defaults to MRP; pin it to Companion so the unready Companion provider is what is under test.
     const session = new DeviceSession(device, { credentials: { airplay: keys, companion: keys },
-      transports: { airplay: {}, companion: { required: false } } });
+      transports: { airplay: {}, companion: { required: false } }, preferences: { fetchPowerState: 'companion' } });
     const powers: PowerState[] = [];
     session.on('powerState', power => powers.push(power));
     await session.connect();
