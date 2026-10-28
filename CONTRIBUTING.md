@@ -16,7 +16,11 @@ Use `protobufjs >=8.8.1` within major 8; the manifest and pnpm lockfile exclude 
 
 Update `package.json` and `CHANGELOG.md`, commit, and push a matching `v<version>` tag.
 The publish workflow installs the committed pnpm lockfile, runs tests, and publishes to npm
-with provenance using the repository's `NPM_TOKEN` secret. Like CI, publishing uses pnpm
-because a fresh npm dependency resolution can crash on Vitest's peers.
+with provenance through npm trusted publishing (OIDC), without a stored publishing token.
+Configure the npm package's GitHub Actions trusted publisher for owner `energee`, repository
+`node-appletv-remote`, workflow `publish.yml`, no environment, and allow direct `npm publish`.
+The publishing runner uses Node 24 and npm 11; this does not change the package's supported
+Node versions. Like CI, publishing uses pnpm because a fresh npm dependency resolution can
+crash on Vitest's peers.
 After the publish workflow succeeds, verify the version on npm and create the GitHub release
 from the same tag, using the changelog as release notes.
