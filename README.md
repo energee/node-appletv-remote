@@ -1,4 +1,4 @@
-# node-appletv-remote
+# Appletv Desktop Remote
 
 [![CI](https://github.com/energee/node-appletv-remote/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/energee/node-appletv-remote/actions/workflows/ci.yml)
 [![npm](https://badgen.net/npm/v/node-appletv-remote)](https://www.npmjs.com/package/node-appletv-remote)
