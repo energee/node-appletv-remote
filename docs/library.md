@@ -212,6 +212,11 @@ the MRP-only fields remain unknown. Normalized values always come from the
 selected client/player: inactive players' metadata is cached until selected,
 then replacement queues, changed direct item IDs, removals, and reconnects clear
 the old selected snapshot.
+The JSON CLI exposes these same fields in `state` results and normalized `playback`
+events, using stable string enum names and `null` for missing optional metadata; the
+library retains its numeric enum values and `undefined` optionals. A direct item-ID
+change clears the previous item's queue metadata, but does not discard a replacement
+queue delivered in that same update.
 
 
 ```typescript
