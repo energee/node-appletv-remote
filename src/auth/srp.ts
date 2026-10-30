@@ -11,17 +11,20 @@ export class SRPClient {
   private client: SrpClient | undefined;
   private publicKey: Buffer | undefined;
 
-  /** Start SRP with the server's salt and the on-screen PIN as password; generates a random 32-byte private value a and computes A. */
   init(salt: Buffer, pin: string): void {
     const secret = randomBytes(32);
-    this.client = new SrpClient(
-      SRP.params.hap,
-      salt,
-      Buffer.from('Pair-Setup'),
-      Buffer.from(pin),
-      secret,
-    );
-    this.publicKey = this.client.computeA();
+    try {
+      this.client = new SrpClient(
+        SRP.params.hap,
+        salt,
+        Buffer.from('Pair-Setup'),
+        Buffer.from(pin),
+        secret,
+      );
+      this.publicKey = this.client.computeA();
+    } finally {
+      secret.fill(0);
+    }
   }
 
   /** The client public key A. */
@@ -52,5 +55,12 @@ export class SRPClient {
   getSharedSecret(): Buffer {
     if (!this.client) throw new Error('SRP not initialized');
     return this.client.computeK();
+  }
+
+  /** Discard the accessible ephemeral public key and SRP state after a transient exchange. */
+  destroy(): void {
+    this.publicKey?.fill(0);
+    this.publicKey = undefined;
+    this.client = undefined;
   }
 }
