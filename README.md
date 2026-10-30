@@ -90,6 +90,10 @@ Other models and tvOS versions are untested; reports are welcome.
 | Legacy Apple TV 2/3 (DMAP), legacy RAOP receivers, HomePods | Unverified, no hardware available |
 | Standalone MRP (tvOS < 15), Companion-only devices | Unverified, no hardware available |
 
+Legacy RAOP receivers can use an explicit library `password` for MD5/no-qop Digest
+authentication. That path is loopback-verified, not hardware-verified; see the
+[receiver/authentication limits](docs/audio-and-playback.md#raop-and-airplay-2-audio-experimental-partial-22).
+
 ## Documentation
 
 - [Changelog](https://github.com/energee/node-appletv-remote/blob/main/CHANGELOG.md): what changed in each release, breaking changes and known limitations
