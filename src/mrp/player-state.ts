@@ -173,6 +173,7 @@ export class PlayerState {
     if (!this.selected) { this.activeClient = bundle; this.selected = true; client.active = identifier; }
     if (type === MessageType.SetState) {
       if (carriesState(payload)) player.hasState = true;
+      const previousDirectIdentifier = stableIdentifier(player.direct.uniqueIdentifier);
       for (const field of ['playbackState', 'displayName']) {
         if (payload[field] !== undefined) player.state[field] = payload[field];
       }
@@ -191,10 +192,10 @@ export class PlayerState {
         const directPayload = payload.nowPlayingInfo;
         const fields = retain(directPayload, DIRECT_FIELDS);
         const nextIdentifier = stableIdentifier(fields.uniqueIdentifier);
-        const previousIdentifier = stableIdentifier(player.direct.uniqueIdentifier);
-        if (nextIdentifier !== undefined && previousIdentifier !== undefined && nextIdentifier !== previousIdentifier) {
+        if (nextIdentifier !== undefined && previousDirectIdentifier !== undefined && nextIdentifier !== previousDirectIdentifier) {
           player.direct = {};
-          player.items = [];
+          // A direct item transition invalidates an older queue, but not a replacement received with it.
+          if (payload.playbackQueue === undefined) player.items = [];
         }
         player.direct = { ...player.direct, ...fields };
         if (Object.keys(directPayload).length > 0) player.hasDirectMetadata = true;

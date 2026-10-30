@@ -68,6 +68,15 @@ atv --json state living-room
 
 One-shot operations emit exactly one `result` or `error`; successful actions contain `data.acknowledged`. `true` means a correlated protocol reply was received, not proof of a visible device effect. `false` means only the protocol write completed. Lists are arrays (`devices` or `items`), queue items contain only scalar identifiers/title/artist/album, and artwork is written to the requested path with `path`, `bytes`, and `available` in its result. Empty strings and unavailable numeric metadata are represented as `null`; numeric zero is preserved. Enum values are stable lowercase strings, with `unknown` whenever the device has not supplied a value. `deviceId` is the resolved paired identity, not a partial input selector.
 
+Optional normalized metadata enums use `null` when unknown: `mediaType` is `audio`/`video`;
+`mediaSubType` is `music`/`podcast`/`audiobook`/`itunes-u`; `shuffleState` is
+`off`/`albums`/`songs`; `repeatState` is `off`/`track`/`all`. Season and episode zero are
+preserved. `contentIdentifier`, `uniqueIdentifier`, and each separate `iTunesStore*Identifier`
+are strings or `null`, never lossy 64-bit JSON numbers. These fields are included in both
+`state` results and normalized `playback` events, not the initial `{ "state": "unknown" }`
+watch notice. JSON is opt-in and can contain content/store identifiers; concise human
+`state` output still omits them. Queue-derived fields remain MRP-only and app-dependent.
+
 `atv --json watch [device]` emits normalized `connection`, `playback`, `volume`, `output-devices`, `text-focus`, and `power` events (from MRP, or from Companion when the TV has only a Companion pairing). Initial values explicitly use `unknown`, `unavailable`, or `null` until a provider reports them; no empty playback or output snapshot is invented. Companion-only watches are supported. Provider absence emits a `source` event. A connection loss emits one last `connection-close` event with `intentional: false` and exits nonzero. SIGINT/SIGTERM emits one last `watch-close` with `reason: "signal"`, closes owned transports, and exits 130/143 respectively, including during discovery or setup. Each watch selects one cached or discovered endpoint; its lifetime is never retried through the address cache, and there is no automatic reconnect.
 
 JSON commands use the same typed `FileStorage` credentials, endpoint overrides, and
@@ -88,6 +97,7 @@ Action rows include every supported alias/subcommand; request rejection produces
 | `help`, `--help`, `-h` | `{"schemaVersion":1}` |
 | `scan` | `{"devices":[{"id":"tv","name":"TV","address":"192.0.2.1","port":7000,"model":"AppleTV14,1","psi":null}]}` |
 | `state` | `{"hasPlayback":true,"playerIdentifier":null,"title":"Song","artist":null,"album":null,"genre":null,"duration":null,"elapsedTime":0,"playbackRate":0,"playbackState":"paused","appDisplayName":null,"appBundleIdentifier":null}` |
+| Additional `state` / normalized `playback` metadata | `{"mediaType":"video","mediaSubType":null,"seriesName":"Series","seasonNumber":0,"episodeNumber":0,"contentIdentifier":null,"uniqueIdentifier":"123","iTunesStoreIdentifier":"9223372036854775807","iTunesStoreSubscriptionIdentifier":null,"iTunesStoreArtistIdentifier":null,"iTunesStoreAlbumIdentifier":null,"shuffleState":"off","repeatState":"all"}` |
 | `queue` | `{"items":[{"id":"track","title":"Song","artist":"Artist","album":"Album"}]}` |
 | `artwork` | `{"path":"cover.jpg","bytes":1234,"available":true}` |
 | `command up`, `cmd up` | `{"command":"up","action":"singleTap","acknowledged":false}` |
