@@ -204,6 +204,13 @@ is prebuffered, and conversion remains outside the PCM packet sender. Ctrl+C rel
 the source/decoder and RAOP session. Source/decoder failures retain bounded diagnostics;
 no retry or alternate input route starts after PCM has been handed to the sender.
 
+Hardware verification on AppleTV6,2 / recorded tvOS 26.6 used the actual paired CLI
+with local MP3, local FLAC and HTTP MP3; the operator confirmed each was audible.
+A separate OS SIGINT during playback stopped the stream and closed its FFmpeg
+decoder. Receiver volume was not changed. This does not establish HomePod/legacy
+support or visible metadata; a later replay also observed a pre-playback discovery
+timeout.
+
 Numeric values must be finite decimal numbers in the documented range. Required IDs must be nonblank. Quote text to preserve spaces; `atv text set ""` explicitly sets empty text. Invalid arguments fail before reading credentials, discovery, or connection. For one-shot commands, operation and connection failures print an error to stderr and exit nonzero; one-shot operations close their connection even on failure. Absolute volume can fail if the TV does not report its output device, and has no effect when the TV offers only relative or no volume control (see #39 in [library.md](library.md#media-results-state-and-runtime-availability)). These commands depend on device/app support and do not bypass pairing. Extra positional arguments are rejected instead of ignored. Progress (including `Requesting ...` lines from state, queue and artwork) goes to stderr so results remain clean on stdout. Empty scans and pairing cancellation/no-device selections retain their existing successful exit behavior.
 
 Two CLI timing knobs guard HID keys, which the Apple TV never acknowledges. Set either to `0` for faster one-shot commands:

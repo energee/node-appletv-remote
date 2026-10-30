@@ -85,7 +85,7 @@ Other models and tvOS versions are untested; reports are welcome.
 | Volume | Absolute set/read verified with AirPods output; TV speakers do not allow absolute volume |
 | Audio output routing | Add/remove verified; `setOutputDevices` and routing errors unverified (#46) |
 | IPv6 (global, ULA, link-local) | Verified for MRP and Companion |
-| AirPlay 2 audio streaming (`RaopStream`) | Library PCM/WAV and FFmpeg-decoded MP3/cancel verified; the expanded CLI FLAC/remote audible matrix remains open. RAOP text/artwork/progress requests were accepted but not displayed on tvOS 26.6 (#22, #80). |
+| AirPlay 2 audio streaming (`RaopStream`) | Library PCM/WAV and FFmpeg-decoded MP3/cancel verified. Paired CLI local MP3/FLAC and HTTP MP3 were audible on AppleTV6,2 / tvOS 26.6; native SIGINT closed the decoder and sender. RAOP text/artwork/progress requests were accepted but not displayed on tvOS 26.6 (#22, #80). |
 | Text entry and text-focus events | Verified (focus, set, clear) |
 | Media URL and temporary local-file playback | HLS verified; progressive MP4 does not play on these two models on tvOS 26.6 ([known limitation](https://github.com/energee/node-appletv-remote/blob/main/docs/audio-and-playback.md#known-limitations)) |
 | Legacy Apple TV 2/3 (DMAP), legacy RAOP receivers, HomePods | Unverified, no hardware available |

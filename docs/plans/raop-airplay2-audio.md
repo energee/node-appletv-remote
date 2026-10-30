@@ -372,6 +372,10 @@ from unpadded A, B and S (pinned by `src/auth/__tests__/legacy-srp.test.ts`). H3
 - Verification: adapter spawn/error/frame-boundary tests and CLI pre-ownership
   credential-selection/resource regressions, plus compiled CLI runs through an encrypted
   TCP peer using actual FFmpeg/HTTP, native SIGINT and independently opened PCM packets.
+  Actual paired CLI MP3/FLAC/HTTP MP3 playback was subsequently confirmed audible by
+  the operator on AppleTV6,2 / recorded tvOS 26.6; native SIGINT stopped active audio
+  and closed the FFmpeg decoder. This satisfies #79's input hardware gate, not H2,
+  H3 or H4's positive receiver-display requirements.
 - Depends on: 6, 8, 9.
 
 **15. Move `airplay-playback.ts` onto the shared event-channel helper**

@@ -116,7 +116,12 @@ MP3 smoke fixture differed from gapless PCM by one encoded frame.
 Compiled CLI loopback verification used actual FFmpeg and HTTP inputs, explicit paired
 identity selection, independently decrypted PCM, text/JPEG/progress requests, SIGINT,
 missing-credential cleanup and HTTP failure. Its discovery boundary was synthetic.
-This does not establish audible CLI FLAC/remote playback or receiver metadata display.
+Separately, the actual paired CLI streamed local MP3, local FLAC and HTTP MP3 to
+AppleTV6,2 / recorded tvOS 26.6; the operator confirmed all three were audible.
+A native SIGINT run stopped active RTP transmission and closed its FFmpeg decoder.
+These observations cover #79, not the broader HomePod/legacy receiver matrix or
+receiver metadata display. One later replay failed discovery before sending audio;
+successful audio runs do not imply discovery always succeeds.
 
 
 On tvOS 26.6, text/artwork/progress requests were accepted without visible metadata
