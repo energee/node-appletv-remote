@@ -129,8 +129,12 @@ loss participates in that invalidation. `connection` distinguishes `ready`, unex
 intentional `closed`, and optional setup `failed`. `close()` cancels setup and owned transports,
 detaches forwarding, and is idempotent. Sessions are single-use and add no reconnect or cross-protocol retry.
 
-Verification uses synthetic MRP/Companion fixtures and a real local HTTP DMAP peer. Physical
-mixed-protocol/Companion-only interoperability remains unverified for this session API.
+Verification uses encrypted MRP/Companion fixtures, a real TCP standalone-MRP peer, and a
+local HTTP DMAP peer. On AppleTV6,2 / tvOS 26.6, one public `DeviceSession` read MRP
+now-playing state (idle) alongside Companion app lists, text focus, and an explicitly
+Companion-routed power read. A separate Companion-only session (`port: 0`, Companion
+credentials only) returned app lists, focus, and power with no MRP provider opened.
+Physical legacy DMAP and standalone-MRP interoperability remains unverified.
 
 ## Remote control
 

@@ -43,7 +43,9 @@ Apps, accounts, text input, and Companion-only navigation/media/volume/power con
 `DeviceSession` offers typed, per-operation routing over separately paired AirPlay, standalone
 MRP, Companion and legacy DMAP clients. It selects before sending and never replays a failed
 action through another protocol; see [routed sessions](docs/library.md#routed-sessions).
-This orchestration API is synthetic-peer verified; physical mixed-protocol validation is pending.
+The public session API is hardware-verified on AppleTV6,2 / tvOS 26.6 with mixed
+AirPlay/Companion and Companion-only connections. Legacy DMAP and direct MRP session
+coverage uses synthetic peers; see the library guide for the exercised operations.
 
 ## CLI
 
