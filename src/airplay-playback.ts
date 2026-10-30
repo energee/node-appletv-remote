@@ -102,26 +102,36 @@ class LocalFileServer {
     });
   }
 
-  static async open(path: string, address: string, onError: (error: Error) => void): Promise<LocalFileServer> {
+  static async open(path: string, address: string, onError: (error: Error) => void, signal: AbortSignal): Promise<LocalFileServer> {
+    signal.throwIfAborted();
     const file = await fs.open(path, constants.O_RDONLY | constants.O_NONBLOCK);
     let directory: string | undefined;
     try {
+      signal.throwIfAborted();
       const before = await file.stat();
       if (!before.isFile()) throw new Error('Local media path must be a regular file');
       directory = await fs.mkdtemp(join(tmpdir(), 'node-atv-media-'));
       const snapshot = join(directory, 'media');
-      await pipeline(file.createReadStream({ autoClose: false }), createWriteStream(snapshot, { mode: 0o600 }));
+      await pipeline(file.createReadStream({ autoClose: false }), createWriteStream(snapshot, { mode: 0o600 }), { signal });
       const after = await file.stat();
       if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) throw new Error('Local media file changed while opening');
       const stat = await fs.stat(snapshot);
       const server = new LocalFileServer(snapshot, directory, stat, randomBytes(32).toString('base64url'), onError);
       await new Promise<void>((resolve, reject) => {
-        server.server.once('error', reject);
-        server.server.listen({ host: address, port: 0 }, () => {
-          server.server.removeListener('error', reject);
-          server.listening = true;
-          resolve();
-        });
+        const finish = (error?: unknown) => {
+          signal.removeEventListener('abort', abort);
+          server.server.removeListener('error', finish);
+          if (error !== undefined) reject(error);
+          else { server.listening = true; resolve(); }
+        };
+        const abort = () => {
+          server.server.close(() => {});
+          finish(signal.reason);
+        };
+        signal.addEventListener('abort', abort, { once: true });
+        server.server.once('error', finish);
+        if (signal.aborted) { abort(); return; }
+        server.server.listen({ host: address, port: 0 }, () => finish());
       });
       await file.close();
       return server;
@@ -200,6 +210,7 @@ export class AirPlayPlaybackSession {
   private queue: Promise<unknown> = Promise.resolve();
   private started = false;
   private closed = false;
+  private readonly cancellation = new AbortController();
   private readonly sessionId = randomUUID().toUpperCase();
   /** Stream ID from the type-130 SETUP; addresses every /command. */
   private streamId = '';
@@ -229,7 +240,7 @@ export class AirPlayPlaybackSession {
     try {
       const address = options.address ?? await routedAddress(this.host, this.port);
       if (address.includes('%') || !isIP(address) || address === '0.0.0.0' || (isIP(address) === 6 && /^[.:0]+$/.test(address))) throw new Error('Local media address must be a concrete unscoped IP address');
-      const localFile = await LocalFileServer.open(path, address, error => this.fail(error));
+      const localFile = await LocalFileServer.open(path, address, error => this.fail(error), this.cancellation.signal);
       this.localFile = localFile;
       this.started = false;
       await this.playUrl(localFile.url, position, options);
@@ -253,7 +264,7 @@ export class AirPlayPlaybackSession {
     if (this.started || this.closed) throw new Error('Playback session already started or closed');
     this.started = true;
     try {
-      const socket = await connectSocket(this.host, this.port);
+      const socket = await connectSocket(this.host, this.port, undefined, this.cancellation.signal);
       if (this.closed) { socket.destroy(); throw new Error('Playback session closed'); }
       this.socket = socket;
       socket.on('data', (data: Buffer) => this.receive(data));
@@ -283,7 +294,7 @@ export class AirPlayPlaybackSession {
       const eventCipher = new HAPSession(
         await hkdfSha512(keys.sharedSecret, 'Events-Salt', 'Events-Read-Encryption-Key', 32),
         await hkdfSha512(keys.sharedSecret, 'Events-Salt', 'Events-Write-Encryption-Key', 32));
-      const events = await connectSocket(this.host, eventPort);
+      const events = await connectSocket(this.host, eventPort, undefined, this.cancellation.signal);
       if (this.closed) { events.destroy(); throw new Error('Playback session closed'); }
       this.events = events;
       let encrypted: Buffer = Buffer.alloc(0), plain: Buffer = Buffer.alloc(0);
@@ -404,6 +415,7 @@ export class AirPlayPlaybackSession {
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.heartbeat = undefined;
     const reason = this.failure ?? new Error('Playback session closed');
+    this.cancellation.abort(reason);
     this.pending?.reject(reason);
     this.pending = undefined;
     this.startupWaiter?.reject(reason);
