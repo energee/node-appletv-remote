@@ -99,7 +99,16 @@ DMAP instance names are not universal device IDs: `deviceId`/`identifiers` use `
 
 IPv4 is preferred when advertised; global/ULA IPv6 and explicitly scoped link-local IPv6 (for example `fe80::1234%en0`) are accepted. Unscoped link-local, loopback, unspecified, and multicast addresses are excluded. Use unbracketed addresses for constructors; the RTSP layer brackets IPv6 authorities. `companionAddress`, `mrpAddress`, `raopAddress`, and `dmapAddress` prefer an address shared with the primary protocol. Modern services joined by compatible identity or hostname can retain disjoint service-specific endpoints; joined DMAP endpoints must be shared. Dual-stack/multihomed advertisements for the same primary identity retain their usable addresses for overlap checks. No automatic connection retry across alternate addresses is added. Exceptions in `scan` filter/until callbacks reject the scan promise after stopping discovery.
 
-Tests use synthetic peers only; IPv6 network discovery and older-tvOS hardware interoperability still require operator validation. An AirPlay advertisement alone does not prove AirPlay 2 MRP or URL-playback compatibility. `createClient` treats known AppleTV1-3 model advertisements as legacy AirPlay; explicit protocol selection remains available.
+Targeted transport uses owned `node:dgram` sockets, not private Bonjour APIs.
+It retains TTL-aware per-target PTR/SRV/TXT/A/AAAA state, including RFC 6762 cache-flush
+and goodbye grace, and skips bounded unsupported/non-IN records without discarding
+otherwise valid answers. Scoped IPv6 membership uses `::%<interface>`; received
+Darwin zone suffixes are removed before canonical address comparison. Reply-source
+matching remains conservative and does not authenticate advertised identities.
+See [targeted interoperability](library.md#targeted-discovery-interoperability) for
+native IPv4/IPv6 and non-Apple DNS observations; routed and older-tvOS interoperability
+remain unverified. An AirPlay advertisement does not establish AirPlay 2 MRP or URL
+playback support. `createClient` keeps explicit protocol selection for legacy devices.
 
 ## Advanced: raw Companion messages
 

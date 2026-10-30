@@ -40,6 +40,38 @@ pairing and cryptographic connection verification before trusting a result.
 
 Targeted discovery closes its UDP sockets and retry timer with the scan. Closing
 during asynchronous socket setup cannot restart querying or leave a retry timer alive.
+The per-scan record cache respects TTL expiration and the one-second cache-flush/goodbye
+grace period; it is not a persistent device cache. Refreshes and goodbyes still apply
+when its bounded capacity prevents adding a new record. Missing target responses do
+not suppress ordinary multicast results or prove a device absent/asleep.
+
+### Targeted discovery interoperability
+
+Same-link DNS datagrams were captured privately from the owned Node UDP sockets;
+raw TXT, identifiers and network addresses are not published here.
+
+| Responder | Exercised network | Decoded services |
+| --- | --- | --- |
+| AppleTV6,2 | IPv4 and scoped link-local IPv6 | AirPlay, Companion, RAOP |
+| Roku 7104X | IPv4 and IPv6 | AirPlay |
+| Vizio E65u-D3 | IPv4 | AirPlay |
+
+All target questions carried QU. The observed target replies came from UDP 5353,
+used ten-second record TTLs and did not set cache-flush, consistent with
+[RFC 6762 §6.7](https://www.rfc-editor.org/rfc/rfc6762.html#section-6.7)
+for queries sent from an ephemeral port. A controlled UDP responder separately
+proved actual multicast replies, TTL expiry, cache-flush grace and preservation of
+unaffected AAAA records. Scoped Darwin reply addresses were exercised on the native
+IPv6 path, not inferred from an IPv4-only fixture.
+Apple and Roku packets arrived on the ephemeral query sockets. Vizio packets also
+reached the port-5353 listener; UDP receive metadata does not identify the destination
+IP, so those packets are not asserted to be multicast. Vizio supplied no AAAA record
+in this run.
+
+These are application-layer DNS captures, not Ethernet/IP captures or sleep-proxy
+evidence. Routed/subnet-isolated interoperability remains unverified; no result
+here establishes NAT traversal, receiver control/media support or cryptographic trust.
+
 
 ## Optional storage
 

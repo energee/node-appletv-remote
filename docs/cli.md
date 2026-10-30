@@ -171,6 +171,11 @@ It is unauthenticated and does not establish reachability, wake/trust state, or 
 pair normally and rely on cryptographic connection verification before trusting a result.
 The same host flags work with `atv --json scan --host <ip>`; cancellation releases
 both the ordinary browser and targeted UDP discovery.
+Targeted record TTLs and cache-flush/goodbye grace govern only that scan's service
+assembly; they are not sleep, absence or trust signals. Same-link Apple/Roku/Vizio
+and scoped IPv6 observations are recorded in the
+[library guide](library.md#targeted-discovery-interoperability); routed discovery
+still depends on responder/network behavior and is not verified by those observations.
 
 Control commands use the public `DeviceSession` operation policy, not a separate CLI router.
 Navigation/media/volume prefer eligible AirPlay MRP, enabled standalone MRP, then Companion
