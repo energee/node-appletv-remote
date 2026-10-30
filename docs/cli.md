@@ -117,6 +117,11 @@ can be absent independently; a Companion-only watch does not fabricate MRP state
 | `connection-close` | `{"intentional":false,"transport":"companion"}` |
 | `watch-close` | `{"reason":"signal","signal":"SIGINT","intentional":true}` |
 
+Power does not require Companion pairing: an MRP-only watch uses authenticated DeviceInfo
+observations and the ready session's cached power snapshot. An observed `on`/`off` is never
+replaced by an unavailable snapshot merely because Companion is absent. A ready but unobserved
+power source reports `unknown`; `available: false` is reserved for neither MRP nor Companion.
+
 Playback states are `unknown`, `playing`, `paused`, `stopped`, `interrupted`, and
 `seeking`. Power and focus use the strings shown above. One-shot `error` records
 use the same safe data shape as `connection-error`; stable codes are
