@@ -33,10 +33,23 @@ export interface AirPlayPlaybackStatus {
   rate?: number;
 }
 
+/** Optional confirmation that the receiver leaves startup buffering. */
+export interface AirPlayPlaybackOptions {
+  /** Wait for a playing/paused event, rejecting and closing on timeout. Omit to resolve on queue acceptance. */
+  startupTimeoutMs?: number;
+}
+
 /** Controls the temporary, single-file HTTP listener created by {@link AirPlayPlaybackSession.playFile}. */
-export interface AirPlayFilePlaybackOptions {
+export interface AirPlayFilePlaybackOptions extends AirPlayPlaybackOptions {
   /** Concrete local IPv4 or IPv6 address to advertise and bind. Defaults to the route to the receiver. */
   address?: string;
+}
+
+function validatePlaybackOptions(options: AirPlayPlaybackOptions): void {
+  const timeout = options.startupTimeoutMs;
+  if (timeout !== undefined && (!Number.isInteger(timeout) || timeout < 1 || timeout > 0x7fffffff)) {
+    throw new Error('startupTimeoutMs must be an integer from 1 to 2147483647');
+  }
 }
 
 interface ByteRange { start: number; end: number; }
@@ -192,6 +205,8 @@ export class AirPlayPlaybackSession {
   private streamId = '';
   /** Last playbackState pushed on the event channel (loading/playing/paused/stopped). */
   private pushedState?: string;
+  private playbackStarted = false;
+  private startupWaiter?: { resolve: () => void; reject: (error: Error) => void };
   private messageId = 0;
   /** playbackInfo requests awaiting their event-channel response, by messageID; close() rejects them. */
   private infoWaiters = new Map<number, { resolve: (info: Record<string, unknown>) => void; reject: (error: Error) => void }>();
@@ -208,6 +223,7 @@ export class AirPlayPlaybackSession {
    * to reach the selected LAN address; this serves bytes only and does not transcode media.
    */
   async playFile(path: string, position = 0, options: AirPlayFilePlaybackOptions = {}): Promise<void> {
+    validatePlaybackOptions(options);
     if (this.started || this.closed) throw new Error('Playback session already started or closed');
     this.started = true;
     try {
@@ -216,7 +232,7 @@ export class AirPlayPlaybackSession {
       const localFile = await LocalFileServer.open(path, address, error => this.fail(error));
       this.localFile = localFile;
       this.started = false;
-      await this.playUrl(localFile.url, position);
+      await this.playUrl(localFile.url, position, options);
     } catch (error) {
       if (!this.closed) this.started = false;
       this.localFile?.close(); this.localFile = undefined;
@@ -224,8 +240,12 @@ export class AirPlayPlaybackSession {
     }
   }
 
-  /** Queue a reachable HTTP(S) media URL. Resolves when accepted, not when media starts or ends; position is seconds. */
-  async playUrl(url: string, position = 0): Promise<void> {
+  /**
+   * Queue an HTTP(S) media URL; position is seconds. By default resolves on acceptance.
+   * With startupTimeoutMs, waits for receiver-confirmed playing/paused or rejects and closes.
+   */
+  async playUrl(url: string, position = 0, options: AirPlayPlaybackOptions = {}): Promise<void> {
+    validatePlaybackOptions(options);
     let parsed: URL;
     try { parsed = new URL(url); } catch { throw new Error('Invalid media URL'); }
     if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Media URL must use HTTP or HTTPS');
@@ -303,7 +323,22 @@ export class AirPlayPlaybackSession {
       this.heartbeat = setInterval(() => {
         if (!this.pending) void this.request('POST', '/feedback', 'RTSP/1.0').catch(error => this.fail(error));
       }, 2000);
+      if (options.startupTimeoutMs !== undefined) await this.waitForStartup(options.startupTimeoutMs);
     } catch (error) { this.fail(error as Error); throw error; }
+  }
+
+  private async waitForStartup(timeout: number): Promise<void> {
+    if (this.failure) throw this.failure;
+    if (this.closed) throw new Error('Playback session closed');
+    if (this.playbackStarted) return;
+    if (this.pushedState === 'stopped') throw new Error('Playback stopped before starting');
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => this.fail(new Error(`Timeout waiting for playback to start (${timeout} ms)`)), timeout);
+      this.startupWaiter = {
+        resolve: () => { clearTimeout(timer); this.startupWaiter = undefined; resolve(); },
+        reject: error => { clearTimeout(timer); this.startupWaiter = undefined; reject(error); },
+      };
+    });
   }
 
   /** Last receiver playbackState pushed (loading/playing/paused/stopped), finer than getStatus().state; no round trip. */
@@ -341,9 +376,19 @@ export class AirPlayPlaybackSession {
     if (!Buffer.isBuffer(data)) return; // updateInfo and other receiver notices carry no nested data.
     const event = parseBuffer(data)[0] as Record<string, unknown>;
     if (event.kind === 'response' && typeof event.messageID === 'number') this.infoWaiters.get(event.messageID)?.resolve(event.info as Record<string, unknown> ?? {});
+    else if (event.type === 'error') {
+      const error = event.error as Record<string, unknown> | undefined;
+      this.fail(new Error(`Playback error ${error?.code ?? 'unknown'} (${error?.domain ?? 'unknown domain'})`));
+    }
     else if (event.type === 'playbackState' && typeof event.name === 'string') {
       this.pushedState = event.name;
       if (event.name === 'stopped') this.localFile?.close();
+      if (event.name === 'playing' || event.name === 'paused') {
+        this.playbackStarted = true;
+        this.startupWaiter?.resolve();
+      } else if (event.name === 'stopped' && this.startupWaiter) {
+        this.fail(new Error('Playback stopped before starting'));
+      }
     }
   }
 
@@ -361,6 +406,7 @@ export class AirPlayPlaybackSession {
     const reason = this.failure ?? new Error('Playback session closed');
     this.pending?.reject(reason);
     this.pending = undefined;
+    this.startupWaiter?.reject(reason);
     for (const waiter of this.infoWaiters.values()) waiter.reject(reason);
     this.infoWaiters.clear();
     this.localFile?.close(); this.localFile = undefined;

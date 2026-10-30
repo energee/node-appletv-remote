@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- URL and local-file playback can opt into `startupTimeoutMs` to reject and close sessions that
+  never reach receiver-confirmed playing/paused. Receiver error events now surface as playback
+  failures; queue-accepted behavior remains the default (#45).
+
 ## 0.5.0
 
 Hardware-tested on an Apple TV 4K (1st gen, AppleTV6,2) and an Apple TV HD (AppleTV5,3), both on
