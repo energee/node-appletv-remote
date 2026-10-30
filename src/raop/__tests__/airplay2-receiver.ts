@@ -1,13 +1,15 @@
 /**
  * Loopback AirPlay 2 realtime-audio receiver shared by the airplay2 setup and stream tests:
- * HAP pair-verify on the RTSP socket, HAP-encrypted RTSP afterwards, an encrypted event channel
- * (Events-Salt) that sends one request and records the acknowledgement, and UDP data/control
- * sockets that collect what the sender transmits. Synthetic keys only; no device involved.
+ * retained HAP pair-verify or transient SRP pairing on the RTSP socket, HAP-encrypted RTSP
+ * afterwards, an encrypted event channel (Events-Salt) that sends one request and records the
+ * acknowledgement, and UDP data/control sockets that collect what the sender transmits. Synthetic
+ * keys only; no device involved.
  */
 import { createServer, type Socket } from 'node:net';
 import { createSocket } from 'node:dgram';
 import { once } from 'node:events';
 import { generateKeyPairSync, diffieHellman, createPublicKey, createDecipheriv, sign, verify, type KeyObject } from 'node:crypto';
+import { SRP, SrpServer } from 'fast-srp-hap';
 import { setTimeout as delay } from 'node:timers/promises';
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
@@ -36,6 +38,10 @@ export interface ReceiverOptions {
   timingFirst?: boolean;
   /** Close the event channel when TEARDOWN arrives, before replying to it (an Apple TV does this). */
   closeEventsOnTeardown?: boolean;
+  /** Replaces the transient pair-setup M2 TLV reply. */
+  transientM2?: Buffer;
+  /** Replaces the transient pair-setup M4 TLV reply after checking the client proof. */
+  transientM4?: Buffer;
 }
 
 const raw = (key: KeyObject) => Buffer.from(key.export({ format: 'der', type: 'spki' }).subarray(-32));
@@ -80,6 +86,7 @@ export async function airplay2Receiver(options: ReceiverOptions = {}) {
     let encrypted = Buffer.alloc(0); let plain = Buffer.alloc(0);
     let session: HAPSession | undefined;
     let secret: Buffer | undefined; let ephemeral: Buffer | undefined; let clientEphemeral: Buffer | undefined;
+    let transientSrp: SrpServer | undefined;
     const write = (message: Buffer) => {
       const wire = session ? session.encrypt(message) : message;
       // Split replies to exercise streaming buffers rather than packet assumptions.
@@ -99,6 +106,25 @@ export async function airplay2Receiver(options: ReceiverOptions = {}) {
         requests.push({ startLine: message.startLine, method, uri, headers, body: Buffer.from(body), encrypted: !!session });
         const reply = (payload: Buffer = Buffer.alloc(0), extra = '', code = '200 OK') => write(Buffer.concat([
           Buffer.from(`${protocol} ${code}\r\n${headers.cseq ? `CSeq: ${headers.cseq}\r\n` : ''}${extra}Content-Length: ${payload.length}\r\n\r\n`), payload]));
+        if (uri === '/pair-pin-start') { reply(); continue; }
+        if (uri === '/pair-setup') {
+          const tlv = tlvDecode(body);
+          if (tlv[TlvTag.SeqNo]?.[0] === 1) {
+            const salt = Buffer.alloc(16, 0x5a);
+            transientSrp = new SrpServer(SRP.params.hap, salt, Buffer.from('Pair-Setup'), Buffer.from(String(3939)), Buffer.alloc(32, 0x6b));
+            reply(options.transientM2 ?? tlvEncode({ [TlvTag.SeqNo]: Buffer.from([2]), [TlvTag.Salt]: salt, [TlvTag.PublicKey]: transientSrp.computeB() }));
+          } else if (tlv[TlvTag.SeqNo]?.[0] === 3 && transientSrp) {
+            transientSrp.setA(tlv[TlvTag.PublicKey]!);
+            transientSrp.checkM1(tlv[TlvTag.Proof]!);
+            if (options.transientM4) { reply(options.transientM4); continue; }
+            secret = transientSrp.computeK();
+            const verified = new HAPSession(await hkdfSha512(secret, 'Control-Salt', 'Control-Read-Encryption-Key', 32), await hkdfSha512(secret, 'Control-Salt', 'Control-Write-Encryption-Key', 32));
+            eventCipher = new HAPSession(await hkdfSha512(secret, 'Events-Salt', 'Events-Write-Encryption-Key', 32), await hkdfSha512(secret, 'Events-Salt', 'Events-Read-Encryption-Key', 32));
+            reply(tlvEncode({ [TlvTag.SeqNo]: Buffer.from([4]), [TlvTag.Proof]: transientSrp.computeM2() }));
+            session = verified;
+          } else reply(tlvEncode({ [TlvTag.Error]: Buffer.from([2]) }), '', '470 Connection Authorization Required');
+          continue;
+        }
         if (uri === '/pair-verify') {
           const tlv = tlvDecode(body);
           if (tlv[TlvTag.SeqNo]![0] === 1) {

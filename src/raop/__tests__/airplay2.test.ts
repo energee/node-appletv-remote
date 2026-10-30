@@ -7,6 +7,7 @@ import { setupAirPlay2Audio } from '../airplay2.js';
 import { PairVerify } from '../../auth/pair-verify.js';
 import { HAPSession } from '../../util/hap-session.js';
 import { connectSocket } from '../../connection.js';
+import { TlvTag, tlvDecode, tlvEncode } from '../../util/tlv.js';
 import { airplay2Receiver, closedPort, until } from './airplay2-receiver.js';
 
 // Record every 32-byte random key (the stream `shk`), so tests can check it is zeroed.
@@ -74,6 +75,47 @@ describe('setupAirPlay2Audio', () => {
     expect(receiver.state.eventAcknowledged).toBe(true);
   });
 
+  it('uses transient SRP on the RTSP socket when no retained credentials are supplied', async () => {
+    const { receiver, client } = await connect();
+    const result = await setupAirPlay2Audio(client, '127.0.0.1', undefined, 1234567, ports, new AbortController().signal);
+    cleanups.push(() => { result.events.destroy(); });
+
+    const pairing = receiver.requests.filter(request => request.uri === '/pair-pin-start' || request.uri === '/pair-setup');
+    expect(pairing.map(request => request.uri)).toEqual(['/pair-pin-start', '/pair-setup', '/pair-setup']);
+    expect(pairing.every(request => request.startLine.endsWith('HTTP/1.1') && request.headers.cseq === undefined
+      && request.headers['x-apple-hkp'] === '4' && !request.encrypted)).toBe(true);
+    const m1 = tlvDecode(pairing[1].body);
+    expect(m1[TlvTag.Method]).toEqual(Buffer.from([0]));
+    expect(m1[TlvTag.SeqNo]).toEqual(Buffer.from([1]));
+    expect(m1[TlvTag.Flags]).toEqual(Buffer.from([0x10]));
+    const m3 = tlvDecode(pairing[2].body);
+    expect(m3[TlvTag.SeqNo]).toEqual(Buffer.from([3]));
+    expect(m3[TlvTag.PublicKey]).toHaveLength(384);
+    expect(m3[TlvTag.Proof]).toHaveLength(64);
+    expect(receiver.requests.filter(request => request.uri === '/pair-setup')).toHaveLength(2);
+    expect(receiver.requests.filter(request => request.method === 'SETUP').every(request => request.encrypted)).toBe(true);
+  });
+
+  it.each([
+    ['a malformed M2', { transientM2: Buffer.from([TlvTag.SeqNo]) }, 1],
+    ['an M2 error', { transientM2: tlvEncode({ [TlvTag.SeqNo]: Buffer.from([2]), [TlvTag.Error]: Buffer.from([2]) }) }, 1],
+    ['a bad M4 proof', { transientM4: tlvEncode({ [TlvTag.SeqNo]: Buffer.from([4]), [TlvTag.Proof]: Buffer.alloc(64) }) }, 2],
+  ])('rejects transient pairing on %s before encrypted SETUP', async (_name, options, pairSetupRequests) => {
+    const { receiver, client } = await connect(options);
+    await expect(setupAirPlay2Audio(client, '127.0.0.1', undefined, 1234567, ports, new AbortController().signal)).rejects.toBeInstanceOf(Error);
+    expect(receiver.requests.filter(request => request.uri === '/pair-setup')).toHaveLength(pairSetupRequests);
+    expect(receiver.requests.some(request => request.method === 'SETUP' && request.encrypted)).toBe(false);
+  });
+
+  it('cleans up transient setup when setup is aborted', async () => {
+    const { receiver, client } = await connect({ eventPort: await closedPort() });
+    const controller = new AbortController();
+    const setup = setupAirPlay2Audio(client, '127.0.0.1', undefined, 1234567, ports, controller.signal);
+    await until(() => receiver.requests.some(request => request.method === 'SETUP'));
+    controller.abort();
+    await expect(setup).rejects.toBeInstanceOf(Error);
+    expect(receiver.requests.filter(request => request.method === 'SETUP')).toHaveLength(1);
+  });
   it.each([
     ['missing dataPort', { dataPort: undefined }],
     ['zero controlPort', { controlPort: 0 }],

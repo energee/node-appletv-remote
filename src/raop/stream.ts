@@ -1,8 +1,9 @@
 /**
  * One-shot RAOP PCM streaming with two profiles chosen from the TXT record. Legacy receivers get
  * cleartext L16 with optional legacy PIN verification. AirPlay 2 receivers (features bit 38 or 48)
- * get realtime PCM: HAP pair-verify with stored credentials, encrypted RTSP, plist SETUPs and an
- * event channel (`airplay2.ts`), then the same paced loop with every audio packet sealed (#22).
+ * use retained HAP pair-verify credentials when supplied; eligible receivers can instead use
+ * session-only transient pairing. AirPlay 2 control is encrypted, then plist SETUPs and an event
+ * channel establish realtime PCM; the shared packet loop follows (#22).
  */
 import { isIPv4, type Socket } from 'node:net';
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram';
@@ -39,7 +40,7 @@ export interface RaopStreamOptions {
   duration?: number;
   /** Previously paired legacy AirPlay seed (32 bytes), NOT HAP credentials. Legacy receivers only. No pairing/storage access. */
   legacySeed?: Buffer;
-  /** HAP credentials from `PairSetup` (as stored by `atv pair`). Required for, and only accepted by, AirPlay 2 receivers. */
+  /** Retained HAP credentials for AirPlay 2; without them only receivers advertising transient-pairing eligibility may stream. */
   credentials?: HAPCredentials;
   /** Legacy RAOP receiver password. Never supported for AirPlay 2 receivers. */
   password?: string;
@@ -174,10 +175,21 @@ export class RtspClient {
   }
 }
 
+function validHAPCredentials(credentials: HAPCredentials): boolean {
+  return !!credentials && typeof credentials.clientId === 'string' && credentials.clientId.length > 0
+    && typeof credentials.serverId === 'string' && credentials.serverId.length > 0
+    && Buffer.isBuffer(credentials.clientLTSK) && credentials.clientLTSK.length === 32
+    && Buffer.isBuffer(credentials.clientLTPK) && credentials.clientLTPK.length === 32
+    && Buffer.isBuffer(credentials.serverLTPK) && credentials.serverLTPK.length === 32;
+}
+
+
 /** Explicit endpoint plus _raop._tcp TXT capabilities; no discovery or credential access. */
 export class RaopStream {
   /** `airplay2` when features bit 38 (unified media control) or 48 (CoreUtils pairing) is set, else `legacy`. */
   private readonly profile: 'legacy' | 'airplay2';
+  /** Transient pairing is allowed only when system pairing (43) or CoreUtils pairing (48) is advertised. */
+  private readonly transientPairingEligible: boolean;
   private readonly requiresLegacySeed: boolean;
   private readonly requiresPassword: boolean;
   /** md capabilities captured at construction; later caller mutations of the TXT record are ignored. */
@@ -205,6 +217,7 @@ export class RaopStream {
     const status = flags.reduce((value, flag) => value | Number.parseInt(flag, 16), 0);
     const featureBits = BigInt('0x' + features[1]) | (BigInt('0x' + (features[2] ?? '0')) << 32n);
     this.profile = featureBits & ((1n << 38n) | (1n << 48n)) ? 'airplay2' : 'legacy';
+    this.transientPairingEligible = !!(featureBits & ((1n << 43n) | (1n << 48n)));
     // Access-control modes remain unsupported. Legacy Digest authentication is only evidenced by pw and bit 0x80.
     this.requiresPassword = (txt.pw !== undefined && txt.pw !== 'false') || !!(status & 0x80);
     if (txt.act === '2' || txt.acl === '1') {
@@ -237,7 +250,12 @@ export class RaopStream {
       if (options.metadata.artwork !== undefined) this.artworkBody(options.metadata.artwork);
     }
     if (options.duration !== undefined) this.progressBody(options.duration);
-    if (this.profile === 'airplay2' && !options.credentials) throw new Error('AirPlay 2 RAOP receiver requires HAP credentials');
+    if (this.profile === 'airplay2' && options.credentials !== undefined && !validHAPCredentials(options.credentials)) {
+      throw new Error('Invalid AirPlay 2 HAP credentials');
+    }
+    if (this.profile === 'airplay2' && options.credentials === undefined && !this.transientPairingEligible) {
+      throw new Error('AirPlay 2 RAOP receiver does not advertise transient pairing eligibility');
+    }
     if (this.profile === 'airplay2' && options.legacySeed !== undefined) throw new Error('RAOP legacy seed is not used by AirPlay 2 receivers');
     if (this.profile === 'legacy' && options.credentials !== undefined) throw new Error('HAP credentials are not used by legacy RAOP receivers');
     if (this.requiresLegacySeed && !options.legacySeed) throw new Error('RAOP receiver requires a previously paired legacy seed');
@@ -380,7 +398,7 @@ export class RaopStream {
         if (response) timing.send(response, remote.port, remote.address, () => {});
       });
       if (this.profile === 'airplay2') {
-        airplay2 = await setupAirPlay2Audio(client, this.address, options.credentials!, this.ssrc,
+        airplay2 = await setupAirPlay2Audio(client, this.address, options.credentials, this.ssrc,
           { timing: timing.address().port, control: control.address().port }, controller.signal);
         // Receivers may omit Session in this profile; '0' is sent instead, as the reference does (unverified on hardware).
         if (airplay2.session !== undefined && !/^[\w.-]+$/.test(airplay2.session)) throw new Error('Invalid RAOP session');

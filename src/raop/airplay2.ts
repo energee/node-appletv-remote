@@ -10,6 +10,7 @@ import type { Socket } from 'node:net';
 import bplistCreator from 'bplist-creator';
 import { parseBuffer } from 'bplist-parser';
 import { PairVerify } from '../auth/pair-verify.js';
+import { TransientPair } from '../auth/transient-pair.js';
 import type { HAPCredentials } from '../auth/types.js';
 import { HAPSession } from '../util/hap-session.js';
 import { openEventChannel } from '../util/event-channel.js';
@@ -66,20 +67,21 @@ function port(value: unknown, name: string): number {
  * that. `signal` cancels setup, including the event connect; on any rejection the event
  * channel is closed and `shk` is zeroed.
  *
- * Key material: the pair-verify shared secret and the plaintext stream SETUP body are zeroed
- * before this returns; the `Control-Salt` RTSP keys are zeroed when `client.socket` closes;
- * the event keys when the event socket closes; `audioKey` is left to the caller.
- *
- * @throws (rejects) when pair-verify fails (for example wrong credentials), a reply is not a
- * valid binary plist, `eventPort`/`dataPort`/`controlPort` is not an integer 1..65535, the
- * event connect fails, or `signal` aborts.
+ * Key material: the pair-verify or transient-pairing shared secret and the plaintext stream SETUP
+ * body are zeroed before this returns; the `Control-Salt` RTSP keys are zeroed when
+ * `client.socket` closes; the event keys when the event socket closes; `audioKey` is left to the
+ * caller.
+
+ * @throws (rejects) when stored or transient authentication fails, a reply is not a valid binary
+ * plist, `eventPort`/`dataPort`/`controlPort` is not an integer 1..65535, the event connect fails,
+ * or `signal` aborts.
  */
-export async function setupAirPlay2Audio(client: RtspClient, host: string, credentials: HAPCredentials,
+export async function setupAirPlay2Audio(client: RtspClient, host: string, credentials: HAPCredentials | undefined,
   sessionId: number, localPorts: { timing: number; control: number }, signal: AbortSignal): Promise<AirPlay2Audio> {
-  const keys = await new PairVerify(host, 0, credentials, {
+  const keys = credentials ? await new PairVerify(host, 0, credentials, {
     post: async (path, body) => (await client.request('POST', { 'X-Apple-HKP': '3', 'Content-Type': 'application/octet-stream' }, body, signal, 5000, path)).body,
     destroy() {}, // The RTSP connection stays open for the encrypted session.
-  }).verify();
+  }).verify() : await new TransientPair(client, signal).verify();
   let events: Socket | undefined;
   let audioKey: Buffer | undefined;
   const lost = (error: Error) => client.socket.destroy(error);
@@ -92,6 +94,7 @@ export async function setupAirPlay2Audio(client: RtspClient, host: string, crede
     const eventPort = port(dictionary(base.body, 'SETUP').eventPort, 'eventPort');
     // `signal` cancels only the connect; once open, the caller sends TEARDOWN before closing it.
     events = await openEventChannel(host, eventPort, keys.sharedSecret, lost, signal);
+    keys.sharedSecret.fill(0);
     events.on('error', lost); events.on('close', closed);
     audioKey = randomBytes(32);
     const body = bplistCreator({ streams: [{

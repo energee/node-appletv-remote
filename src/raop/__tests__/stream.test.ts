@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import { createPublicKey, generateKeyPairSync, diffieHellman, createHash, createDecipheriv, verify } from 'node:crypto';
 import { setImmediate as turn, setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { closedPort } from './airplay2-receiver.js';
+import { airplay2Receiver, closedPort } from './airplay2-receiver.js';
 import { legacyPairReceiver } from '../../auth/__tests__/legacy-pair-receiver.js';
 import { LegacyPairSetup } from '../../auth/legacy-pair-setup.js';
 
@@ -702,7 +702,8 @@ describe('legacy RAOP streaming', () => {
   it('checks credential kind against the profile before taking source ownership', async () => {
     const module = await load(); const peer = await receiver();
     const cases: [Record<string, string>, object, RegExp][] = [
-      [appleTvTxt, {}, /requires HAP credentials/],
+      [{ features: '0x0,0x40', flags: '0x244', md: '0,1,2' }, {}, /does not advertise transient pairing eligibility/],
+      [appleTvTxt, { credentials: null }, /Invalid AirPlay 2 HAP credentials/],
       [appleTvTxt, { credentials, legacySeed: Buffer.alloc(32, 1) }, /legacy seed is not used/],
       [txt, { credentials }, /HAP credentials are not used/],
     ];
@@ -715,6 +716,32 @@ describe('legacy RAOP streaming', () => {
     expect(peer.requests).toHaveLength(0);
   });
 
+
+  it('releases the source and RTSP socket when transient pairing fails', async () => {
+    const module = await load();
+    const modern = await airplay2Receiver({ transientM2: Buffer.from([6]) }); receivers.push(modern);
+    const source = Readable.from([Buffer.alloc(1408)]);
+    const sender = new module.RaopStream('127.0.0.1', modern.port, appleTvTxt);
+    await expect(sender.stream(source)).rejects.toBeInstanceOf(Error);
+    expect(modern.requests.filter(request => request.uri === '/pair-setup')).toHaveLength(1);
+    expect(modern.requests.some(request => request.method === 'SETUP')).toBe(false);
+    expect(source.destroyed).toBe(true);
+    await waitForIo(() => modern.state.controlClosed);
+  });
+
+  it('releases transient stream ownership when setup is aborted', async () => {
+    const module = await load();
+    const modern = await airplay2Receiver({ eventPort: await closedPort() }); receivers.push(modern);
+    const source = Readable.from([Buffer.alloc(1408)]);
+    const controller = new AbortController();
+    const sender = new module.RaopStream('127.0.0.1', modern.port, appleTvTxt);
+    const streaming = sender.stream(source, { signal: controller.signal });
+    await waitForIo(() => modern.requests.some(request => request.method === 'SETUP'));
+    controller.abort();
+    await expect(streaming).rejects.toBeInstanceOf(Error);
+    expect(source.destroyed).toBe(true);
+    await waitForIo(() => modern.state.controlClosed);
+  });
   it('does not start a queued producer read after synchronous cancellation', async () => {
     const module = await load(); const peer = await receiver(); const cancellation = new AbortController();
     let reads = 0; let returned = false;
