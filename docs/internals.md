@@ -76,6 +76,14 @@ Tests use synthetic peers only; IPv6 network discovery and older-tvOS hardware i
 
 ## Advanced: raw Companion messages
 
+High-level `connectCompanion()` completes pair-verify, `_systemInfo`, `_touchStart`
+and `_sessionStart` for `com.apple.tvremoteservices` before `TVRCSessionStart` and
+RTI initialization. The service registration is required before exposing a ready
+high-level client; reordering it can leave authenticated power/app requests without
+a handler ([pyatv #2855](https://github.com/postlund/pyatv/pull/2855)).
+The existing touch-session owner also tears this registration down. These setup
+replies do not establish that a later control had a visible effect.
+
 For anything not wrapped yet, send Companion messages yourself:
 
 ```typescript
