@@ -154,8 +154,9 @@ With only `connectCompanion(companionCredentials)`, navigation (except `topMenu`
 
 Explicit skip intervals must be finite and positive; invalid values reject before
 either protocol writes. Companion skips carry signed float64 seconds and default to
-ten seconds. `wake()` and `suspend()` use acknowledged single-tap press/release only;
-they accept no hold/double-tap modifier.
+ten seconds. Companion `wake()` and `suspend()` each send one acknowledged release-only
+`_hidC` request (`_hBtS: 2`, Wake 13 / Sleep 12), not a navigation press/release pair.
+They accept no hold/double-tap modifier. MRP-only wake and System Sleep HID remain unchanged.
 
 Recognized `SystemStatus`/`TVSystemStatus` notices with missing/non-map content or
 missing/invalid state reset power to `Unknown` rather than retaining stale On/Off.
@@ -165,11 +166,15 @@ invalidates its observed state.
 An independently encrypted TCP peer with injected session keys exercised HID
 press/release, error propagation, float64 volume, no optimistic state changes and
 malformed-status invalidation. That fixture does not prove pairing or physical effects.
-On AppleTV6,2 / recorded tvOS 26.6, native Companion-only sessions observed wake
-and repeated wake. After correcting remote-service setup, suspend emitted Off and
-repeated suspend stayed Off. A subsequent wake was acknowledged but remained Off
-on later explicit reads. No state is inferred from acceptance, no failed action is
-retried automatically, and the full media/volume/power matrices remain open.
+On AppleTV6,2 / recorded tvOS 26.6, the initial press/release implementation observed
+sleep but a later wake remained Off. The maintainer-approved release-only correction
+follows [pyatv's power implementation](https://github.com/postlund/pyatv/blob/master/pyatv/protocols/companion/__init__.py).
+Compiled public Companion-only wake then changed Off to On in 880 ms; repeated wake
+stayed On. Release-only suspend was acknowledged in 7 ms, but no Off event arrived
+within five seconds and the subsequent fetch returned On. The operator also reported
+On at follow-up. The sequence stopped before repeated sleep and post-sleep key dispatch.
+No state is inferred from acceptance, no failed action is retried automatically, and
+the full media/volume/power matrices remain open.
 
 
 ## Media results, state and runtime availability

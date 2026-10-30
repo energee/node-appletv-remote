@@ -100,18 +100,14 @@ describe('Companion request and event correlation', () => {
       await skip;
 
       const wake = tv.wake();
-      const down = requests[1];
-      expect((down.get('_c') as OpackDict)).toEqual(new Map([['_hBtS', 1], ['_hidC', 13]]));
-      receive(new Map<OpackValue, OpackValue>([['_x', down.get('_x')!], ['_t', 3], ['_c', new Map()]]));
-      await new Promise<void>(resolve => setImmediate(resolve));
-      const up = requests[2];
-      expect((up.get('_c') as OpackDict)).toEqual(new Map([['_hBtS', 2], ['_hidC', 13]]));
-      receive(new Map<OpackValue, OpackValue>([['_x', up.get('_x')!], ['_t', 3], ['_c', new Map()]]));
+      const release = requests[1];
+      expect((release.get('_c') as OpackDict)).toEqual(new Map([['_hBtS', 2], ['_hidC', 13]]));
+      receive(new Map<OpackValue, OpackValue>([['_x', release.get('_x')!], ['_t', 3], ['_c', new Map()]]));
       await wake;
     } finally { connection.close(); }
   });
 
-  it('attempts Companion sleep release and rejects control error envelopes', async () => {
+  it('rejects release-only power error envelopes without retrying', async () => {
     const { connection, requests, receive } = fixture();
     const tv = new AppleTV({ name: 'synthetic', address: '127.0.0.1', port: 0, deviceId: 'test', model: 'test', companionPort: 1 });
     Object.assign(tv, { companionConnection: connection });
@@ -119,20 +115,16 @@ describe('Companion request and event correlation', () => {
     if (readyTransports instanceof WeakSet) readyTransports.add(connection);
     try {
       const suspend = tv.suspend();
-      const press = requests[0];
-      expect((press.get('_c') as OpackDict)).toEqual(new Map([['_hBtS', 1], ['_hidC', 12]]));
-      receive(new Map<OpackValue, OpackValue>([['_x', press.get('_x')!], ['_t', 3], ['_c', new Map()]]));
-      await new Promise<void>(resolve => setImmediate(resolve));
-      const release = requests[1];
+      const release = requests[0];
       expect((release.get('_c') as OpackDict)).toEqual(new Map([['_hBtS', 2], ['_hidC', 12]]));
       receive(new Map<OpackValue, OpackValue>([['_x', release.get('_x')!], ['_t', 3], ['_c', new Map()], ['_ec', 1]]));
       await expect(suspend).rejects.toThrow('Companion _hidC');
 
       const wake = tv.wake();
-      const wakePress = requests[2];
-      receive(new Map<OpackValue, OpackValue>([['_x', wakePress.get('_x')!], ['_t', 3], ['_c', new Map()], ['_em', 'restricted']]));
+      const wakeRelease = requests[1];
+      receive(new Map<OpackValue, OpackValue>([['_x', wakeRelease.get('_x')!], ['_t', 3], ['_c', new Map()], ['_em', 'restricted']]));
       await expect(wake).rejects.toThrow('Companion _hidC failed: restricted');
-      expect(requests).toHaveLength(3);
+      expect(requests).toHaveLength(2);
     } finally { connection.close(); }
   });
 

@@ -176,11 +176,12 @@ Explicit skip seconds must be finite and positive before either provider dispatc
 Companion defaults to ten seconds when omitted. A recognized malformed/missing
 Companion status reports power as `unknown`, not a retained known On/Off value.
 
-Companion setup registers the remote service before TVRC and RTI initialization.
-Native power observations on AppleTV6,2 / recorded tvOS 26.6 include accepted wake
-and suspend with separately observed state events. A post-sleep wake also remained
-Off despite acceptance; full power interoperability is not claimed. Use `power` or
-`watch` for observations rather than treating command completion as a state change.
+Companion setup registers the remote service before TVRC and RTI initialization,
+then subscribes to media events. Power sends release-only Wake 13 / Sleep 12 requests.
+On AppleTV6,2 / recorded tvOS 26.6, native wake changed Off to On and repeated wake
+stayed On. Sleep was acknowledged but fetched On after five seconds; the operator
+reported On at follow-up. Full power interoperability is not claimed. Use `power`
+or `watch` for observations rather than treating command completion as a state change.
 
 Output IDs must be the receiver's AirPlay **`psi`** UUID, which `atv scan` prints as `psi=...`; its `deviceid` (MAC) and `pi` are ignored by the TV and time out after five seconds. Comma-separated IDs are trimmed and must be unique and nonblank (checked before connecting). `output add/remove/set` print the confirmed selected outputs afterward; `atv output set ""` is rejected, so the CLI cannot clear all outputs.
 

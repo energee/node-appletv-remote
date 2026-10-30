@@ -44,8 +44,17 @@ it('registers the remote service before exposing usable Companion power reads', 
     }
     return companionReply(id);
   });
+  vi.spyOn(CompanionConnection.prototype, 'sendMessage').mockImplementation(function (this: CompanionConnection, id, content) {
+    const events = content.get('_regEvents');
+    if (!ready || id !== '_interest' || !Array.isArray(events) || !events.includes('_iMC')) return;
+    this.emit('event', {
+      identifier: '_iMC',
+      data: new Map([['_c', new Map([['_mcF', 1]])]]),
+    });
+  });
   await tv.connectCompanion(credentials);
   await expect(tv.fetchPowerState()).resolves.toBe('off');
+  expect(tv.featureAvailability('play')).toBe('supported');
   await tv.close();
 });
 it('rejects an unusable remote-service setup instead of publishing Companion readiness', async () => {

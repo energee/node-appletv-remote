@@ -78,9 +78,10 @@ Tests use synthetic peers only; IPv6 network discovery and older-tvOS hardware i
 
 High-level `connectCompanion()` completes pair-verify, `_systemInfo`, `_touchStart`
 and `_sessionStart` for `com.apple.tvremoteservices` before `TVRCSessionStart` and
-RTI initialization. The service registration is required before exposing a ready
-high-level client; reordering it can leave authenticated power/app requests without
-a handler ([pyatv #2855](https://github.com/postlund/pyatv/pull/2855)).
+RTI initialization, then registers `_iMC` interest so receivers can deliver initial
+media capabilities after their remote session is ready. Service registration is
+required before exposing a ready high-level client; reordering it can leave authenticated
+power/app requests without a handler ([pyatv #2855](https://github.com/postlund/pyatv/pull/2855)).
 The existing touch-session owner also tears this registration down. These setup
 replies do not establish that a later control had a visible effect.
 
@@ -93,7 +94,7 @@ atv.sendCompanionMessage('_interest', new Map([['_regEvents', ['SystemStatus']]]
 
 - A reply carrying `_em` or a present, nonzero `_ec` rejects; a request is accepted only after its correlated reply.
 - Plain content is wrapped as `{ _i, _t, _c, _x }`. `_t` is 2 for a request and 1 for a message. If you pass a prebuilt envelope (with `_t`, `_c` or `_x`), only `_i` and `_x` get filled in.
-- Companion HID controls use `_hidC` content `{ _hBtS: 1|2, _hidC: code }`; media controls use `_mcc`. `_skpS` and `_vol` must be `new OpackFloat(...)` because Companion requires float64 even for whole values.
+- Navigation HID uses `_hidC` press/release content `{ _hBtS: 1|2, _hidC: code }`. Power is release-only: one `{ _hBtS: 2, _hidC: 13 }` for wake or `{ _hBtS: 2, _hidC: 12 }` for sleep, with no preceding press. Media controls use `_mcc`. `_skpS` and `_vol` must be `new OpackFloat(...)` because Companion requires float64 even for whole values.
 - Request IDs stay in 1..127, since Apple TVs read larger single-byte IDs as negative. A timed-out ID stays reserved for 30s so a late reply can't resolve the wrong request.
 
 The OPACK and framing tests use independent wire fixtures, including published OPACK examples.

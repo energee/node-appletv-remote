@@ -473,7 +473,6 @@ export class AppleTV extends EventEmitter {
       ]));
       // Register the remote service before TVRCSessionStart and app/power/RTI requests (pyatv #2855).
       await this.startTouch();
-      connection.sendMessage('_interest', new Map([['_regEvents', ['_iMC']]]));
       // tvOS 26.4+ (Apple TV HD on 26.6) silently drops power and app-list requests until a TV Remote session
       // is registered (pyatv #2845). Older TVs reject the message, so failure is ignored.
       await connection.sendRequest('TVRCSessionStart', new Map([['ProtocolVersionKey', '1.2']])).catch(() => {});
@@ -481,6 +480,7 @@ export class AppleTV extends EventEmitter {
       // Best effort: a TV that rejects _tiStart still serves every other Companion request.
       await this.startTextSession().catch((err: Error) => this.emit('companionError', err));
       if (this.companionConnection !== connection) throw new Error('Companion closed during setup');
+      connection.sendMessage('_interest', new Map([['_regEvents', ['_iMC']]]));
       this.readyTransports.add(connection);
       this.emit('companionConnect');
     } catch (err) {
@@ -698,10 +698,10 @@ export class AppleTV extends EventEmitter {
 
   // --- Device power ---
 
-  /** Put the device to sleep. */
+  /** Request sleep; Companion power uses release-only HID and state remains observational. */
   async suspend(): Promise<void> {
     if (this.controlTransport('suspend') === 'companion') {
-      await this.companionButton(COMPANION_HID.suspend);
+      await this.checkedCompanion(this.requireCompanion(), '_hidC', new Map([['_hBtS', 2], ['_hidC', COMPANION_HID.suspend]]));
       return;
     }
     const conn = this.requireConnection();
@@ -712,10 +712,10 @@ export class AppleTV extends EventEmitter {
     await conn.sendMRPMessage(upMsg);
   }
 
-  /** Wake the device. */
+  /** Request wake; Companion power uses release-only HID and state remains observational. */
   async wake(): Promise<void> {
     if (this.controlTransport('wake') === 'companion') {
-      await this.companionButton(COMPANION_HID.wake);
+      await this.checkedCompanion(this.requireCompanion(), '_hidC', new Map([['_hBtS', 2], ['_hidC', COMPANION_HID.wake]]));
       return;
     }
     const conn = this.requireConnection();

@@ -10,7 +10,7 @@ import type { OpackDict, OpackValue } from '../companion/opack.js';
 const state = vi.hoisted(() => ({
   mrp: [] as Array<EventEmitter & { bytes: Buffer[]; close: () => void }>,
   companion: [] as Array<EventEmitter & { requests: Array<[string, OpackDict]>; close: () => void }>,
-  failMRP: false, failCompanion: false, failAfterCompanionState: false, rejectCommand: false,
+  failMRP: false, failCompanion: false, failAfterCompanionState: false, rejectCommand: false, rejectPower: false,
   pauseMRP: undefined as undefined | (() => Promise<void>),
 }));
 // Mock factories run before static imports initialize; dynamic imports intentionally establish this transport-module boundary.
@@ -42,6 +42,7 @@ vi.mock('../companion/connection.js', async () => {
     close = vi.fn(() => { this.emit('close'); });
     async sendRequest(identifier: string, content: OpackDict) {
       this.requests.push([identifier, content]);
+      if (state.rejectPower && identifier === '_hidC' && content.get('_hidC') === 13) throw new Error('Companion power refused');
       if (state.failAfterCompanionState && identifier === '_systemInfo') {
         this.emit('event', { identifier: 'SystemStatus', data: new Map<OpackValue, OpackValue>([['_c', new Map([['state', 3]])]]) });
         throw new Error('Companion setup lost after state');
@@ -63,7 +64,7 @@ const credentials = { airplay: keys, mrp: keys, companion: keys };
 
 beforeEach(() => {
   state.mrp.length = 0; state.companion.length = 0;
-  state.failMRP = state.failCompanion = state.failAfterCompanionState = state.rejectCommand = false;
+  state.failMRP = state.failCompanion = state.failAfterCompanionState = state.rejectCommand = state.rejectPower = false;
   state.pauseMRP = undefined;
 });
 
@@ -74,9 +75,8 @@ describe('operation policy', () => {
     try {
       await session.execute('play');
       expect((await MRPMessage.decode(state.mrp[0].bytes[0])).type).toBe(MessageType.SendCommand);
-      await session.execute('wake');
-      const hid = state.companion[0].requests.filter(([id]) => id === '_hidC');
-      expect(hid.map(([, content]) => [content.get('_hidC'), content.get('_hBtS')])).toEqual([[13, 1], [13, 2]]);
+      state.rejectPower = true;
+      await expect(session.execute('wake')).rejects.toThrow('Companion power refused');
       expect(state.mrp[0].bytes).toHaveLength(1);
       expect(session.powerState).toBe(PowerState.Unknown);
       // A sleeping Apple TV rejects Companion power requests but MRP still reports logicalDeviceCount 0.
@@ -154,8 +154,8 @@ describe('operation policy', () => {
     await session.connect();
     try {
       expect(state.mrp).toEqual([]);
-      await session.sendKeyCommand(Key.Wake);
-      expect(state.companion[0].requests.filter(([id]) => id === '_hidC').map(([, c]) => c.get('_hidC'))).toEqual([13, 13]);
+      state.rejectPower = true;
+      await expect(session.sendKeyCommand(Key.Wake)).rejects.toThrow('Companion power refused');
       expect(session.featureAvailability('stop')).toBe('unsupported');
       await expect(session.execute('stop')).rejects.toThrow('No usable control transport');
     } finally { await session.close(); }

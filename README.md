@@ -91,7 +91,7 @@ Other models and tvOS versions are untested; reports are welcome.
 | Media URL and temporary local-file playback | HLS verified; progressive MP4 does not play on these two models on tvOS 26.6 ([known limitation](https://github.com/energee/node-appletv-remote/blob/main/docs/audio-and-playback.md#known-limitations)) |
 | Legacy Apple TV 2/3 (DMAP), legacy RAOP receivers, HomePods | Unverified, no hardware available |
 | Standalone MRP (tvOS < 15) | Unverified, no hardware available |
-| Companion-only path | Native app/focus/power reads and wake/sleep observations recorded on AppleTV6,2 / tvOS 26.6. Remote-service initialization now precedes TVRC setup. A post-sleep wake was acknowledged but remained Off on later reads; full media/volume/power matrices remain open (#83, #84). |
+| Companion-only path | Native app/focus/power reads recorded on AppleTV6,2 / tvOS 26.6. Remote-service initialization precedes TVRC; media interest follows RTI. Release-only wake changed Off to On and repeated wake stayed On. Release-only sleep was acknowledged but fetched On after five seconds; full media/volume/power matrices remain open (#83, #84). |
 
 ## Documentation
 
