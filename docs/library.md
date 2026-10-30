@@ -49,26 +49,57 @@ pairing or hint update should persist. `FileStorage` is JSON with atomic same-di
 replacement and mode `0600`; it is **not a keychain**. One writer per file is supported.
 
 ```typescript
-import { FileStorage, CustomStorage } from 'node-appletv-remote';
+import { FileStorage } from 'node-appletv-remote';
 
 const storage = new FileStorage('.atv-storage.json');
 await storage.load();
 storage.setHap(device.deviceId, 'airplay', credentials, [device.deviceId, ...device.identifiers]);
 await storage.save();
 const credentialsAgain = storage.hap(device.deviceId, 'airplay');
-
-// A keychain/database/cloud adapter implements { load(): Promise<StorageDocument|undefined>,
-// save(document): Promise<void> }; pass it to new CustomStorage(adapter).
 ```
 
 Records separate protocol credentials (`airplay`, `mrp`, `companion`, `raop`, `dmap`)
-from unauthenticated endpoint hints. Aliases must be unique; a collision requires explicit
-record selection. Explicit caller values take precedence over stored values, which take
-precedence over library defaults. Unknown versions, malformed credentials and invalid document
-shapes (including JSON `null`, `false`, `0` and `""`) reject on load; they are never silently reset.
-Only an adapter result of `undefined` means absent storage (`FileStorage` returns it for a missing
-file). A failed reload leaves the previous in-memory document and unsaved changes intact.
-Use `remove(key)` for deletion.
+from unauthenticated endpoint hints. Keys and aliases match case-insensitively. An alias
+may repeat within one record but cannot belong to two records; advertisements never
+authorize transferring a stored secret to a different identity.
+
+`resolveConnection(key, protocol, explicitOptions)` applies explicit values over that
+protocol's stored settings over nonsecret endpoint hints. It does not connect or pair:
+pass the resolved endpoint, credentials and supported settings to the chosen controller.
+Only AirPlay/MRP consume `settleMs`; only DMAP consumes `controllerName`. Unset fields
+do not erase existing credentials or settings. Use `removeCredential(key, protocol)`,
+`removeSettings(key, protocol)` or `remove(key)` for explicit deletion.
+
+Version 1 retains unrecognized document, record, credential and hint metadata on rewrite.
+The settings map accepts only supported protocol names. Known fields still undergo
+validation. Unknown versions, malformed credentials
+and invalid document shapes (including JSON `null`, `false`, `0` and `""`) reject on
+load rather than being reset. Only an adapter result of `undefined` means absent storage
+(`FileStorage` returns it for a missing file). A failed reload leaves the previous
+in-memory document and unsaved changes intact. A failed save preserves the prior file,
+removes its temporary replacement and leaves the in-memory changes dirty for retry.
+
+A custom JSON backend needs only two asynchronous operations; no subclass or SDK is required:
+
+```typescript
+import { CustomStorage } from 'node-appletv-remote';
+
+function storageFor(backend: {
+  read(): Promise<string | undefined>;
+  write(value: string): Promise<void>;
+}) {
+  return new CustomStorage({
+    load: async () => {
+      const value = await backend.read();
+      return value === undefined ? undefined : JSON.parse(value);
+    },
+    save: async document => backend.write(JSON.stringify(document)),
+  });
+}
+```
+
+The backend controls its own security and write guarantees; `CustomStorage` supplies
+the same schema validation, identity rules, dirty tracking and explicit-save contract.
 
 
 ## Routed sessions

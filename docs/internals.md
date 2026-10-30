@@ -39,6 +39,11 @@ temporary file then atomically renames it, retaining the prior readable document
 the write fails. It deliberately has no multi-process transaction guarantee and is
 plaintext rather than a keychain. `CustomStorage` accepts an adapter with async
 `load`/`save` methods for keychains, databases, or cloud-backed applications.
+Version 1 preserves unknown fields while validating known credential/settings containers;
+unknown version numbers reject. Identifier ownership is case-insensitive across records.
+Explicit credential/settings deletion prunes empty containers without touching other
+protocols. Failed saves clean the temporary file and retain dirty state for retry;
+failed pairing never reaches credential insertion.
 
 
 ## Discovery and transport selection
