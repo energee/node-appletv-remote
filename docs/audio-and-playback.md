@@ -134,7 +134,9 @@ UDP, with optional legacy PIN pair-verification, and **AirPlay 2 realtime** audi
 HAP-paired receivers (current Apple TVs), described below.
 Hardware status: AirPlay 2 realtime audio, RAOP discovery and `wavPcm` are verified on the
 [tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on); legacy receivers
-and legacy PIN pairing are verified only against loopback tests. HomePods and other receivers needing transient pairing,
+and legacy PIN pairing are verified only against loopback tests. Session-only transient
+pairing is implemented for eligible AirPlay 2 advertisements but HomePods and other receivers
+needing transient pairing are not hardware-verified.
 AirPlay 2 buffered audio, RSA/FairPlay/MFi authentication,
 ALAC, multiroom, and live sources are excluded. Legacy password authentication is library-only
 and limited to the MD5/no-qop profile below. `atv raop-stream` wraps this API
@@ -208,10 +210,22 @@ documents the challenge flow; the API does not add HAP, FairPlay, or ACL support
 `ft`/`features` bit 38 or 48 selects the AirPlay 2 profile instead (current Apple
 TVs and HomePods). The legacy-only checks above (`cn`, `et`, `tp`, `sr`/`ss`/`ch`
 and the `0x8`/`0x200` seed rule; Apple TVs advertise `flags=0x244`) do not apply to
-it; password and access-control bits still fail closed. `stream()` requires
-`credentials` (HAP `Credentials` from `PairSetup`) for AirPlay 2 and rejects
-`credentials` on legacy receivers and `legacySeed` on AirPlay 2, all before taking
-ownership of the source.
+it; password and access-control bits still fail closed. Retained HAP `credentials`
+from `PairSetup` take precedence for AirPlay 2. Without them, the same profile must
+also advertise bit 43 or 48 to permit transient pairing; ineligible advertisements
+reject before source ownership. `credentials` on legacy receivers and `legacySeed`
+on AirPlay 2 reject before source ownership. Verification errors never fall back
+to another authentication mode.
+
+Transient authentication runs `/pair-pin-start`, then only SRP pair-setup M1–M4 on
+the same RTSP socket (HTTP/1.1 without CSeq, HKP 4, transient Flags `0x10`). No M5,
+controller identity, long-term pairing or credential-file access occurs. The verified
+SRP shared secret derives separate control/event keys and is zeroed after event-key
+setup; session keys/counters are never reused across connections. The existing encrypted
+SETUP, packet sealing, source cancellation and teardown path is shared with retained pairing.
+An independent SRP/encrypted-RTSP loopback receiver verifies this flow and decrypts the
+resulting PCM. Actual HomePod/HomePod mini audible playback, volume and cancellation
+remain the physical acceptance gate for #77; an Apple TV or synthetic peer is not that proof.
 
 **AirPlay 2 realtime audio** (audible with volume changes on the [tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on);
 text metadata is accepted but nothing is shown on screen, even with the screen awake; other receivers and the details marked unverified below are untested on hardware). Pass the HAP `Credentials` that `PairSetup` (or `atv pair`) produced for
