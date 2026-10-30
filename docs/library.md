@@ -64,8 +64,11 @@ const credentialsAgain = storage.hap(device.deviceId, 'airplay');
 Records separate protocol credentials (`airplay`, `mrp`, `companion`, `raop`, `dmap`)
 from unauthenticated endpoint hints. Aliases must be unique; a collision requires explicit
 record selection. Explicit caller values take precedence over stored values, which take
-precedence over library defaults. Unknown versions and malformed credentials reject on load;
-they are never silently reset. Use `remove(key)` for deletion.
+precedence over library defaults. Unknown versions, malformed credentials and invalid document
+shapes (including JSON `null`, `false`, `0` and `""`) reject on load; they are never silently reset.
+Only an adapter result of `undefined` means absent storage (`FileStorage` returns it for a missing
+file). A failed reload leaves the previous in-memory document and unsaved changes intact.
+Use `remove(key)` for deletion.
 
 
 ## Routed sessions

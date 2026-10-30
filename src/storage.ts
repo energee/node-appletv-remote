@@ -87,7 +87,14 @@ export class DeviceStorage {
   protected document: StorageDocument = { version: STORAGE_VERSION, devices: [] };
   private loaded = false; private revision = 0; private savedRevision = 0;
   constructor(private readonly adapter: StorageAdapter) {}
-  async load(): Promise<void> { const value = await this.adapter.load(); if (value) validate(value); this.document = value ? clone(value) : { version: STORAGE_VERSION, devices: [] }; this.loaded = true; this.revision = 0; this.savedRevision = 0; }
+  async load(): Promise<void> {
+    const value = await this.adapter.load();
+    if (value !== undefined) validate(value);
+    this.document = value === undefined ? { version: STORAGE_VERSION, devices: [] } : clone(value);
+    this.loaded = true;
+    this.revision = 0;
+    this.savedRevision = 0;
+  }
   private ready(): void { if (!this.loaded) throw new Error('Storage must be loaded before use'); }
   get dirty(): boolean { return this.revision !== this.savedRevision; }
   records(): readonly DeviceRecord[] { this.ready(); return clone(this.document.devices); }
