@@ -261,12 +261,13 @@ async function embeddedArtwork(path: string): Promise<Buffer | undefined> {
 export async function extractRaopMetadata(file: string, explicit: RaopMetadata = {}): Promise<ExtractedRaopMetadata> {
   const parsed = await parseFile(file, { skipCovers: true });
   const artwork = explicit.artwork === undefined ? await embeddedArtwork(file) : undefined;
-  const extracted: RaopMetadata = {
+  const metadata: RaopMetadata = {
     ...(parsed.common.title === undefined ? {} : { title: parsed.common.title }),
     ...(parsed.common.artist === undefined ? {} : { artist: parsed.common.artist }),
     ...(parsed.common.album === undefined ? {} : { album: parsed.common.album }),
     ...(artwork === undefined ? {} : { artwork }),
+    ...explicit,
   };
-  return { metadata: { ...extracted, ...explicit },
+  return { metadata,
     ...(Number.isFinite(parsed.format.duration) && parsed.format.duration! >= 0 ? { duration: parsed.format.duration } : {}) };
 }

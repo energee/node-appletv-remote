@@ -57,10 +57,11 @@ atv state                         # normalized now-playing snapshot
 atv volume 40                     # absolute volume when the selected provider advertises it
 atv app launch com.netflix.Netflix
 atv text set "search words"
+atv raop-stream 192.168.1.20 track.flac --device "Family Room" # paired AirPlay 2 audio
 atv --help                        # every command
 ```
 
-Credentials and endpoint hints use `~/.atv-storage.json`; every command takes an optional `deviceId` and defaults to the most recent eligible paired record. Legacy files are imported non-destructively. See the [CLI reference](https://github.com/energee/node-appletv-remote/blob/main/docs/cli.md).
+Credentials and endpoint hints use `~/.atv-storage.json`; control/state commands accept an optional `deviceId` and default to the most recent eligible paired record. Legacy files are imported non-destructively. `raop-stream` instead requires an explicit `--device <paired-selector>` for AirPlay 2, never matching credentials by IP or falling back to unauthenticated legacy playback. Local PCM/WAV, installed-FFmpeg files and finite HTTP(S) inputs are described in the [CLI reference](docs/cli.md).
 
 ## Tested on
 
@@ -84,7 +85,7 @@ Other models and tvOS versions are untested; reports are welcome.
 | Volume | Absolute set/read verified with AirPods output; TV speakers do not allow absolute volume |
 | Audio output routing | Add/remove verified; `setOutputDevices` and routing errors unverified (#46) |
 | IPv6 (global, ULA, link-local) | Verified for MRP and Companion |
-| AirPlay 2 audio streaming (`RaopStream`) | Verified, incl. WAV input, ffmpeg-decoded MP3 and cancel; remote (URL) input unverified; RAOP text/artwork/progress requests accepted but not displayed on tvOS 26.6 (#22, #80) |
+| AirPlay 2 audio streaming (`RaopStream`) | Library PCM/WAV and FFmpeg-decoded MP3/cancel verified; the expanded CLI FLAC/remote audible matrix remains open. RAOP text/artwork/progress requests were accepted but not displayed on tvOS 26.6 (#22, #80). |
 | Text entry and text-focus events | Verified (focus, set, clear) |
 | Media URL and temporary local-file playback | HLS verified; progressive MP4 does not play on these two models on tvOS 26.6 ([known limitation](https://github.com/energee/node-appletv-remote/blob/main/docs/audio-and-playback.md#known-limitations)) |
 | Legacy Apple TV 2/3 (DMAP), legacy RAOP receivers, HomePods | Unverified, no hardware available |

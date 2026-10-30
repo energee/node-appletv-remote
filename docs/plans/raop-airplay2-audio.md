@@ -1,6 +1,6 @@
 # Plan: remaining RAOP / AirPlay 2 audio work (#22)
 
-Status: historical plan. Task 13 is implemented in #80; H4 receiver display verification remains open.
+Status: historical plan. Task 13 extraction and wire support are implemented in #80. The recorded tvOS 26.6 outcome is accepted-but-not-displayed; this is not a claim that H4's positive display gate or the remaining #22 receiver matrix passed.
 
 ## Where we are
 
@@ -348,6 +348,11 @@ from unpadded A, B and S (pinned by `src/auth/__tests__/legacy-srp.test.ts`). H3
   profile; task 13 should not ship artwork/progress as "shown on screen" without first finding the
   channel tvOS actually uses for now-playing info (for example MRP `SetNowPlayingClient`/content
   item updates). Treat on-screen metadata as a known limitation until then.
+  Finite-file extraction now follows adapter eligibility rather than the filename's
+  WAV suffix: MP3/FLAC/well-formed WAV supply tags, bounded JPEG and estimated duration;
+  malformed WAV remains a decoder path. Compiled CLI loopback runs verified extracted
+  requests with Session/RTP-Info and independent audio decryption. This completes the
+  extraction boundary, not a new claim of on-screen display; retain the tvOS 26.6 finding.
 - Test first: additions in `src/raop/__tests__/stream.test.ts` (legacy) and
   `src/raop/__tests__/airplay2-stream.test.ts` (encrypted): request order (progress/artwork
   before RECORD), headers, bodies, gating, non-JPEG rejected, size cap.
@@ -357,12 +362,16 @@ from unpadded A, B and S (pinned by `src/auth/__tests__/legacy-srp.test.ts`). H3
 - Files: `src/cli/index.ts`, `src/__tests__/cli-parity.test.ts`, `README.md` (CLI section).
 - Behavior: extends the existing `atv raop-stream` command (merged in #54; tests in
   `src/__tests__/cli-parity.test.ts`).
+  Current CLI authentication is explicit `--device <paired-selector>` for AirPlay 2,
+  using only existing AirPlay HAP credentials in the public store. Legacy receivers
+  reject that option; no IP-based credential selection or authentication downgrade.
+  Legacy seed and volume controls remain library APIs, not CLI flags.
   Inputs: `.pcm` as-is, `.wav` via task 8, anything else via `ffmpeg` child process (missing
-  ffmpeg → error naming the WAV/PCM alternatives). Endpoint from task 9; HAP credentials from
-  the existing device cache for `airplay2`; `--legacy-seed <file>` for legacy; `--volume`.
-- Test first: `src/__tests__/cli-parity.test.ts` with mocked `child_process.spawn` and a mocked
-  `RaopStream`: argument validation, ffmpeg argv, ffmpeg-missing message, exit code on stream
-  failure, SIGINT aborts the stream.
+  ffmpeg → error naming the WAV/PCM alternatives). The explicit selector uses public
+  AirPlay credentials; cached endpoint hints do not authorize choosing a secret.
+- Verification: adapter spawn/error/frame-boundary tests and CLI pre-ownership
+  credential-selection/resource regressions, plus compiled CLI runs through an encrypted
+  TCP peer using actual FFmpeg/HTTP, native SIGINT and independently opened PCM packets.
 - Depends on: 6, 8, 9.
 
 **15. Move `airplay-playback.ts` onto the shared event-channel helper**

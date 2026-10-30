@@ -12,6 +12,7 @@ import { AppleTV, Key, ShuffleState, RepeatState, contentItems, INPUT_ACTIONS } 
 import { PlaybackState } from '../now-playing-info.js';
 import { MessageType, HID_KEY_MAP } from '../mrp/messages.js';
 import { Credentials } from '../credentials.js';
+import type { HAPCredentials } from '../auth/types.js';
 import { FileStorage, type DeviceRecord, type EndpointHints } from '../storage.js';
 import { DeviceSession, KEY_OPERATIONS, supportsSessionOperation } from '../session.js';
 import type { ControlProtocol, SessionOperation, SessionCredentials } from '../session.js';
@@ -614,15 +615,14 @@ function findRaopService(address: string, signal?: AbortSignal): Promise<{ port:
 }
 
 /**
- * `atv raop-stream <ipv4> <file-or-url>` (experimental): adapt finite audio to PCM16LE stereo
- * 44.1 kHz before streaming it to a legacy RAOP receiver. Local WAV files also provide embedded
- * tags, artwork, and duration. Ctrl+C tears both source and RAOP down.
+ * `atv raop-stream <ipv4> <file-or-url> [--device <paired-selector>]` (experimental): adapt
+ * finite audio to PCM16LE stereo 44.1 kHz before streaming it to a RAOP receiver. Tag-readable
+ * local files can provide metadata, artwork, and duration. AirPlay 2 requires an explicit paired
+ * device selector; Ctrl+C tears both source and RAOP down.
  */
-async function cmdRaopStream(address: string, input: string) {
+async function cmdRaopStream(address: string, input: string, deviceSelector?: string) {
   const remote = /^https?:\/\//i.test(input) || /^pcm:https?:\/\//i.test(input);
   if (!remote && !existsSync(input)) throw new Error(`No such file: ${input}`);
-  const extracted = !remote && input.toLowerCase().endsWith('.wav') ? await extractRaopMetadata(input) : undefined;
-  const metadata = extracted && Object.keys(extracted.metadata).length ? extracted.metadata : undefined;
   const cancellation = new AbortController();
   const cancel = () => cancellation.abort(new Error('RAOP aborted'));
   process.once('SIGINT', cancel);
@@ -630,15 +630,28 @@ async function cmdRaopStream(address: string, input: string) {
   try {
     // Start ffmpeg before discovery so a missing dependency cannot establish a playback session.
     source = await openRaopInput(input, cancellation.signal);
+    const extracted = source.metadataFile ? await extractRaopMetadata(source.metadataFile) : undefined;
+    const metadata = extracted && Object.keys(extracted.metadata).length ? extracted.metadata : undefined;
     console.error(`Resolving _raop._tcp at ${address}...`);
     const discovery = findRaopService(address, cancellation.signal);
     const { port, txt } = source.failure
       ? await Promise.race([discovery, source.failure.then((error) => { cancellation.abort(error); throw error; })])
       : await discovery;
     const sender = new RaopStream(address, port, txt);
+    if (deviceSelector !== undefined && sender.profile !== 'airplay2') {
+      throw new Error('--device requires an AirPlay 2 receiver; HAP credentials cannot authenticate legacy RAOP');
+    }
+    let credentials: HAPCredentials | undefined;
+    if (sender.profile === 'airplay2') {
+      if (!deviceSelector) throw new Error('AirPlay 2 RAOP requires --device <paired-selector> with stored AirPlay credentials');
+      const record = await loadRecord(deviceSelector, 'airplay');
+      credentials = (await storage()).hap(record.key, 'airplay');
+      if (!credentials) throw new Error(`No stored AirPlay credentials for "${deviceSelector}"`);
+    }
     console.error(`Streaming ${input} to ${address}:${port} (Ctrl+C to stop)...`);
     await sender.stream(source.source, {
       signal: cancellation.signal,
+      ...(credentials === undefined ? {} : { credentials }),
       ...(metadata === undefined ? {} : { metadata }),
       ...(extracted?.duration === undefined ? {} : { duration: extracted.duration }),
     });
@@ -681,7 +694,7 @@ function help(): void {
                                        its deviceid (MAC) or pi will time out
   atv dmap-pair <local-ipv4>           Pair a legacy (DMAP) Apple TV; address is THIS computer's
   atv dmap <command|state> [device]    Legacy DMAP control: ${Object.keys(DMAP_COMMANDS).join(', ')}
-  atv raop-stream <ipv4> <file-or-url>
+  atv raop-stream <ipv4> <file-or-url> [--device <paired-selector>]
                                        Experimental: PCM16LE .pcm; compatible .wav; otherwise ffmpeg
                                        decodes/resamples local files and HTTP(S) URLs (pcm:https://... is raw PCM)
   atv --json <command> ...          Emit versioned JSON Lines (supports watch [device])
@@ -1162,9 +1175,13 @@ export async function main(argv: string[], jsonInternal = false, context?: JsonO
     case 'dmap-pair':
       if (args.length !== 1 || !isIPv4(args[0])) throw new Error('Usage: atv dmap-pair <local-ipv4>');
       return cmdDmapPair(args[0]);
-    case 'raop-stream':
-      if (args.length !== 2 || !isIPv4(args[0]) || !args[1].trim()) throw new Error('Usage: atv raop-stream <ipv4> <file-or-url>');
-      return cmdRaopStream(args[0], args[1]);
+    case 'raop-stream': {
+      const selector = args.length === 4 && args[2] === '--device' ? args[3] : undefined;
+      if ((args.length !== 2 && selector === undefined) || !isIPv4(args[0]) || !args[1]?.trim() || selector !== undefined && !selector.trim()) {
+        throw new Error('Usage: atv raop-stream <ipv4> <file-or-url> [--device <paired-selector>]');
+      }
+      return cmdRaopStream(args[0], args[1], selector);
+    }
     case 'stop': case 'power':
       argumentsFor(args, 0, `${cmd} [device]`);
       device = args[0]; acknowledged = true; waitAfterSend = cmd !== 'power';

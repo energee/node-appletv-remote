@@ -1,4 +1,4 @@
-/** CLI wiring for action modes, touch, output routing, DMAP and RAOP, without hardware or real credentials. */
+/** CLI validation and failure boundaries for action modes, touch, output routing, DMAP and RAOP. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppleTV } from '../appletv.js';
 import { DmapClient } from '../dmap/client.js';
@@ -7,6 +7,7 @@ import { NowPlayingInfo, PlaybackState } from '../now-playing-info.js';
 import { Readable } from 'node:stream';
 
 const raop = vi.hoisted(() => ({ services: [] as object[], created: [] as unknown[][], stream: vi.fn() }));
+const raopInput = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock('node:fs', () => ({ realpathSync: (path: string) => path, existsSync: vi.fn(() => true), readFileSync: vi.fn((path: string) => path.endsWith('.atv-dmap.json') ? '{"device":"0x0123456789ABCDEF"}' : '{"device":"modern-credentials"}'), writeFileSync: vi.fn(), createReadStream: vi.fn(() => Readable.from([])) }));
 vi.mock('node:fs/promises', () => ({ readFile: async () => JSON.stringify({ version: 1, devices: [{ key: 'device', aliases: ['device'], credentials: { airplay: { clientId: 'client', clientLTSK: 'a'.repeat(64), clientLTPK: 'b'.repeat(64), serverLTPK: 'c'.repeat(64), serverId: 'server' }, companion: { clientId: 'companion', clientLTSK: 'd'.repeat(64), clientLTPK: 'e'.repeat(64), serverLTPK: 'f'.repeat(64), serverId: 'server' }, dmap: { guid: '0x0123456789ABCDEF' } } }] }), mkdir: async () => {}, writeFile: async () => {}, chmod: async () => {}, rename: async () => {}, rm: async () => {} }));
 vi.mock('node:readline', () => ({ createInterface: () => ({ question: (_q: string, answer: (value: string) => void) => answer('1'), close() {} }) }));
@@ -16,16 +17,23 @@ vi.mock('bonjour-service', () => ({ Bonjour: class {
   destroy() {}
 } }));
 vi.mock('../raop/stream.js', () => ({ RaopStream: class {
-  constructor(...args: unknown[]) { raop.created.push(args); }
+  profile: 'legacy' | 'airplay2';
+  constructor(...args: unknown[]) {
+    raop.created.push(args);
+    const txt = args[2];
+    this.profile = txt !== null && typeof txt === 'object' && 'ft' in txt && txt.ft === '0x0,0x40' ? 'airplay2' : 'legacy';
+  }
   stream(...args: unknown[]) { return raop.stream(...args); }
 } }));
+vi.mock('../cli/raop-input.js', () => ({ openRaopInput: raopInput.open }));
 import { main as run } from '../cli/index.js';
-import { readFileSync, writeFileSync, createReadStream } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { scan } from '../discovery.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
   raop.services = []; raop.created = []; raop.stream.mockResolvedValue(undefined);
+  raopInput.open.mockResolvedValue({ source: Buffer.alloc(4), close: vi.fn() });
   vi.stubEnv('ATV_SETTLE_MS', '0');
   vi.stubEnv('ATV_POST_SEND_MS', '0');
   vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -159,14 +167,16 @@ describe('DMAP', () => {
 });
 
 describe('RAOP streaming', () => {
-  it('resolves the receiver TXT over mDNS and streams the PCM file', async () => {
-    raop.services = [
-      { addresses: ['192.0.2.99'], port: 5000, txt: { cn: '9' } },
-      { addresses: ['192.0.2.7'], port: 7000, txt: { CN: '0,1', et: '0', SR: 44100 } },
-    ];
-    await run(['raop-stream', '192.0.2.7', 'track.pcm']);
-    expect(raop.created).toEqual([['192.0.2.7', 7000, { cn: '0,1', et: '0', sr: '44100' }]]);
-    expect(raop.stream).toHaveBeenCalledWith(expect.anything(), { signal: expect.any(AbortSignal) });
+  it.each([
+    { profile: 'airplay2', txt: { ft: '0x0,0x40' }, selection: [] },
+    { profile: 'legacy', txt: {}, selection: ['--device', 'device'] },
+  ])('rejects incompatible $profile credential selection and releases the opened source', async ({ txt, selection }) => {
+    const opened = Readable.from([Buffer.alloc(4)]);
+    raopInput.open.mockResolvedValue({ source: opened, close: () => { opened.destroy(); } });
+    raop.services = [{ addresses: ['192.0.2.7'], port: 7000, txt: { cn: '0,1', et: '0', sr: '44100', ...txt } }];
+    await expect(run(['raop-stream', '192.0.2.7', 'track.pcm', ...selection])).rejects.toBeInstanceOf(Error);
+    expect(opened.destroyed).toBe(true);
+    expect(raop.stream).not.toHaveBeenCalled();
   });
   it('fails when no receiver advertises at the address', async () => {
     vi.useFakeTimers();

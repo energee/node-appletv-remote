@@ -158,7 +158,7 @@ export class RtspClient {
 /** Explicit endpoint plus _raop._tcp TXT capabilities; no discovery or credential access. */
 export class RaopStream {
   /** `airplay2` when features bit 38 (unified media control) or 48 (CoreUtils pairing) is set, else `legacy`. */
-  private readonly profile: 'legacy' | 'airplay2';
+  readonly profile: 'legacy' | 'airplay2';
   private readonly requiresLegacySeed: boolean;
   /** md capabilities captured at construction; later caller mutations of the TXT record are ignored. */
   private readonly textMetadata: boolean;

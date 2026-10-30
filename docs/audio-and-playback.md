@@ -86,11 +86,15 @@ Hardware status: AirPlay 2 realtime audio, RAOP discovery and `wavPcm` are verif
 [tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on); legacy receivers
 and legacy PIN pairing are verified only against loopback tests. HomePods and other receivers needing transient pairing,
 AirPlay 2 buffered audio, RSA/FairPlay/MFi authentication, password digest auth,
-ALAC, multiroom, and live sources are excluded. `atv raop-stream` wraps this API
-for PIN-less legacy receivers (it supplies neither a `legacySeed` nor HAP credentials). Its CLI adapter can
-use an installed `ffmpeg` to decode finite files and HTTP(S) URLs; transcoding is not part of `RaopStream`.
-Local `.wav` inputs also provide embedded tags, JPEG artwork, and duration; raw PCM
-and remote inputs are never parsed for tags.
+ALAC, multiroom, and live sources are excluded. `atv raop-stream` wraps this PCM-only
+API with finite input adapters: PIN-less legacy receivers need no selector; AirPlay 2
+requires `--device <paired-selector>` for existing AirPlay HAP credentials. That option
+rejects a legacy advertisement rather than ignoring the requested authentication.
+There is no credential matching by IP, automatic pairing or second credential store.
+An installed `ffmpeg` decodes/resamples other files and HTTP(S) URLs outside `RaopStream`.
+Tag-readable finite local files, including MP3, FLAC and well-formed WAV, provide
+metadata/artwork/duration before streaming. Raw PCM, remote inputs and malformed WAV
+conversion paths do not invoke local-file tag parsing.
 
 `extractRaopMetadata(path, explicit?)` returns `{ metadata, duration? }` for finite local
 files using `music-metadata`. Explicit caller fields override extracted title, artist,
@@ -102,6 +106,18 @@ Initial progress and JPEG artwork are sent after SETUP and before RECORD with th
 first RTP timestamp; text metadata is sent during active playback. Progress uses
 rounded 44.1 kHz frame counts and wraps at 32 bits. `setMetadata()` updates text
 and/or JPEG artwork during playback.
+The existing tag dependency is ESM `music-metadata` (MIT); it is not an audio decoder.
+Cover parsing is skipped there and read separately with bounded container lengths,
+declared JPEG MIME/signature checks and a 1 MiB image limit. Explicit artwork avoids
+reading an embedded cover. FFmpeg remains an external executable, not a bundled dependency.
+Parser duration is an estimate, not necessarily sample-exact decoded duration; the
+MP3 smoke fixture differed from gapless PCM by one encoded frame.
+
+Compiled CLI loopback verification used actual FFmpeg and HTTP inputs, explicit paired
+identity selection, independently decrypted PCM, text/JPEG/progress requests, SIGINT,
+missing-credential cleanup and HTTP failure. Its discovery boundary was synthetic.
+This does not establish audible CLI FLAC/remote playback or receiver metadata display.
+
 
 On tvOS 26.6, text/artwork/progress requests were accepted without visible metadata
 display. Protocol acceptance is not proof that a receiver displays the supplied tags.
