@@ -10,6 +10,7 @@ import { randomBytes, createPrivateKey, createPublicKey, diffieHellman, createHa
 import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { audioPacket, sealAudioPacket, timingReply, syncPacket, PacketHistory, FRAMES_PER_PACKET, SAMPLE_RATE, PACKET_BYTES } from './packets.js';
+import { legacyDigestAuthorization, parseLegacyDigestChallenge } from './digest.js';
 import { setupAirPlay2Audio, type AirPlay2Audio } from './airplay2.js';
 import { x25519PublicKeyFromRaw, X25519_PKCS8_PREFIX, ed25519PrivateKeyFromSeed } from '../util/crypto.js';
 import { connectSocket, parseHTTPMessage } from '../connection.js';
@@ -40,8 +41,10 @@ export interface RaopStreamOptions {
   legacySeed?: Buffer;
   /** HAP credentials from `PairSetup` (as stored by `atv pair`). Required for, and only accepted by, AirPlay 2 receivers. */
   credentials?: HAPCredentials;
+  /** Legacy RAOP receiver password. Never supported for AirPlay 2 receivers. */
+  password?: string;
 }
-interface Response { headers: Record<string, string>; code: number; body: Buffer }
+interface Response { headers: Record<string, string>; code: number; body: Buffer; wwwAuthenticate: string[] }
 
 /** HTTP/1.1 pairing endpoints sent without CSeq on the RTSP socket; everything else is CSeq-correlated RTSP/1.0. */
 const HTTP_PAIRING_URIS = new Set(['/pair-verify', '/pair-pin-start', '/pair-setup']);
@@ -90,11 +93,16 @@ export class RtspClient {
       // parseHTTPMessage keeps the last duplicate header, so a repeated CSeq is rejected from the raw header block.
       if ((this.input.subarray(0, message.totalSize - message.body.length).toString().match(/\r\ncseq\s*:/gi)?.length ?? 0) > 1) throw new Error('Duplicate RAOP CSeq header');
       const { headers, body } = message;
+      const headerBlock = this.input.subarray(0, message.totalSize - message.body.length).toString('latin1');
+      const wwwAuthenticate = headerBlock.split('\r\n').slice(1).flatMap(line => {
+        const separator = line.indexOf(':');
+        return separator > 0 && line.slice(0, separator).trim().toLowerCase() === 'www-authenticate' ? [line.slice(separator + 1).trim()] : [];
+      });
       this.input = this.input.subarray(message.totalSize);
       if (status[1] === 'RTSP/1.0' && this.abandoned.delete(Number(headers.cseq))) continue;
       if (!this.pending || status[1] !== this.pending.protocol) throw new Error('Unexpected RAOP response protocol');
       if (this.pending.sequence !== undefined && headers.cseq !== String(this.pending.sequence)) throw new Error('Unexpected RAOP CSeq');
-      this.pending.resolve({ headers, code: Number(status[2]), body });
+      this.pending.resolve({ headers, code: Number(status[2]), body, wwwAuthenticate });
     }
   }
   /**
@@ -153,6 +161,17 @@ export class RtspClient {
     this.queue = request.catch(() => undefined);
     return request;
   }
+  /** Retry exactly the first legacy ANNOUNCE after its single supported Digest challenge. */
+  async requestLegacyAnnounce(headers: Record<string, string>, body: Buffer, password: string, signal?: AbortSignal): Promise<Response> {
+    const response = await this.request('ANNOUNCE', headers, body, signal, 5000, this.uri, true);
+    if (response.code !== 401) {
+      if (response.code !== 200) throw new Error(`RAOP ANNOUNCE: ${response.code}`);
+      return response;
+    }
+    if (response.wwwAuthenticate.length !== 1) throw new Error('Ambiguous RAOP authentication challenge');
+    const authorization = legacyDigestAuthorization(parseLegacyDigestChallenge(response.wwwAuthenticate[0]!), 'ANNOUNCE', this.uri, password);
+    return this.request('ANNOUNCE', { ...headers, Authorization: authorization }, body, signal);
+  }
 }
 
 /** Explicit endpoint plus _raop._tcp TXT capabilities; no discovery or credential access. */
@@ -160,6 +179,7 @@ export class RaopStream {
   /** `airplay2` when features bit 38 (unified media control) or 48 (CoreUtils pairing) is set, else `legacy`. */
   private readonly profile: 'legacy' | 'airplay2';
   private readonly requiresLegacySeed: boolean;
+  private readonly requiresPassword: boolean;
   /** md capabilities captured at construction; later caller mutations of the TXT record are ignored. */
   private readonly textMetadata: boolean;
   private readonly artworkMetadata: boolean;
@@ -185,9 +205,10 @@ export class RaopStream {
     const status = flags.reduce((value, flag) => value | Number.parseInt(flag, 16), 0);
     const featureBits = BigInt('0x' + features[1]) | (BigInt('0x' + (features[2] ?? '0')) << 32n);
     this.profile = featureBits & ((1n << 38n) | (1n << 48n)) ? 'airplay2' : 'legacy';
-    // Password and access control fail closed for both profiles.
-    if ((txt.pw !== undefined && txt.pw !== 'false') || (status & 0x80) || txt.act === '2' || txt.acl === '1') {
-      throw new Error('Unsupported RAOP receiver: password or access control required');
+    // Access-control modes remain unsupported. Legacy Digest authentication is only evidenced by pw and bit 0x80.
+    this.requiresPassword = (txt.pw !== undefined && txt.pw !== 'false') || !!(status & 0x80);
+    if (txt.act === '2' || txt.acl === '1') {
+      throw new Error('Unsupported RAOP receiver: access control required');
     }
     // Legacy-only rules. Apple TVs advertise flags=0x244 (includes 0x200), so the PIN rule must not apply to AirPlay 2.
     this.requiresLegacySeed = this.profile === 'legacy' && !!(status & 0x208);
@@ -205,6 +226,10 @@ export class RaopStream {
    * Resolves after the silence latency tail and bounded best-effort teardown.
    */
   async stream(pcm: RaopPcmSource, options: RaopStreamOptions = {}): Promise<void> {
+    if (options.password !== undefined && (typeof options.password !== 'string' || options.password.length === 0)) throw new Error('RAOP password must be a non-empty string');
+    if (this.profile === 'airplay2' && options.password !== undefined) throw new Error('RAOP password is only supported by legacy receivers');
+    if (this.profile === 'airplay2' && this.requiresPassword) throw new Error('Unsupported AirPlay 2 RAOP receiver: password authentication is not supported');
+    if (this.requiresPassword && options.password === undefined) throw new Error('RAOP receiver requires a password');
     if (Buffer.isBuffer(pcm) ? pcm.length === 0 || pcm.length % 4 : !pcm || typeof pcm[Symbol.asyncIterator] !== 'function') throw new Error('Expected non-empty complete PCM16 stereo frames or an async Buffer source');
     if (options.volume !== undefined) this.volumeBody(options.volume);
     if (options.metadata) {
@@ -363,7 +388,8 @@ export class RaopStream {
         serverPort = airplay2.serverPort; controlPort = airplay2.controlPort;
       } else {
         const sdp = `v=0\r\no=iTunes ${this.ssrc} 0 IN IP4 ${client.socket.localAddress}\r\ns=iTunes\r\nc=IN IP4 ${this.address}\r\nt=0 0\r\nm=audio 0 RTP/AVP 96\r\na=rtpmap:96 L16/44100/2\r\na=fmtp:96 352 0 16 40 10 14 2 255 0 0 44100\r\n`;
-        await client.request('ANNOUNCE', { 'Content-Type': 'application/sdp' }, Buffer.from(sdp), controller.signal);
+        if (this.requiresPassword) await client.requestLegacyAnnounce({ 'Content-Type': 'application/sdp' }, Buffer.from(sdp), options.password!, controller.signal);
+        else await client.request('ANNOUNCE', { 'Content-Type': 'application/sdp' }, Buffer.from(sdp), controller.signal);
         const setup = await client.request('SETUP', { Transport: `RTP/AVP/UDP;unicast;interleaved=0-1;mode=record;control_port=${control.address().port};timing_port=${timing.address().port}` }, undefined, controller.signal);
         const session = setup.headers.session?.split(';')[0];
         if (!session || !/^[\w.-]+$/.test(session)) throw new Error('Invalid RAOP session');

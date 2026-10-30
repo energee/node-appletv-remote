@@ -672,14 +672,31 @@ describe('legacy RAOP streaming', () => {
     }
   });
 
-  it('fails closed on password and access-control advertisements for both profiles', async () => {
+  it('fails closed on access-control advertisements while requiring advertised passwords before source ownership', async () => {
     const module = await load();
     for (const base of [txt, appleTvTxt] as Record<string, string>[]) {
-      for (const properties of [{ sf: '0x80' }, { flags: '0x284' }, { pw: 'true' }, { act: '2' }, { acl: '1' }, { sf: 'nonsense' }] as Record<string, string>[]) {
+      for (const properties of [{ act: '2' }, { acl: '1' }, { sf: 'nonsense' }] as Record<string, string>[]) {
         expect(() => new module.RaopStream('127.0.0.1', 7000, { ...base, ...properties })).toThrow(/unsupported/i);
+      }
+      for (const properties of [{ sf: '0x80' }, { flags: '0x284' }, { pw: 'true' }] as Record<string, string>[]) {
+        const source = Readable.from([Buffer.alloc(4)]);
+        await expect(new module.RaopStream('127.0.0.1', 7000, { ...base, ...properties }).stream(source)).rejects.toThrow(/password/i);
+        expect(source.destroyed).toBe(false);
       }
     }
     expect(() => new module.RaopStream('127.0.0.1', 7000, { ...txt, et: '4' })).toThrow(/unsupported/i);
+  });
+
+  it('validates legacy passwords before source ownership and rejects them for AirPlay 2', async () => {
+    const module = await load();
+    for (const password of ['', 1] as unknown[]) {
+      const source = Readable.from([Buffer.alloc(4)]);
+      await expect(new module.RaopStream('127.0.0.1', 7000, txt).stream(source, { password } as never)).rejects.toThrow(/password/i);
+      expect(source.destroyed).toBe(false);
+    }
+    const source = Readable.from([Buffer.alloc(4)]);
+    await expect(new module.RaopStream('127.0.0.1', 7000, appleTvTxt).stream(source, { password: 'not-on-the-wire' })).rejects.toThrow(/legacy/i);
+    expect(source.destroyed).toBe(false);
   });
 
   it('checks credential kind against the profile before taking source ownership', async () => {
@@ -762,9 +779,10 @@ describe('legacy RAOP streaming', () => {
 
   it('fails closed for codec, encryption, authentication, rate, and invalid PCM/volume', async () => {
     const module = await load(); expect(module?.RaopStream).toBeTypeOf('function');
-    for (const properties of [{ ...txt, cn: '1' }, { ...txt, et: '1' }, { ...txt, pw: 'true' }, { ...txt, sr: '48000' }, { ...txt, tp: 'TCP' }]) {
+    for (const properties of [{ ...txt, cn: '1' }, { ...txt, et: '1' }, { ...txt, sr: '48000' }, { ...txt, tp: 'TCP' }]) {
       expect(() => new module!.RaopStream('127.0.0.1', 7000, properties)).toThrow(/unsupported/i);
     }
+    await expect(new module.RaopStream('127.0.0.1', 7000, { ...txt, pw: 'true' }).stream(Buffer.alloc(4))).rejects.toThrow(/password/i);
     const stream = new module!.RaopStream('127.0.0.1', 7000, txt);
     const noMetadata = new module.RaopStream('127.0.0.1', 7000, { ...txt, md: '1' });
     await expect(noMetadata.stream(Buffer.alloc(4), { metadata: { title: 'x' } })).rejects.toThrow(/metadata/);

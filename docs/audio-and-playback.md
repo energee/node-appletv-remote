@@ -85,8 +85,9 @@ HAP-paired receivers (current Apple TVs), described below.
 Hardware status: AirPlay 2 realtime audio, RAOP discovery and `wavPcm` are verified on the
 [tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on); legacy receivers
 and legacy PIN pairing are verified only against loopback tests. HomePods and other receivers needing transient pairing,
-AirPlay 2 buffered audio, RSA/FairPlay/MFi authentication, password digest auth,
-ALAC, multiroom, and live sources are excluded. `atv raop-stream` wraps this API
+AirPlay 2 buffered audio, RSA/FairPlay/MFi authentication,
+ALAC, multiroom, and live sources are excluded. Legacy password authentication is library-only
+and limited to the MD5/no-qop profile below. `atv raop-stream` wraps this API
 for PIN-less legacy receivers (it supplies neither a `legacySeed` nor HAP credentials). Its CLI adapter can
 use an installed `ffmpeg` to decode finite files and HTTP(S) URLs; transcoding is not part of `RaopStream`.
 Local `.wav` inputs also provide embedded tags, JPEG artwork, and duration; raw PCM
@@ -130,14 +131,29 @@ endpoint and TXT record. You can also supply an explicit endpoint and TXT record
 
 Legacy receivers need an IPv4 endpoint and their actual `_raop._tcp` TXT record. Required
 capabilities are `cn` containing `0` (PCM), `et` containing `0` (unencrypted), `tp`
-containing `UDP`, `sr=44100`, `ss=16`, and `ch=2`; `pw` must be absent or `false`.
+containing `UDP`, `sr=44100`, `ss=16`, and `ch=2`.
 `sf`/`flags` are parsed as hexadecimal: PIN/legacy-pairing bits `0x8`/`0x200`
-require a caller-supplied `legacySeed` (from `LegacyPairSetup`, below); password bit `0x80` is unsupported. Malformed
-flags and unsupported access control (`pw=true`, `act=2`, `acl=1`) fail closed.
+require a caller-supplied `legacySeed` (from `LegacyPairSetup`, below).
+`pw=true` or password bit `0x80` requires an explicit nonempty `stream(source, { password })`;
+the option is rejected for AirPlay 2. Unsupported access modes `act=2`/`acl=1` and malformed
+flags still fail closed before source ownership.
 `ft`/`features` bits 40 or 43 without 38 or 48 fail closed in the constructor.
 Text metadata additionally requires `md` containing `0`.
 Other negotiation and non-200 responses fail closed (except optional feedback),
 without reading stored credentials.
+
+For a legacy password receiver, the first `ANNOUNCE` may receive one Digest challenge.
+Only the evidenced MD5/no-qop form is supported: the received realm and nonce, optional
+opaque, exact method/URI, and username `iTunes` determine the response. The same ANNOUNCE
+body is retried once on the same connection with a new CSeq; repeated 401 is an
+authentication rejection, not proof that the password is wrong. Unsupported algorithms,
+qop, charset, stale challenges, duplicate parameters or multiple challenges reject.
+No later action is retried, and passwords/challenges are not persisted or logged.
+Digest does not encrypt legacy audio or control: use only on a trusted LAN.
+This path has independent RFC 2069 vectors and an authenticated, paced PCM loopback
+smoke; audible interoperability and sanitized challenge capture on a compatible physical
+receiver remain unverified (#81). The [legacy trace](https://nto.github.io/AirPlay.html#7-password-protection)
+documents the challenge flow; the API does not add HAP, FairPlay, or ACL support.
 
 `ft`/`features` bit 38 or 48 selects the AirPlay 2 profile instead (current Apple
 TVs and HomePods). The legacy-only checks above (`cn`, `et`, `tp`, `sr`/`ss`/`ch`
