@@ -21,6 +21,10 @@ export interface EndpointHints { name?: string; model?: string; address?: string
 export interface ProtocolSettings { endpoint?: Partial<EndpointHints>; settleMs?: number; controllerName?: string; }
 export type DeviceSettings = Partial<Record<Protocol, ProtocolSettings>>;
 export interface DeviceRecord { key: string; aliases: string[]; credentials?: ProtocolCredentials; settings?: DeviceSettings; hints?: EndpointHints; }
+/**
+ * Version 1 preserves unrecognized fields when it rewrites a valid document so a
+ * newer producer's metadata is not discarded. It rejects unknown version numbers.
+ */
 export interface StorageDocument { version: typeof STORAGE_VERSION; devices: DeviceRecord[]; }
 export interface StorageAdapter { load(): Promise<StorageDocument | undefined>; save(document: StorageDocument): Promise<void>; }
 export interface ConnectionResolution { protocol: Protocol; endpoint: EndpointHints; credentials?: HAPCredentials; dmapGuid?: string; raop?: { clientId: string; seed: Buffer }; settleMs?: number; controllerName?: string; }
@@ -33,9 +37,12 @@ function hex(value: unknown, length: number, label: string): string {
   if (typeof value !== 'string' || value.length !== length * 2 || !/^[0-9a-f]+$/i.test(value)) bad(`${label} must be a ${length}-byte hex value`);
   return value;
 }
+function object(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) bad(`${label} must be an object`);
+  return value as Record<string, unknown>;
+}
 function hap(value: unknown, label: string): asserts value is EncodedHap {
-  if (!value || typeof value !== 'object') bad(`${label} must be an object`);
-  const c = value as Record<string, unknown>;
+  const c = object(value, label);
   if (typeof c.clientId !== 'string' || !c.clientId || typeof c.serverId !== 'string' || !c.serverId) bad(`${label} lacks identifiers`);
   hex(c.clientLTSK, 32, `${label}.clientLTSK`); hex(c.clientLTPK, 32, `${label}.clientLTPK`); hex(c.serverLTPK, 32, `${label}.serverLTPK`);
 }
@@ -55,15 +62,28 @@ function validate(document: unknown): asserts document is StorageDocument {
     for (const identifier of [r.key, ...r.aliases]) {
       const normalized = identifier.toLowerCase();
       const owner = owners.get(normalized);
-      if (owner && owner !== r.key) bad(`identifier ${identifier} belongs to more than one record`);
+      if (owner && owner.toLowerCase() !== r.key.toLowerCase()) bad(`identifier ${identifier} belongs to more than one record`);
       owners.set(normalized, r.key);
     }
-    for (const protocol of ['airplay', 'mrp', 'companion', 'unclassified'] as const) if (r.credentials?.[protocol]) hap(r.credentials[protocol], protocol);
-    if (r.credentials?.raop) { if (typeof r.credentials.raop.clientId !== 'string' || !/^[0-9A-F]{16}$/i.test(r.credentials.raop.clientId)) bad('raop clientId must be 16 hex characters'); hex(r.credentials.raop.seed, 32, 'raop.seed'); }
-    if (r.credentials?.dmap && (typeof r.credentials.dmap.guid !== 'string' || !/^0x[0-9A-F]{16}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(r.credentials.dmap.guid))) bad('dmap guid must be a pairing GUID');
+    if (r.credentials !== undefined) {
+      const credentials = object(r.credentials, 'credentials');
+      for (const protocol of ['airplay', 'mrp', 'companion', 'unclassified'] as const) {
+        if (credentials[protocol] !== undefined) hap(credentials[protocol], protocol);
+      }
+      if (credentials.raop !== undefined) {
+        const raop = object(credentials.raop, 'raop');
+        if (typeof raop.clientId !== 'string' || !/^[0-9A-F]{16}$/i.test(raop.clientId)) bad('raop clientId must be 16 hex characters');
+        hex(raop.seed, 32, 'raop.seed');
+      }
+      if (credentials.dmap !== undefined) {
+        const dmap = object(credentials.dmap, 'dmap');
+        if (typeof dmap.guid !== 'string' || !/^0x[0-9A-F]{16}$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(dmap.guid)) bad('dmap guid must be a pairing GUID');
+      }
+    }
     endpoint(r.hints, 'hints');
+    if (r.settings !== undefined) object(r.settings, 'settings');
     for (const [protocol, settings] of Object.entries(r.settings ?? {})) {
-      if (!['airplay', 'mrp', 'companion', 'dmap', 'raop'].includes(protocol) || !settings || typeof settings !== 'object') bad('settings must be protocol objects');
+      if (!['airplay', 'mrp', 'companion', 'dmap', 'raop'].includes(protocol) || !settings || typeof settings !== 'object' || Array.isArray(settings)) bad('settings must be protocol objects');
       const value = settings as ProtocolSettings;
       endpoint(value.endpoint, `${protocol}.endpoint`);
       if (value.settleMs !== undefined && ((protocol !== 'airplay' && protocol !== 'mrp') || !Number.isFinite(value.settleMs) || value.settleMs < 0)) bad('settleMs is supported only by airplay/mrp');
@@ -73,8 +93,7 @@ function validate(document: unknown): asserts document is StorageDocument {
 }
 function endpoint(value: unknown, label: string): void {
   if (value === undefined) return;
-  if (!value || typeof value !== 'object') bad(`${label} must be an object`);
-  const hint = value as Record<string, unknown>;
+  const hint = object(value, label);
   for (const field of ['name', 'model', 'address', 'companionAddress', 'mrpAddress', 'dmapAddress', 'raopAddress']) if (hint[field] !== undefined && typeof hint[field] !== 'string') bad(`${label}.${field} must be a string`);
   for (const field of ['port', 'companionPort', 'mrpPort', 'dmapPort', 'raopPort']) if (hint[field] !== undefined && (!Number.isInteger(hint[field]) || (hint[field] as number) < (field === 'port' ? 0 : 1) || (hint[field] as number) > 65535)) bad(`${label}.${field} must be a port`);
   if (hint.mrpEnabled !== undefined && typeof hint.mrpEnabled !== 'boolean') bad(`${label}.mrpEnabled must be boolean`);
@@ -98,22 +117,25 @@ export class DeviceStorage {
   private ready(): void { if (!this.loaded) throw new Error('Storage must be loaded before use'); }
   get dirty(): boolean { return this.revision !== this.savedRevision; }
   records(): readonly DeviceRecord[] { this.ready(); return clone(this.document.devices); }
-  get(keyOrAlias: string): DeviceRecord | undefined { this.ready(); const lower = keyOrAlias.toLowerCase(); return clone(this.document.devices.find(r => r.key === keyOrAlias || r.aliases.some(a => a.toLowerCase() === lower))); }
+  private indexOf(key: string): number { const lower = key.toLowerCase(); return this.document.devices.findIndex(record => record.key.toLowerCase() === lower); }
+  get(keyOrAlias: string): DeviceRecord | undefined { this.ready(); const lower = keyOrAlias.toLowerCase(); return clone(this.document.devices.find(record => record.key.toLowerCase() === lower || record.aliases.some(alias => alias.toLowerCase() === lower))); }
   /** Finds a record only when aliases select exactly one record. */
   resolve(alias: string): DeviceRecord | undefined { return this.get(alias); }
-  upsert(record: DeviceRecord): void { this.ready(); const index = this.document.devices.findIndex(r => r.key === record.key); const existing = index < 0 ? undefined : this.document.devices[index]!; const merged: DeviceRecord = existing ? { ...existing, ...record, credentials: record.credentials ? { ...existing.credentials, ...record.credentials } : existing.credentials, settings: record.settings ? { ...existing.settings, ...record.settings } : existing.settings, hints: record.hints ?? existing.hints } : record; validate({ version: STORAGE_VERSION, devices: [...this.document.devices.filter((_, i) => i !== index), merged] }); if (existing && JSON.stringify(existing) === JSON.stringify(merged)) return; if (index < 0) this.document.devices.push(clone(merged)); else this.document.devices[index] = clone(merged); this.revision++; }
-  remove(key: string): boolean { this.ready(); const index = this.document.devices.findIndex(r => r.key === key); if (index < 0) return false; this.document.devices.splice(index, 1); this.revision++; return true; }
+  upsert(record: DeviceRecord): void { this.ready(); const index = this.indexOf(record.key); const existing = index < 0 ? undefined : this.document.devices[index]!; const merged: DeviceRecord = existing ? { ...existing, ...record, credentials: record.credentials ? { ...existing.credentials, ...record.credentials } : existing.credentials, settings: record.settings ? { ...existing.settings, ...record.settings } : existing.settings, hints: record.hints ?? existing.hints } : record; validate({ version: STORAGE_VERSION, devices: [...this.document.devices.filter((_, i) => i !== index), merged] }); if (existing && JSON.stringify(existing) === JSON.stringify(merged)) return; if (index < 0) this.document.devices.push(clone(merged)); else this.document.devices[index] = clone(merged); this.revision++; }
+  remove(key: string): boolean { this.ready(); const index = this.indexOf(key); if (index < 0) return false; this.document.devices.splice(index, 1); this.revision++; return true; }
   setHap(key: string, protocol: 'airplay' | 'mrp' | 'companion', credentials: HAPCredentials, aliases = [key]): void { const record = this.get(key) ?? { key, aliases }; record.credentials = { ...record.credentials, [protocol]: encodeHap(credentials) }; this.upsert(record); }
   hap(key: string, protocol: 'airplay' | 'mrp' | 'companion'): HAPCredentials | undefined { const value = this.get(key)?.credentials?.[protocol]; return value ? decodeHap(value) : undefined; }
   /** Explicitly remove one protocol credential; omitted fields never erase secrets. */
   removeCredential(key: string, protocol: keyof ProtocolCredentials): boolean {
     this.ready();
-    const index = this.document.devices.findIndex(record => record.key === key);
+    const index = this.indexOf(key);
     const existing = index < 0 ? undefined : this.document.devices[index]!;
     if (!existing?.credentials?.[protocol]) return false;
     const credentials = { ...existing.credentials };
     delete credentials[protocol];
-    const updated = { ...existing, credentials };
+    const updated: DeviceRecord = { ...existing };
+    if (Object.keys(credentials).length === 0) delete updated.credentials;
+    else updated.credentials = credentials;
     validate({ version: STORAGE_VERSION, devices: [...this.document.devices.filter((_, i) => i !== index), updated] });
     this.document.devices[index] = clone(updated);
     this.revision++;
@@ -122,12 +144,14 @@ export class DeviceStorage {
   /** Explicitly remove one protocol's settings while retaining all other settings. */
   removeSettings(key: string, protocol: Protocol): boolean {
     this.ready();
-    const index = this.document.devices.findIndex(record => record.key === key);
+    const index = this.indexOf(key);
     const existing = index < 0 ? undefined : this.document.devices[index]!;
     if (!existing?.settings?.[protocol]) return false;
     const settings = { ...existing.settings };
     delete settings[protocol];
-    const updated = { ...existing, settings };
+    const updated: DeviceRecord = { ...existing };
+    if (Object.keys(settings).length === 0) delete updated.settings;
+    else updated.settings = settings;
     validate({ version: STORAGE_VERSION, devices: [...this.document.devices.filter((_, i) => i !== index), updated] });
     this.document.devices[index] = clone(updated);
     this.revision++;

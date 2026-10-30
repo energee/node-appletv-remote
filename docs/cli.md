@@ -157,6 +157,11 @@ missing or ambiguous selectors reject.
 Stored endpoint overrides take precedence over discovery hints. Connections try validated
 cached hints first and rescan only after setup failure, before any action is sent.
 Discovery matches known aliases exactly, never by a friendly-name substring.
+Pairing saves only after proof verification; a rejected PIN leaves the previous file
+unchanged. Valid version-1 documents retain unrecognized metadata when rewritten;
+unsupported versions and malformed known fields reject without replacing the store.
+Writes use a same-directory temporary file and atomic replacement. Failed writes,
+permission changes or replacement leave the old readable document intact.
 
 `atv scan --host <ip>` is repeatable and retains ordinary multicast browsing. Each value must be
 a nonempty IP literal; an IPv6 link-local address needs its interface scope (for example,
