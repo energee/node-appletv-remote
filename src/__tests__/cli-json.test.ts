@@ -1,6 +1,6 @@
 /** Machine output, state ordering, bounded queues and failure cleanup are public CLI behavior. */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { AppleTV } from '../appletv.js';
+import { AppleTV, PowerState } from '../appletv.js';
 import { NowPlayingInfo, PlaybackState } from '../now-playing-info.js';
 
 const input = vi.hoisted(() => ({ companion: false, airplay: true, second: false, discoveryError: undefined as Error | undefined }));
@@ -139,6 +139,37 @@ it('turns an asynchronously closed pipe into bounded command failure and removes
   expect(process.stdout.listenerCount('error')).toBe(listeners);
 });
 
+it('preserves MRP power observed during setup without a Companion pairing', async () => {
+  let tv: AppleTV | undefined;
+  vi.mocked(AppleTV.prototype.connect).mockImplementation(async function (this: AppleTV) {
+    tv = this;
+    this.powerState = PowerState.On;
+    this.emit('powerState', PowerState.On);
+  });
+  const watching = main(['--json', 'watch']);
+  try {
+    await vi.waitFor(() => expect(records().some(record => record.command === 'source')).toBe(true));
+    tv!.powerState = PowerState.Off;
+    tv!.emit('powerState', PowerState.Off);
+  } finally { process.emit('SIGINT'); await watching; }
+  expect(records().filter(record => record.command === 'power').map(record => record.data))
+    .toEqual([{ state: 'on' }, { state: 'off' }]);
+  expect(records().at(-1)).toMatchObject({ command: 'watch-close', data: { reason: 'signal' } });
+  expect(process.exitCode).toBe(130);
+});
+
+it('publishes cached MRP power when setup did not emit a power event', async () => {
+  vi.mocked(AppleTV.prototype.connect).mockImplementation(async function (this: AppleTV) {
+    this.powerState = PowerState.Off;
+  });
+  const watching = main(['--json', 'watch']);
+  try {
+    await vi.waitFor(() => expect(records().some(record => record.command === 'power')).toBe(true));
+  } finally { process.emit('SIGINT'); await watching; }
+  expect(records().filter(record => record.command === 'power').map(record => record.data))
+    .toEqual([{ state: 'off' }]);
+});
+
 it('emits initial unknowns, normalized updates and a single last unexpected-loss record', async () => {
   let tv: AppleTV | undefined;
   vi.spyOn(AppleTV.prototype, 'connect').mockImplementation(async function (this: AppleTV) { tv = this; });
@@ -149,7 +180,7 @@ it('emits initial unknowns, normalized updates and a single last unexpected-loss
   await watching;
   const result = records();
   expect(result.find(record => record.command === 'playback')).toMatchObject({ data: { state: 'unknown' } });
-  expect(result.find(record => record.command === 'power')).toMatchObject({ data: { state: 'unknown', available: false } });
+  expect(result.find(record => record.command === 'power')?.data).toEqual({ state: 'unknown' });
   expect(result.find(record => record.data.title === 'Changed')).toMatchObject({ data: { playbackState: 'paused' } });
   expect(result.at(-1)).toMatchObject({ command: 'connection-close', data: { intentional: false, transport: 'mrp' } });
   expect(result.filter(record => record.command === 'connection-close')).toHaveLength(1);

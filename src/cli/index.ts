@@ -975,12 +975,15 @@ async function cmdJsonWatch(deviceId: string | undefined, writer: JsonLineWriter
     if (ready.has('companion')) {
       await client.execute('subscribePowerState');
       if (terminal) return;
-      if (!observedPower) emit('power', { state: client.powerState }, 'power');
       if (!observedFocus) emit('text-focus', { state: client.textFocusState }, 'focus');
     } else {
       emit('source', { source: 'companion', state: 'unavailable' });
-      emit('power', { state: 'unknown', available: false }, 'power');
       if (!observedFocus) emit('text-focus', { state: 'unknown', available: hasMRP }, 'focus');
+    }
+    if (!observedPower) {
+      const data = hasMRP || ready.has('companion')
+        ? { state: client.powerState } : { state: 'unknown', available: false };
+      emit('power', data, 'power');
     }
     await done;
   } catch (error) {
