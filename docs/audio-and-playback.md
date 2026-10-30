@@ -48,6 +48,11 @@ The listener is bound to the supplied concrete local IPv4/IPv6 address, or by de
 
 The listener remains available while the receiver reports `loading`/`idle`, because that can be startup or re-fetching rather than completion. It is shut down on `close()`, playback/setup failure, listener/read errors, or a receiver-confirmed `stopped` state. If the receiver never confirms completion, the caller owns the session and must call `close()`.
 
+`close()` also cancels a local-file snapshot that is still being copied and aborts pending
+control/event TCP setup. The pending playback call rejects and its owned streams, file
+handles, and listener are closed; temporary snapshot removal follows listener shutdown.
+Canceled setup never starts a later playback connection.
+
 Timing replies are restricted to the connected TCP peer address and, when returned by SETUP, its timing port. Only 32-byte RTP timing requests (payload type `0x52`, or `0xd2` with the marker bit) are answered, whatever their first (version) byte; the reply echoes that byte. Other 32-byte packets get no reply. UDP timing-reply send errors are ignored; timing socket failures still close the session.
 
 HTTP errors, connection loss, malformed status, and `playbackInfo` media errors reject and close the failed session. Background heartbeat failures close the session and surface on the next `getStatus`. Requests have a five-second timeout (including URL acceptance); receivers taking longer to probe media will fail. Replies are limited to 1 MiB; duplicate Content-Length framing headers and all Transfer-Encoding responses are rejected. A rejected queue command is surfaced immediately; the authenticated SETUP sequence is not retried.
