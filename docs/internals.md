@@ -22,11 +22,33 @@ src/
 ├── dmap/           # legacy codec, HTTP session, reverse pairing
 ├── raop/           # partial RAOP / AirPlay 2 realtime PCM RTP streaming
 ├── airplay-playback.ts # dedicated URL playback session
+├── legacy-airplay-playback.ts # explicit legacy HTTP URL playback + reverse events
 ├── mrp/            # MRP message builders + generated schema.ts
 ├── proto/          # .proto sources (build input only)
 ├── util/           # crypto, TLV, HTTP, HAP framing, AirPlay 2 event channel
 └── cli/            # the `atv` command
 ```
+
+## Legacy HTTP playback
+
+`LegacyAirPlayPlaybackSession` owns one HTTP control socket and one PTTH reverse
+socket linked by its generated session identifier. Requests serialize on the control
+socket; reverse notices are independently framed and acknowledged. Close, a protocol
+error or either connection's loss rejects waiters and destroys both legs and buffers.
+An initial stopped notice does not terminate setup; an active session's stopped notice
+is acknowledged before local teardown.
+
+`auth/legacy-pair-verify.ts` contains the transport-injected seed proof shared with
+legacy RAOP. The HTTP route accepts only optional explicit legacy credentials, not
+HAP keys, and never continues after an unsupported proof response. HTTP password
+authentication remains unsupported rather than borrowing RTSP Digest assumptions.
+
+XML status/event parsing uses `@xmldom/xmldom` with parser diagnostics converted to
+generic errors, one bounded parse, no internal DTD/entities and no binary-plist
+fallback. Only required scalar fields are decoded; compound status metadata is not
+copied into a second object tree. Selection is explicit; physical legacy receiver
+and HTTP-endpoint seed applicability remain hardware gates.
+
 ## Storage
 
 `src/storage.ts` exposes a small asynchronous document store used optionally by the

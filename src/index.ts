@@ -60,6 +60,10 @@ export type { ControlProtocol, SessionCredentials, SessionOperation, SessionOpti
 
 export { AirPlayPlaybackSession } from './airplay-playback.js';
 export type { AirPlayPlaybackOptions, AirPlayFilePlaybackOptions, AirPlayPlaybackStatus } from './airplay-playback.js';
+/** Explicit password-free or legacy-PIN HTTP URL playback; never a fallback from AirPlay 2. */
+export { LegacyAirPlayPlaybackSession } from './legacy-airplay-playback.js';
+export type { LegacyAirPlayPlaybackOptions } from './legacy-airplay-playback.js';
+
 
 /** One-shot PCM audio streaming to legacy RAOP receivers or, with HAP `credentials`, AirPlay 2 realtime receivers (experimental, #22). */
 export { RaopStream } from './raop/stream.js';
