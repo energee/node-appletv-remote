@@ -129,8 +129,12 @@ loss participates in that invalidation. `connection` distinguishes `ready`, unex
 intentional `closed`, and optional setup `failed`. `close()` cancels setup and owned transports,
 detaches forwarding, and is idempotent. Sessions are single-use and add no reconnect or cross-protocol retry.
 
-Verification uses synthetic MRP/Companion fixtures and a real local HTTP DMAP peer. Physical
-mixed-protocol/Companion-only interoperability remains unverified for this session API.
+Verification uses encrypted MRP/Companion fixtures, a real TCP standalone-MRP peer, and a
+local HTTP DMAP peer. On AppleTV6,2 / tvOS 26.6, one public `DeviceSession` read MRP
+now-playing state (idle) alongside Companion app lists, text focus, and an explicitly
+Companion-routed power read. A separate Companion-only session (`port: 0`, Companion
+credentials only) returned app lists, focus, and power with no MRP provider opened.
+Physical legacy DMAP and standalone-MRP interoperability remains unverified.
 
 ## Remote control
 
@@ -138,7 +142,7 @@ mixed-protocol/Companion-only interoperability remains unverified for this sessi
 await atv.connect(credentials); // MRP remains preferred when both transports are open
 await atv.up();                 // also down, left, right, select, menu, home, topMenu
 await atv.playPause();          // also play, pause, stop, next, previous
-await atv.skipForward();        // app default interval, or skipBackward(30)
+await atv.skipForward();        // MRP app default; Companion 10 seconds; or skipBackward(30)
 await atv.setPosition(120);     // MRP only
 await atv.setShuffle(ShuffleState.Songs); // MRP only
 await atv.setRepeat(RepeatState.All);     // MRP only
@@ -147,6 +151,23 @@ await atv.wake();               // also suspend
 ```
 
 With only `connectCompanion(companionCredentials)`, navigation (except `topMenu`), `playPause`, play/pause/next/previous, skip, volume buttons, absolute volume, wake, and suspend use encrypted, acknowledged Companion requests. `stop`, absolute seek, shuffle/repeat, output routing, and now-playing APIs remain MRP-only. Companion HID actions retain single-tap, double-tap, and one-second hold semantics. A completed Companion request means only that the TV accepted the request; navigation, playback, volume, and power state are observational and are not changed optimistically.
+
+Explicit skip intervals must be finite and positive; invalid values reject before
+either protocol writes. Companion skips carry signed float64 seconds and default to
+ten seconds. `wake()` and `suspend()` use acknowledged single-tap press/release only;
+they accept no hold/double-tap modifier.
+
+Recognized `SystemStatus`/`TVSystemStatus` notices with missing/non-map content or
+missing/invalid state reset power to `Unknown` rather than retaining stale On/Off.
+Valid state mapping is unchanged: 1 is Off, 2/3/4 are On. Companion close also
+invalidates its observed state.
+
+An independently encrypted TCP peer with injected session keys exercised HID
+press/release, error propagation, float64 volume, no optimistic state changes and
+malformed-status invalidation. That fixture does not prove pairing or physical effects.
+The full Companion-only media/volume/power hardware matrices remain open; the
+read-only session verification above is not a substitute.
+
 
 ## Media results, state and runtime availability
 

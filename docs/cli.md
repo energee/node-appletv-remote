@@ -172,6 +172,9 @@ use hyphenated commands to specify seconds. Extra buttons are `channel_up`, `cha
 actions follow supported HID/buttons; media commands, wake/suspend and `home_hold` reject
 modifiers before connection. DMAP does not support hold/double-tap. Companion acceptance is
 not confirmation of UI, media, volume, or power state.
+Explicit skip seconds must be finite and positive before either provider dispatches;
+Companion defaults to ten seconds when omitted. A recognized malformed/missing
+Companion status reports power as `unknown`, not a retained known On/Off value.
 
 Output IDs must be the receiver's AirPlay **`psi`** UUID, which `atv scan` prints as `psi=...`; its `deviceid` (MAC) and `pi` are ignored by the TV and time out after five seconds. Comma-separated IDs are trimmed and must be unique and nonblank (checked before connecting). `output add/remove/set` print the confirmed selected outputs afterward; `atv output set ""` is rejected, so the CLI cannot clear all outputs.
 

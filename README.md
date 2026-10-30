@@ -43,7 +43,9 @@ Apps, accounts, text input, and Companion-only navigation/media/volume/power con
 `DeviceSession` offers typed, per-operation routing over separately paired AirPlay, standalone
 MRP, Companion and legacy DMAP clients. It selects before sending and never replays a failed
 action through another protocol; see [routed sessions](docs/library.md#routed-sessions).
-This orchestration API is synthetic-peer verified; physical mixed-protocol validation is pending.
+The public session API is hardware-verified on AppleTV6,2 / tvOS 26.6 with mixed
+AirPlay/Companion and Companion-only connections. Legacy DMAP and direct MRP session
+coverage uses synthetic peers; see the library guide for the exercised operations.
 
 ## CLI
 
@@ -88,7 +90,8 @@ Other models and tvOS versions are untested; reports are welcome.
 | Text entry and text-focus events | Verified (focus, set, clear) |
 | Media URL and temporary local-file playback | HLS verified; progressive MP4 does not play on these two models on tvOS 26.6 ([known limitation](https://github.com/energee/node-appletv-remote/blob/main/docs/audio-and-playback.md#known-limitations)) |
 | Legacy Apple TV 2/3 (DMAP), legacy RAOP receivers, HomePods | Unverified, no hardware available |
-| Standalone MRP (tvOS < 15), Companion-only devices | Unverified, no hardware available |
+| Standalone MRP (tvOS < 15) | Unverified, no hardware available |
+| Companion-only path | Basic navigation/play-pause previously verified; app/focus/power reads reconfirmed. Full media/volume/power hardware matrices remain open (#83, #84). |
 
 ## Documentation
 

@@ -577,9 +577,9 @@ export class AppleTV extends EventEmitter {
   async homeHold(): Promise<void> { await this.home('hold'); }
   async topMenu(action: InputAction = 'singleTap'): Promise<void> { await this.sendKey('top_menu', action); }
   async playPause(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('playPause', COMPANION_HID.playPause, action); }
-  /** Skip forward; `seconds` overrides the app's default interval. */
+  /** Skip forward by positive finite seconds; omitted uses the MRP app default or Companion's ten seconds. */
   async skipForward(seconds?: number): Promise<void> { await this.controlMedia('skipForward', 18, 7, seconds, 1); }
-  /** Skip backward; `seconds` overrides the app's default interval. */
+  /** Skip backward by positive finite seconds; omitted uses the MRP app default or Companion's ten seconds. */
   async skipBackward(seconds?: number): Promise<void> { await this.controlMedia('skipBackward', 19, 7, seconds, -1); }
   async volumeUp(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('volumeUp', COMPANION_HID.volumeUp, action); }
   async volumeDown(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('volumeDown', COMPANION_HID.volumeDown, action); }
@@ -924,11 +924,13 @@ export class AppleTV extends EventEmitter {
   }
 
   private async controlMedia(feature: Feature, mrpCommand: number, companionCommand: number, seconds?: number, sign?: 1 | -1): Promise<void> {
+    if (seconds !== undefined && !(Number.isFinite(seconds) && seconds > 0)) {
+      throw new Error('Skip interval must be a finite positive number of seconds');
+    }
     if (this.controlTransport(feature) === 'mrp') {
-      await this.sendMediaCommand(mrpCommand, seconds ? { skipInterval: seconds } : undefined);
+      await this.sendMediaCommand(mrpCommand, seconds === undefined ? undefined : { skipInterval: seconds });
       return;
     }
-    if (seconds !== undefined && !(Number.isFinite(seconds) && seconds > 0)) throw new Error('Skip interval must be a finite positive number of seconds');
     const content: OpackDict = new Map([['_mcc', companionCommand]]);
     if (sign) content.set('_skpS', new OpackFloat((seconds ?? 10) * sign));
     await this.checkedCompanion(this.requireCompanion(), '_mcc', content);
@@ -1136,7 +1138,7 @@ export class AppleTV extends EventEmitter {
     this.emit('companionEvent', event);
     const content = event.data.get('_c');
     if (event.identifier === 'SystemStatus' || event.identifier === 'TVSystemStatus') {
-      if (content instanceof Map) this.updatePowerState(powerStateFromStatus(content.get('state')));
+      this.updatePowerState(powerStateFromStatus(content instanceof Map ? content.get('state') : undefined));
     }
     if (event.identifier === '_tiStarted' || event.identifier === '_tiStopped') {
       this.updateTextFocusState(content instanceof Map ? textFocusFrom(content) : KeyboardFocusState.Unfocused);

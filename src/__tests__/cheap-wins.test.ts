@@ -85,6 +85,13 @@ describe('MRP playback commands', () => {
     expect(cmd.command).toBe(18);
     expect(cmd.options.skipInterval).toBe(30);
   });
+
+  it('rejects invalid skip intervals before sending on MRP', async () => {
+    const atv = makeAtv();
+    const sent = fakeMrp(atv);
+    await expect(atv.skipBackward(Number.NaN)).rejects.toThrow('finite positive');
+    expect(sent).toEqual([]);
+  });
 });
 
 describe('Volume', () => {
@@ -195,18 +202,19 @@ describe('Power state', () => {
     expect(atv.powerState).toBe(PowerState.On);
   });
 
-  it('SystemStatus events update powerState and emit powerState on change only', () => {
+  it('SystemStatus events map malformed or missing state to Unknown', () => {
     const atv = makeAtv();
     const seen: PowerState[] = [];
     atv.on('powerState', (s: PowerState) => seen.push(s));
-    const event = (state: number) => ({
-      identifier: 'SystemStatus',
-      data: new Map<OpackValue, OpackValue>([['_c', new Map([['state', state]])]]),
+    const event = (identifier: 'SystemStatus' | 'TVSystemStatus', content: OpackValue) => ({
+      identifier,
+      data: new Map<OpackValue, OpackValue>([['_c', content]]),
     });
-    (atv as any).handleCompanionEvent(event(2));
-    (atv as any).handleCompanionEvent(event(3));
-    (atv as any).handleCompanionEvent(event(1));
-    expect(seen).toEqual([PowerState.On, PowerState.Off]);
+    (atv as any).handleCompanionEvent(event('SystemStatus', new Map([['state', 2]])));
+    (atv as any).handleCompanionEvent(event('TVSystemStatus', new Map()));
+    (atv as any).handleCompanionEvent(event('SystemStatus', 'malformed'));
+    expect(atv.powerState).toBe(PowerState.Unknown);
+    expect(seen).toEqual([PowerState.On, PowerState.Unknown]);
   });
 
   it('MRP DeviceInfo logicalDeviceCount reports power without Companion (0 asleep, above 0 awake)', async () => {
