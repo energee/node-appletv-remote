@@ -5,9 +5,13 @@ import { AirPlayConnection } from '../connection.js';
 import { CompanionConnection } from '../companion/connection.js';
 import { Credentials } from '../credentials.js';
 const credentials = new Credentials({ clientId: 'test', serverId: 'server', clientLTSK: Buffer.alloc(32), clientLTPK: Buffer.alloc(32), serverLTPK: Buffer.alloc(32) });
-// connectCompanion() sends _systemInfo after pair-verify; tests that mock connect() also need it to succeed.
+function companionReply(id: string) {
+  const content = new Map<string, number>();
+  if (id === '_sessionStart') content.set('_sid', 42);
+  return new Map([['_c', content]]);
+}
 beforeEach(() => {
-  vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockResolvedValue(new Map([['_c', new Map()]]));
+  vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockImplementation(async id => companionReply(id));
   vi.spyOn(CompanionConnection.prototype, 'sendMessage').mockImplementation(() => {});
 });
 afterEach(() => vi.restoreAllMocks());
@@ -23,21 +27,46 @@ it('failed Companion setup invalidates the high-level connection', async () => {
   await expect(tv.connectCompanion(credentials, 1234)).rejects.toThrow('setup failed');
   await expect(tv.sendCompanionRequest('test', new Map())).rejects.toThrow('Companion not connected');
 });
-// A real Apple TV 4K answers app/account/power requests with "No request handler" until _systemInfo is sent.
-it('sends _systemInfo after pair-verify and before companionConnect', async () => {
+it('registers the remote service before exposing usable Companion power reads', async () => {
   const tv = new AppleTV({ name: 'Family Room', address: 'offline', port: 7000, deviceId: 'AA:BB:CC:DD:EE:FF', model: 'AppleTV6,2', companionPort: 1234 });
   vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
-  const send = vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockResolvedValue(new Map([['_c', new Map()]]));
-  // _systemInfo goes first, then the TV Remote session, then an RTI session (_tiStart) before companionConnect.
-  const connected = vi.fn(() => expect(send.mock.calls.map(([id]) => id)).toEqual(['_systemInfo', 'TVRCSessionStart', '_tiStart']));
-  tv.on('companionConnect', connected);
+  let registered = false;
+  let ready = false;
+  vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockImplementation(async (id, content) => {
+    if (id === '_sessionStart' && content.get('_srvT') === 'com.apple.tvremoteservices') registered = true;
+    if (id === 'TVRCSessionStart') {
+      if (!registered) throw new Error('No remote-service session');
+      ready = true;
+    }
+    if (id === 'FetchAttentionState') {
+      if (!ready) throw new Error('No power request handler');
+      return new Map([['_c', new Map([['state', 1]])]]);
+    }
+    return companionReply(id);
+  });
+  vi.spyOn(CompanionConnection.prototype, 'sendMessage').mockImplementation(function (this: CompanionConnection, id, content) {
+    const events = content.get('_regEvents');
+    if (!ready || id !== '_interest' || !Array.isArray(events) || !events.includes('_iMC')) return;
+    this.emit('event', {
+      identifier: '_iMC',
+      data: new Map([['_c', new Map([['_mcF', 1]])]]),
+    });
+  });
   await tv.connectCompanion(credentials);
-  expect(send).toHaveBeenCalledWith('_systemInfo', new Map<string, string | number>([
-    ['_bf', 0], ['_cf', 512], ['_clFl', 128], ['_i', 'aabbccddeeff'], ['_idsID', 'test'],
-    ['_pubID', 'AA:BB:CC:DD:EE:FF'], ['_sf', 256], ['_sv', '170.18'], ['model', 'AppleTV6,2'], ['name', 'Family Room'],
-  ]));
-  expect(send).toHaveBeenCalledWith('TVRCSessionStart', new Map([['ProtocolVersionKey', '1.2']]));
-  expect(connected).toHaveBeenCalledOnce();
+  await expect(tv.fetchPowerState()).resolves.toBe('off');
+  expect(tv.featureAvailability('play')).toBe('supported');
+  await tv.close();
+});
+it('rejects an unusable remote-service setup instead of publishing Companion readiness', async () => {
+  const tv = new AppleTV({ name: 'offline', address: 'offline', port: 7000, deviceId: 'test', model: 'test', companionPort: 1234 });
+  vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
+  vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockImplementation(async id =>
+    id === '_sessionStart' ? new Map([['_em', 'denied']]) : companionReply(id));
+  const connected = vi.fn();
+  tv.on('companionConnect', connected);
+  await expect(tv.connectCompanion(credentials)).rejects.toThrow('denied');
+  expect(connected).not.toHaveBeenCalled();
+  await expect(tv.appList()).rejects.toThrow('Companion not connected');
 });
 // Hardware (Apple TV HD, tvOS 26.6): FetchAttentionState and the app list went unanswered until TVRCSessionStart
 // (pyatv #2845). Older TVs reject it, so a rejection must not fail the connection.
@@ -46,7 +75,7 @@ it('still connects when the TV rejects TVRCSessionStart', async () => {
   vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
   vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockImplementation(async (id: string) => {
     if (id === 'TVRCSessionStart') throw new Error('Companion TVRCSessionStart failed: No request handler');
-    return new Map([['_c', new Map()]]);
+    return companionReply(id);
   });
   await tv.connectCompanion(credentials);
   await expect(tv.sendCompanionRequest('test', new Map())).resolves.toBeInstanceOf(Map);

@@ -1,7 +1,7 @@
 /** Machine output, state ordering, bounded queues and failure cleanup are public CLI behavior. */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AppleTV, PowerState } from '../appletv.js';
-import { NowPlayingInfo, PlaybackState } from '../now-playing-info.js';
+import { MediaSubType, MediaType, NowPlayingInfo, PlaybackState } from '../now-playing-info.js';
 
 const input = vi.hoisted(() => ({ companion: false, airplay: true, second: false, discoveryError: undefined as Error | undefined }));
 vi.mock('node:fs', () => ({ realpathSync: (path: string) => path, existsSync: vi.fn(() => true), readFileSync: vi.fn(() => '{"device":"credentials"}'), writeFileSync: vi.fn(), createReadStream: vi.fn() }));
@@ -58,7 +58,31 @@ it('preserves zero-valued normalized playback and the resolved ID for a partial 
   ));
   await main(['state', '--json', 'DEV']);
   expect(records()).toMatchObject([{ type: 'result', command: 'state', deviceId: 'device',
-    data: { hasPlayback: true, title: 'Song', playbackState: 'paused', duration: null, elapsedTime: 0, playbackRate: 0 } }]);
+    data: {
+      hasPlayback: true, title: 'Song', playbackState: 'paused', duration: null, elapsedTime: 0, playbackRate: 0,
+      mediaType: null, mediaSubType: null, seriesName: null, seasonNumber: null, episodeNumber: null,
+      contentIdentifier: null, uniqueIdentifier: null, iTunesStoreIdentifier: null,
+      iTunesStoreSubscriptionIdentifier: null, iTunesStoreArtistIdentifier: null, iTunesStoreAlbumIdentifier: null,
+      shuffleState: null, repeatState: null,
+    } }]);
+});
+
+it('represents normalized metadata in JSON state without changing unknown values', async () => {
+  vi.spyOn(AppleTV.prototype, 'getNowPlaying').mockResolvedValue(new NowPlayingInfo(
+    { hasPlayback: true }, {
+      mediaType: MediaType.Video, mediaSubType: MediaSubType.Podcast, seriesName: 'Series',
+      seasonNumber: 0, episodeNumber: 0, contentIdentifier: 'content', uniqueIdentifier: '42',
+      iTunesStoreIdentifier: '9007199254740993', iTunesStoreSubscriptionIdentifier: '8',
+      iTunesStoreArtistIdentifier: '9', iTunesStoreAlbumIdentifier: '10', shuffleState: 3, repeatState: 2,
+    },
+  ));
+  await main(['--json', 'state']);
+  expect(records()).toMatchObject([{ data: {
+    mediaType: 'video', mediaSubType: 'podcast', seriesName: 'Series',
+    seasonNumber: 0, episodeNumber: 0, contentIdentifier: 'content', uniqueIdentifier: '42',
+    iTunesStoreIdentifier: '9007199254740993', iTunesStoreSubscriptionIdentifier: '8',
+    iTunesStoreArtistIdentifier: '9', iTunesStoreAlbumIdentifier: '10', shuffleState: 'songs', repeatState: 'track',
+  } }]);
 });
 
 it('does not promote missing or nonfinite timing to zero in a reported playback update', async () => {
@@ -175,13 +199,17 @@ it('emits initial unknowns, normalized updates and a single last unexpected-loss
   vi.spyOn(AppleTV.prototype, 'connect').mockImplementation(async function (this: AppleTV) { tv = this; });
   const watching = main(['--json', 'watch']);
   await vi.waitFor(() => expect(records().some(record => record.command === 'source')).toBe(true));
-  tv!.emit('nowPlaying', new NowPlayingInfo({ hasPlayback: true, playbackState: PlaybackState.Paused }, { title: 'Changed' }));
+  tv!.emit('nowPlaying', new NowPlayingInfo({ hasPlayback: true, playbackState: PlaybackState.Paused }, {
+    title: 'Changed', mediaType: MediaType.Video, seasonNumber: 0, uniqueIdentifier: '9007199254740993',
+  }));
   tv!.emit('volume', 32.5); tv!.emit('close');
   await watching;
   const result = records();
   expect(result.find(record => record.command === 'playback')).toMatchObject({ data: { state: 'unknown' } });
   expect(result.find(record => record.command === 'power')?.data).toEqual({ state: 'unknown' });
-  expect(result.find(record => record.data.title === 'Changed')).toMatchObject({ data: { playbackState: 'paused' } });
+  expect(result.find(record => record.data.title === 'Changed')).toMatchObject({ data: {
+    playbackState: 'paused', mediaType: 'video', seasonNumber: 0, uniqueIdentifier: '9007199254740993',
+  } });
   expect(result.at(-1)).toMatchObject({ command: 'connection-close', data: { intentional: false, transport: 'mrp' } });
   expect(result.filter(record => record.command === 'connection-close')).toHaveLength(1);
   expect(process.exitCode).toBe(1);

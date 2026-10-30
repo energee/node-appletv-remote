@@ -172,3 +172,37 @@ describe('RtspClient HTTP pairing requests', () => {
     expect(receiver.requests[1].body).toEqual(Buffer.from([1, 2, 3]));
   });
 });
+
+describe('RtspClient legacy Digest ANNOUNCE', () => {
+  it('replays exactly one ANNOUNCE on the same socket with a new CSeq and no plaintext password', async () => {
+    const receiver = await peer(request => {
+      if (!request.headers.authorization) {
+        return Buffer.from(`RTSP/1.0 401 Unauthorized\r\nCSeq: ${request.headers.cseq}\r\nWWW-Authenticate: Digest realm="raop", nonce="nonce", opaque="opaque", algorithm=MD5\r\nContent-Length: 0\r\n\r\n`);
+      }
+      return rtspReply(request);
+    });
+    const body = Buffer.from('v=0\r\n');
+    await receiver.client.requestLegacyAnnounce({ 'Content-Type': 'application/sdp' }, body, 'not-on-the-wire');
+    expect(receiver.requests).toHaveLength(2);
+    expect(receiver.requests.map(request => request.startLine)).toEqual(['ANNOUNCE rtsp://127.0.0.1/42 RTSP/1.0', 'ANNOUNCE rtsp://127.0.0.1/42 RTSP/1.0']);
+    expect(receiver.requests.map(request => request.headers.cseq)).toEqual(['1', '2']);
+    expect(receiver.requests[1].body).toEqual(body);
+    expect(receiver.requests[1].headers.authorization).toMatch(/^Digest username="iTunes", realm="raop", nonce="nonce", uri="rtsp:\/\/127\.0\.0\.1\/42", response="[a-f0-9]{32}", opaque="opaque"$/);
+    expect(receiver.requests[1].headers.authorization).not.toContain('not-on-the-wire');
+  });
+
+  it('does not retry a rejected Digest authorization', async () => {
+    const receiver = await peer(request => Buffer.from(`RTSP/1.0 401 Unauthorized\r\nCSeq: ${request.headers.cseq}\r\nWWW-Authenticate: Digest realm="raop", nonce="nonce"\r\nContent-Length: 0\r\n\r\n`));
+    await expect(receiver.client.requestLegacyAnnounce({}, Buffer.alloc(0), 'not-on-the-wire')).rejects.toThrow(/authentication rejected/i);
+    expect(receiver.requests).toHaveLength(2);
+  });
+
+  it('rejects repeated WWW-Authenticate fields without forwarding credentials', async () => {
+    const receiver = await peer(request => Buffer.from(`RTSP/1.0 401 Unauthorized\r\nCSeq: ${request.headers.cseq}\r\nWWW-Authenticate: Digest realm="raop", nonce="one"\r\nWWW-Authenticate: Digest realm="raop", nonce="two"\r\nContent-Length: 0\r\n\r\n`));
+    const password = 'not-on-the-wire';
+    const failure = receiver.client.requestLegacyAnnounce({}, Buffer.alloc(0), password);
+    await expect(failure).rejects.toThrow(/ambiguous/i);
+    expect(receiver.requests).toHaveLength(1);
+    expect(receiver.requests[0].headers.authorization).toBeUndefined();
+  });
+});

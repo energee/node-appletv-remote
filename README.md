@@ -43,7 +43,9 @@ Apps, accounts, text input, and Companion-only navigation/media/volume/power con
 `DeviceSession` offers typed, per-operation routing over separately paired AirPlay, standalone
 MRP, Companion and legacy DMAP clients. It selects before sending and never replays a failed
 action through another protocol; see [routed sessions](docs/library.md#routed-sessions).
-This orchestration API is synthetic-peer verified; physical mixed-protocol validation is pending.
+The public session API is hardware-verified on AppleTV6,2 / tvOS 26.6 with mixed
+AirPlay/Companion and Companion-only connections. Legacy DMAP and direct MRP session
+coverage uses synthetic peers; see the library guide for the exercised operations.
 
 ## CLI
 
@@ -89,14 +91,19 @@ Other models and tvOS versions are untested; reports are welcome.
 | Text entry and text-focus events | Verified (focus, set, clear) |
 | Media URL and temporary local-file playback | HLS verified; progressive MP4 does not play on these two models on tvOS 26.6 ([known limitation](https://github.com/energee/node-appletv-remote/blob/main/docs/audio-and-playback.md#known-limitations)) |
 | Legacy Apple TV 2/3 (DMAP), legacy RAOP receivers, HomePods | Unverified, no hardware available |
-| Standalone MRP (tvOS < 15), Companion-only devices | Unverified, no hardware available |
+| Standalone MRP (tvOS < 15) | Unverified, no hardware available |
+| Companion-only path | Native app/focus/power reads recorded on AppleTV6,2 / tvOS 26.6. Remote-service initialization precedes TVRC; media interest follows RTI. Release-only wake changed Off to On and repeated wake stayed On. Release-only sleep was acknowledged but fetched On after five seconds; full media/volume/power matrices remain open (#83, #84). |
+
+Legacy RAOP receivers can use an explicit library `password` for MD5/no-qop Digest
+authentication. That path is loopback-verified, not hardware-verified; see the
+[receiver/authentication limits](docs/audio-and-playback.md#raop-and-airplay-2-audio-experimental-partial-22).
 
 ## Documentation
 
 - [Changelog](https://github.com/energee/node-appletv-remote/blob/main/CHANGELOG.md): what changed in each release, breaking changes and known limitations
 - [CLI reference](https://github.com/energee/node-appletv-remote/blob/main/docs/cli.md): every command, device selection, timing knobs
 - [Library guide](https://github.com/energee/node-appletv-remote/blob/main/docs/library.md): pairing, remote control, now-playing state, Companion, lifecycle, gestures, routing, events
-- [Media URL playback and audio streaming](https://github.com/energee/node-appletv-remote/blob/main/docs/audio-and-playback.md): `AirPlayPlaybackSession` (`playUrl` and `playFile`), `RaopStream`, `wavPcm`, `extractRaopMetadata`, `LegacyPairSetup`
+- [Media URL playback and audio streaming](https://github.com/energee/node-appletv-remote/blob/main/docs/audio-and-playback.md): modern `AirPlayPlaybackSession`, explicit experimental `LegacyAirPlayPlaybackSession` (synthetic-peer verified only), `RaopStream`, `wavPcm`, `extractRaopMetadata`, `LegacyPairSetup`
 - [Legacy Apple TV 2/3 (DMAP)](https://github.com/energee/node-appletv-remote/blob/main/docs/dmap.md)
 - [Internals](https://github.com/energee/node-appletv-remote/blob/main/docs/internals.md): protocol stack, discovery association rules, raw Companion messages
 - [Contributing](https://github.com/energee/node-appletv-remote/blob/main/CONTRIBUTING.md)

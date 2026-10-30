@@ -471,7 +471,8 @@ export class AppleTV extends EventEmitter {
         ['_idsID', credentials.clientId], ['_pubID', this.deviceId], ['_sf', 256], ['_sv', '170.18'],
         ['model', this.model], ['name', this.name],
       ]));
-      connection.sendMessage('_interest', new Map([['_regEvents', ['_iMC']]]));
+      // Register the remote service before TVRCSessionStart and app/power/RTI requests (pyatv #2855).
+      await this.startTouch();
       // tvOS 26.4+ (Apple TV HD on 26.6) silently drops power and app-list requests until a TV Remote session
       // is registered (pyatv #2845). Older TVs reject the message, so failure is ignored.
       await connection.sendRequest('TVRCSessionStart', new Map([['ProtocolVersionKey', '1.2']])).catch(() => {});
@@ -479,6 +480,7 @@ export class AppleTV extends EventEmitter {
       // Best effort: a TV that rejects _tiStart still serves every other Companion request.
       await this.startTextSession().catch((err: Error) => this.emit('companionError', err));
       if (this.companionConnection !== connection) throw new Error('Companion closed during setup');
+      connection.sendMessage('_interest', new Map([['_regEvents', ['_iMC']]]));
       this.readyTransports.add(connection);
       this.emit('companionConnect');
     } catch (err) {
@@ -577,9 +579,9 @@ export class AppleTV extends EventEmitter {
   async homeHold(): Promise<void> { await this.home('hold'); }
   async topMenu(action: InputAction = 'singleTap'): Promise<void> { await this.sendKey('top_menu', action); }
   async playPause(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('playPause', COMPANION_HID.playPause, action); }
-  /** Skip forward; `seconds` overrides the app's default interval. */
+  /** Skip forward by positive finite seconds; omitted uses the MRP app default or Companion's ten seconds. */
   async skipForward(seconds?: number): Promise<void> { await this.controlMedia('skipForward', 18, 7, seconds, 1); }
-  /** Skip backward; `seconds` overrides the app's default interval. */
+  /** Skip backward by positive finite seconds; omitted uses the MRP app default or Companion's ten seconds. */
   async skipBackward(seconds?: number): Promise<void> { await this.controlMedia('skipBackward', 19, 7, seconds, -1); }
   async volumeUp(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('volumeUp', COMPANION_HID.volumeUp, action); }
   async volumeDown(action: InputAction = 'singleTap'): Promise<void> { await this.controlButton('volumeDown', COMPANION_HID.volumeDown, action); }
@@ -696,10 +698,10 @@ export class AppleTV extends EventEmitter {
 
   // --- Device power ---
 
-  /** Put the device to sleep. */
+  /** Request sleep; Companion power uses release-only HID and state remains observational. */
   async suspend(): Promise<void> {
     if (this.controlTransport('suspend') === 'companion') {
-      await this.companionButton(COMPANION_HID.suspend);
+      await this.checkedCompanion(this.requireCompanion(), '_hidC', new Map([['_hBtS', 2], ['_hidC', COMPANION_HID.suspend]]));
       return;
     }
     const conn = this.requireConnection();
@@ -710,10 +712,10 @@ export class AppleTV extends EventEmitter {
     await conn.sendMRPMessage(upMsg);
   }
 
-  /** Wake the device. */
+  /** Request wake; Companion power uses release-only HID and state remains observational. */
   async wake(): Promise<void> {
     if (this.controlTransport('wake') === 'companion') {
-      await this.companionButton(COMPANION_HID.wake);
+      await this.checkedCompanion(this.requireCompanion(), '_hidC', new Map([['_hBtS', 2], ['_hidC', COMPANION_HID.wake]]));
       return;
     }
     const conn = this.requireConnection();
@@ -924,11 +926,13 @@ export class AppleTV extends EventEmitter {
   }
 
   private async controlMedia(feature: Feature, mrpCommand: number, companionCommand: number, seconds?: number, sign?: 1 | -1): Promise<void> {
+    if (seconds !== undefined && !(Number.isFinite(seconds) && seconds > 0)) {
+      throw new Error('Skip interval must be a finite positive number of seconds');
+    }
     if (this.controlTransport(feature) === 'mrp') {
-      await this.sendMediaCommand(mrpCommand, seconds ? { skipInterval: seconds } : undefined);
+      await this.sendMediaCommand(mrpCommand, seconds === undefined ? undefined : { skipInterval: seconds });
       return;
     }
-    if (seconds !== undefined && !(Number.isFinite(seconds) && seconds > 0)) throw new Error('Skip interval must be a finite positive number of seconds');
     const content: OpackDict = new Map([['_mcc', companionCommand]]);
     if (sign) content.set('_skpS', new OpackFloat((seconds ?? 10) * sign));
     await this.checkedCompanion(this.requireCompanion(), '_mcc', content);
@@ -1136,7 +1140,7 @@ export class AppleTV extends EventEmitter {
     this.emit('companionEvent', event);
     const content = event.data.get('_c');
     if (event.identifier === 'SystemStatus' || event.identifier === 'TVSystemStatus') {
-      if (content instanceof Map) this.updatePowerState(powerStateFromStatus(content.get('state')));
+      this.updatePowerState(powerStateFromStatus(content instanceof Map ? content.get('state') : undefined));
     }
     if (event.identifier === '_tiStarted' || event.identifier === '_tiStopped') {
       this.updateTextFocusState(content instanceof Map ? textFocusFrom(content) : KeyboardFocusState.Unfocused);

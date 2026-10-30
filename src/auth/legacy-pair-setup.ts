@@ -22,7 +22,7 @@ import { ed25519PrivateKeyFromSeed } from '../util/crypto.js';
 export interface LegacyAirPlayCredentials {
   /** 16 upper-case hex characters; the SRP username the receiver recorded. */
   clientId: string;
-  /** 32-byte Ed25519 seed; pass it as `RaopStream.stream(source, { legacySeed })`. */
+  /** 32-byte Ed25519 seed; pass it to legacy RAOP or {@link LegacyAirPlayPlaybackSession}. */
   seed: Buffer;
 }
 

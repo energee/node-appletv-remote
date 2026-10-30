@@ -44,6 +44,7 @@
   "license": "MIT",
   "dependencies": {
     "@noble/ciphers": "^1.3.0",
+    "@xmldom/xmldom": "^0.9.12",
     "bonjour-service": "^1.3.0",
     "bplist-creator": "^0.1.1",
     "bplist-parser": "^0.5.0",

@@ -88,7 +88,8 @@ describe('CLI operations', () => {
     ['skip-forward', '0'], ['skip-backward', '-3'], ['volume', '101'], ['volume', ''],
     ['shuffle', 'bad'], ['repeat', 'bad'], ['text', 'set'], ['text', 'clear', 'device', 'extra'],
     ['app', 'launch', ' '], ['text', 'focus', 'device', 'extra'], ['account', 'switch'], ['app', 'bad'], ['power', 'device', 'extra'],
-    ['command'], ['command', 'bad'], ['command', '__proto__'], ['command', 'constructor'], ['stop', 'device', 'extra'], ['unknown'],
+    ['command'], ['command', 'bad'], ['command', '__proto__'], ['command', 'constructor'], ['command', 'wake', 'hold'],
+    ['stop', 'device', 'extra'], ['unknown'],
   ])('rejects %j before connecting', async (...args) => {
     await expect(run(args)).rejects.toThrow();
     expect(AppleTV.prototype.connect).not.toHaveBeenCalled();

@@ -9,7 +9,7 @@ import { scan, normalizeTxt, type DiscoveredDeviceInfo } from '../discovery.js';
 import { parseTargets } from '../targeted-mdns.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { AppleTV, Key, ShuffleState, RepeatState, contentItems, INPUT_ACTIONS } from '../appletv.js';
-import { PlaybackState } from '../now-playing-info.js';
+import { MediaSubType, MediaType, PlaybackState } from '../now-playing-info.js';
 import { MessageType, HID_KEY_MAP } from '../mrp/messages.js';
 import { Credentials } from '../credentials.js';
 import type { HAPCredentials } from '../auth/types.js';
@@ -727,6 +727,25 @@ function numberArgument(value: string, min: number, max = Infinity, positive = f
 
 const JSON_VERSION = 1;
 
+const PLAYBACK_STATE_NAMES: Record<number, string> = {
+  [PlaybackState.Unknown]: 'unknown', [PlaybackState.Playing]: 'playing',
+  [PlaybackState.Paused]: 'paused', [PlaybackState.Stopped]: 'stopped',
+  [PlaybackState.Interrupted]: 'interrupted', [PlaybackState.Seeking]: 'seeking',
+};
+const MEDIA_TYPE_NAMES: Partial<Record<MediaType, string>> = {
+  [MediaType.Audio]: 'audio', [MediaType.Video]: 'video',
+};
+const MEDIA_SUBTYPE_NAMES: Partial<Record<MediaSubType, string>> = {
+  [MediaSubType.Music]: 'music', [MediaSubType.Podcast]: 'podcast',
+  [MediaSubType.AudioBook]: 'audiobook', [MediaSubType.ITunesU]: 'itunes-u',
+};
+const SHUFFLE_STATE_NAMES: Record<number, string> = {
+  [ShuffleState.Off]: 'off', [ShuffleState.Albums]: 'albums', [ShuffleState.Songs]: 'songs',
+};
+const REPEAT_STATE_NAMES: Record<number, string> = {
+  [RepeatState.Off]: 'off', [RepeatState.Track]: 'track', [RepeatState.All]: 'all',
+};
+
 type JsonRecord = {
   version: typeof JSON_VERSION;
   type: 'result' | 'event' | 'error';
@@ -875,19 +894,23 @@ function jsonRecord(type: JsonRecord['type'], command: string, data: Record<stri
 }
 
 function playbackData(info: NowPlayingInfo): Record<string, unknown> {
-  const states: Record<number, string> = {
-    [PlaybackState.Unknown]: 'unknown', [PlaybackState.Playing]: 'playing',
-    [PlaybackState.Paused]: 'paused', [PlaybackState.Stopped]: 'stopped',
-    [PlaybackState.Interrupted]: 'interrupted', [PlaybackState.Seeking]: 'seeking',
-  };
   return {
     hasPlayback: info.hasPlayback, playerIdentifier: info.playerIdentifier || null,
     title: info.title || null, artist: info.artist || null, album: info.album || null,
-    genre: info.genre || null,
+    genre: info.genre || null, mediaType: info.mediaType === undefined ? null : MEDIA_TYPE_NAMES[info.mediaType] ?? null,
+    mediaSubType: info.mediaSubType === undefined ? null : MEDIA_SUBTYPE_NAMES[info.mediaSubType] ?? null,
+    seriesName: info.seriesName || null, seasonNumber: info.seasonNumber ?? null, episodeNumber: info.episodeNumber ?? null,
+    contentIdentifier: info.contentIdentifier || null, uniqueIdentifier: info.uniqueIdentifier ?? null,
+    iTunesStoreIdentifier: info.iTunesStoreIdentifier ?? null,
+    iTunesStoreSubscriptionIdentifier: info.iTunesStoreSubscriptionIdentifier ?? null,
+    iTunesStoreArtistIdentifier: info.iTunesStoreArtistIdentifier ?? null,
+    iTunesStoreAlbumIdentifier: info.iTunesStoreAlbumIdentifier ?? null,
+    shuffleState: info.shuffleState === undefined ? null : SHUFFLE_STATE_NAMES[info.shuffleState] ?? null,
+    repeatState: info.repeatState === undefined ? null : REPEAT_STATE_NAMES[info.repeatState] ?? null,
     duration: info.hasDuration ? info.duration : null,
     elapsedTime: info.hasElapsedTime ? info.elapsedTime : null,
     playbackRate: info.hasPlaybackRate ? info.playbackRate : null,
-    playbackState: states[info.playbackState] ?? 'unknown',
+    playbackState: PLAYBACK_STATE_NAMES[info.playbackState] ?? 'unknown',
     appDisplayName: info.appDisplayName || null, appBundleIdentifier: info.appBundleIdentifier || null,
   };
 }
