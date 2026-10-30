@@ -1,6 +1,6 @@
 # Media URL playback and audio streaming
 
-AirPlay 2 URL playback (`AirPlayPlaybackSession`) and PCM audio streaming to AirPlay 2 and legacy RAOP receivers (`RaopStream`).
+AirPlay 2 URL playback (`AirPlayPlaybackSession`), explicitly selected legacy HTTP URL playback (`LegacyAirPlayPlaybackSession`), and PCM audio streaming (`RaopStream`).
 
 ## Media URL playback (AirPlay 2)
 
@@ -48,6 +48,11 @@ The listener is bound to the supplied concrete local IPv4/IPv6 address, or by de
 
 The listener remains available while the receiver reports `loading`/`idle`, because that can be startup or re-fetching rather than completion. It is shut down on `close()`, playback/setup failure, listener/read errors, or a receiver-confirmed `stopped` state. If the receiver never confirms completion, the caller owns the session and must call `close()`.
 
+`close()` also cancels a local-file snapshot that is still being copied and aborts pending
+control/event TCP setup. The pending playback call rejects and its owned streams, file
+handles, and listener are closed; temporary snapshot removal follows listener shutdown.
+Canceled setup never starts a later playback connection.
+
 Timing replies are restricted to the connected TCP peer address and, when returned by SETUP, its timing port. Only 32-byte RTP timing requests (payload type `0x52`, or `0xd2` with the marker bit) are answered, whatever their first (version) byte; the reply echoes that byte. Other 32-byte packets get no reply. UDP timing-reply send errors are ignored; timing socket failures still close the session.
 
 HTTP errors, connection loss, malformed status, and `playbackInfo` media errors reject and close the failed session. Background heartbeat failures close the session and surface on the next `getStatus`. Requests have a five-second timeout (including URL acceptance); receivers taking longer to probe media will fail. Replies are limited to 1 MiB; duplicate Content-Length framing headers and all Transfer-Encoding responses are rejected. A rejected queue command is surfaced immediately; the authenticated SETUP sequence is not retried.
@@ -75,6 +80,51 @@ MP4 work; it is not implemented. See also #44 (seeking has no effect on tvOS 26)
 Unreachable or unsupported URLs may never produce a receiver error (#45); use `startupTimeoutMs`
 to reject boundedly if the receiver never confirms startup.
 
+## Legacy AirPlay URL playback (experimental, #82)
+
+`LegacyAirPlayPlaybackSession` is a separate, explicitly selected HTTP protocol. It is
+not a fallback from failed AirPlay 2 authentication or playback, and no TXT/version
+heuristic selects it automatically. The receiver must fetch the HTTP(S) media URL itself.
+
+```typescript
+import { LegacyAirPlayPlaybackSession } from 'node-appletv-remote';
+
+const playback = new LegacyAirPlayPlaybackSession(device.address, device.port);
+try {
+  await playback.playUrl('https://media.example/movie.mp4', 12.5, { duration: 120 });
+  const status = await playback.getStatus();
+} finally {
+  playback.close();
+}
+```
+
+Omit credentials only for a password-free receiver. For legacy PIN verification, pass
+the caller-held `{ clientId, seed }` returned by `LegacyPairSetup` as the constructor's
+third argument. The seed-derived two-message `/pair-verify` runs on the control socket
+before `/play`; it reuses the legacy RAOP proof routine. HAP credentials are not interchangeable.
+An unsupported verification reply or HTTP 401 fails closed; HTTP password Digest is
+not implemented or inferred from the RAOP protection space.
+
+`position` is seconds. A nonzero value requires known positive finite `duration` and
+cannot exceed it; the sender converts to legacy `Start-Position` in `0..1`. Each
+session accepts one URL, including during concurrent starts. `playUrl` resolves on
+the receiver's HTTP acceptance, not confirmed startup or playback completion.
+
+The separate reverse socket requests `PTTH/1.0` with `X-Apple-Purpose: event` and the
+control connection's session identifier. It acknowledges documented video notices;
+an active session's `stopped` notice closes both sockets after the acknowledgement.
+Status comes from XML `/playback-info`. Frames are limited to 1 MiB, requests time
+out after five seconds, and malformed/framing/connection errors fail the whole
+session. Only the canonical external Apple plist DTD is accepted; internal subsets,
+entities and binary plist bodies are rejected. There is no local-file server,
+polling loop, `/rate` or `/scrub` API. `close()` releases local sockets and waiters;
+it does not send `/stop` or guarantee the receiver's resulting playback state.
+
+Actual TCP peers verify password-free play, XML status, fragmented/coalesced reverse
+events, seed proof, rejection and cleanup. Physical password-free and PIN-paired
+legacy receivers are still unverified; loopback acceptance does not establish a
+receiver/media compatibility list. This does not change the tvOS 26.6 MP4 limitations above.
+
 ## RAOP and AirPlay 2 audio (experimental, partial #22)
 
 `RaopStream` sends actual paced UDP audio, not a playback stub. It is a separate
@@ -85,7 +135,8 @@ HAP-paired receivers (current Apple TVs), described below.
 Hardware status: AirPlay 2 realtime audio, RAOP discovery and `wavPcm` are verified on the
 [tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on); legacy receivers
 and legacy PIN pairing are verified only against loopback tests. Session-only transient
-pairing is implemented for eligible AirPlay 2 advertisements but is not HomePod hardware-verified.
+pairing is implemented for eligible AirPlay 2 advertisements but HomePods and other receivers
+needing transient pairing are not hardware-verified.
 AirPlay 2 buffered audio, RSA/FairPlay/MFi authentication,
 ALAC, multiroom, and live sources are excluded. Legacy password authentication is library-only
 and limited to the MD5/no-qop profile below. `atv raop-stream` wraps this API

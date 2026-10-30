@@ -105,6 +105,17 @@ describe('unified player state', () => {
     deliver(atv, MessageType.SetState, 'setStateMessage', { nowPlayingInfo: { uniqueIdentifier: '2', title: 'New' } });
     expect(atv.nowPlaying.artist).toBe('');
   });
+
+  it('clears an old queue on a direct item transition but preserves a replacement queue', () => {
+    const atv = device();
+    deliver(atv, MessageType.SetState, 'setStateMessage', { playerPath: path('app'), nowPlayingInfo: { uniqueIdentifier: '1' },
+      playbackQueue: { contentItems: [{ identifier: 'old', metadata: { seriesName: 'Old series', contentIdentifier: 'old-content' } }] } });
+    deliver(atv, MessageType.SetState, 'setStateMessage', { playerPath: path('app'), nowPlayingInfo: { uniqueIdentifier: '2' },
+      playbackQueue: { contentItems: [{ identifier: 'new', metadata: { seriesName: 'New series', contentIdentifier: 'new-content' } }] } });
+    expect(atv.nowPlaying).toMatchObject({ seriesName: 'New series', contentIdentifier: 'new-content' });
+    deliver(atv, MessageType.SetState, 'setStateMessage', { playerPath: path('app'), nowPlayingInfo: { uniqueIdentifier: '3' } });
+    expect(atv.nowPlaying).toMatchObject({ seriesName: '', contentIdentifier: '' });
+  });
   it('normalizes queue location and merges direct and item updates', () => {
     const atv = device();
     deliver(atv, MessageType.SetState, 'setStateMessage', { playerPath: path('app'), playbackState: 1, playbackQueue: { location: 1, contentItems: [

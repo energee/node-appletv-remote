@@ -19,12 +19,17 @@ function fixture() {
   parser.session = new CompanionSession(key, key);
   const peer = new CompanionSession(key, key);
   const requests: OpackDict[] = [];
+  const payloads: Buffer[] = [];
   parser.socket = {
-    write(data): void { requests.push(opackDecode(peer.decrypt(data.subarray(0, 4), data.subarray(4))) as OpackDict); },
+    write(data): void {
+      const payload = peer.decrypt(data.subarray(0, 4), data.subarray(4));
+      payloads.push(payload);
+      requests.push(opackDecode(payload) as OpackDict);
+    },
     destroy(): void {},
   };
   const receive = (body: OpackDict): void => parser.onData(peer.encrypt(FrameType.E_OPACK, opackEncode(body)));
-  return { connection, requests, receive, parser };
+  return { connection, requests, payloads, receive, parser };
 }
 
 describe('Companion request and event correlation', () => {
@@ -95,14 +100,57 @@ describe('Companion request and event correlation', () => {
       await skip;
 
       const wake = tv.wake();
-      const down = requests[1];
-      expect((down.get('_c') as OpackDict)).toEqual(new Map([['_hBtS', 1], ['_hidC', 13]]));
-      receive(new Map<OpackValue, OpackValue>([['_x', down.get('_x')!], ['_t', 3], ['_c', new Map()]]));
-      await new Promise<void>(resolve => setImmediate(resolve));
-      const up = requests[2];
-      expect((up.get('_c') as OpackDict)).toEqual(new Map([['_hBtS', 2], ['_hidC', 13]]));
-      receive(new Map<OpackValue, OpackValue>([['_x', up.get('_x')!], ['_t', 3], ['_c', new Map()]]));
+      const release = requests[1];
+      expect((release.get('_c') as OpackDict)).toEqual(new Map([['_hBtS', 2], ['_hidC', 13]]));
+      receive(new Map<OpackValue, OpackValue>([['_x', release.get('_x')!], ['_t', 3], ['_c', new Map()]]));
       await wake;
+    } finally { connection.close(); }
+  });
+
+  it('rejects release-only power error envelopes without retrying', async () => {
+    const { connection, requests, receive } = fixture();
+    const tv = new AppleTV({ name: 'synthetic', address: '127.0.0.1', port: 0, deviceId: 'test', model: 'test', companionPort: 1 });
+    Object.assign(tv, { companionConnection: connection });
+    const readyTransports = Reflect.get(tv, 'readyTransports');
+    if (readyTransports instanceof WeakSet) readyTransports.add(connection);
+    try {
+      const suspend = tv.suspend();
+      const release = requests[0];
+      expect((release.get('_c') as OpackDict)).toEqual(new Map([['_hBtS', 2], ['_hidC', 12]]));
+      receive(new Map<OpackValue, OpackValue>([['_x', release.get('_x')!], ['_t', 3], ['_c', new Map()], ['_ec', 1]]));
+      await expect(suspend).rejects.toThrow('Companion _hidC');
+
+      const wake = tv.wake();
+      const wakeRelease = requests[1];
+      receive(new Map<OpackValue, OpackValue>([['_x', wakeRelease.get('_x')!], ['_t', 3], ['_c', new Map()], ['_em', 'restricted']]));
+      await expect(wake).rejects.toThrow('Companion _hidC failed: restricted');
+      expect(requests).toHaveLength(2);
+    } finally { connection.close(); }
+  });
+
+  it('uses float64 Companion media fields without optimistic volume state', async () => {
+    const { connection, payloads, requests, receive } = fixture();
+    const tv = new AppleTV({ name: 'synthetic', address: '127.0.0.1', port: 0, deviceId: 'test', model: 'test', companionPort: 1 });
+    Object.assign(tv, { companionConnection: connection, companionMediaControls: 0x100 });
+    const readyTransports = Reflect.get(tv, 'readyTransports');
+    if (readyTransports instanceof WeakSet) readyTransports.add(connection);
+    try {
+      const volume = tv.setVolume(25);
+      const set = requests[0];
+      expect((set.get('_c') as OpackDict)).toEqual(new Map([['_mcc', 6], ['_vol', 0.25]]));
+      expect(payloads[0]).toContain(0x36);
+      receive(new Map<OpackValue, OpackValue>([['_x', set.get('_x')!], ['_t', 3], ['_c', new Map()]]));
+      await volume;
+      expect(tv.volume).toBeUndefined();
+
+      const skip = tv.skipForward();
+      const forward = requests[1];
+      expect((forward.get('_c') as OpackDict)).toEqual(new Map([['_mcc', 7], ['_skpS', 10]]));
+      expect(payloads[1]).toContain(0x36);
+      receive(new Map<OpackValue, OpackValue>([['_x', forward.get('_x')!], ['_t', 3], ['_c', new Map()]]));
+      await skip;
+      await expect(tv.skipForward(0)).rejects.toThrow('finite positive');
+      expect(requests).toHaveLength(2);
     } finally { connection.close(); }
   });
 
@@ -120,6 +168,34 @@ describe('Companion request and event correlation', () => {
       expect(tv.featureAvailability('setVolume')).toBe('unavailable');
       expect(tv.featureAvailability('stop')).toBe('unknown');
       await expect(tv.setVolume(50)).rejects.toThrow('volume control is unavailable');
+    } finally { connection.close(); }
+  });
+
+  it('updates Companion capabilities from _iMC without accepting malformed volume data', async () => {
+    const { connection, requests, receive } = fixture();
+    const tv = new AppleTV({ name: 'synthetic', address: '127.0.0.1', port: 0, deviceId: 'test', model: 'test', companionPort: 1 });
+    Object.assign(tv, { companionConnection: connection });
+    const readyTransports = Reflect.get(tv, 'readyTransports');
+    if (readyTransports instanceof WeakSet) readyTransports.add(connection);
+    const update = Reflect.get(tv, 'updateCompanionMediaControls');
+    if (typeof update !== 'function') throw new Error('Missing Companion media control handler');
+    const availability = vi.fn();
+    tv.on('featureAvailability', availability);
+    try {
+      update.call(tv, new Map([['_mcF', 0x101]]), connection);
+      expect(tv.featureAvailability('play')).toBe('supported');
+      expect(tv.featureAvailability('setVolume')).toBe('supported');
+      const volume = requests[0];
+      expect((volume.get('_c') as OpackDict)).toEqual(new Map([['_mcc', 5]]));
+      receive(new Map<OpackValue, OpackValue>([['_x', volume.get('_x')!], ['_t', 3], ['_c', new Map([['_vol', 'bad']])]]));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(tv.volume).toBeUndefined();
+
+      update.call(tv, new Map([['_mcF', 1]]), connection);
+      expect(tv.featureAvailability('setVolume')).toBe('unavailable');
+      update.call(tv, new Map([['_mcF', 'bad']]), connection);
+      expect(tv.featureAvailability('play')).toBe('unknown');
+      expect(availability).toHaveBeenCalledTimes(3);
     } finally { connection.close(); }
   });
 

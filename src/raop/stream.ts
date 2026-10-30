@@ -7,13 +7,13 @@
  */
 import { isIPv4, type Socket } from 'node:net';
 import { createSocket, type Socket as DatagramSocket } from 'node:dgram';
-import { randomBytes, createPrivateKey, createPublicKey, diffieHellman, createHash, createCipheriv, sign } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { audioPacket, sealAudioPacket, timingReply, syncPacket, PacketHistory, FRAMES_PER_PACKET, SAMPLE_RATE, PACKET_BYTES } from './packets.js';
 import { legacyDigestAuthorization, parseLegacyDigestChallenge } from './digest.js';
 import { setupAirPlay2Audio, type AirPlay2Audio } from './airplay2.js';
-import { x25519PublicKeyFromRaw, X25519_PKCS8_PREFIX, ed25519PrivateKeyFromSeed } from '../util/crypto.js';
+import { verifyLegacyPairing } from '../auth/legacy-pair-verify.js';
 import { connectSocket, parseHTTPMessage } from '../connection.js';
 import { encodeDmap } from '../dmap/codec.js';
 import type { HAPSession } from '../util/hap-session.js';
@@ -354,36 +354,12 @@ export class RaopStream {
       const control = await bind(); const timing = await bind(); const audio = await bind();
       client.setLocalUri(this.ssrc);
       if (legacySeed) {
-        // The legacy SRP auth handler uses the seed for BOTH key types.
-        // This proves the client key only and does not turn on HAP transport encryption.
-        const curveDer = Buffer.concat([X25519_PKCS8_PREFIX, legacySeed]);
-        let curveKey: ReturnType<typeof createPrivateKey>;
-        let signingKey: ReturnType<typeof createPrivateKey>;
-        try {
-          curveKey = createPrivateKey({ format: 'der', type: 'pkcs8', key: curveDer });
-          signingKey = ed25519PrivateKeyFromSeed(legacySeed);
-        } finally { curveDer.fill(0); legacySeed.fill(0); }
-        const curvePublic = createPublicKey(curveKey).export({ format: 'der', type: 'spki' }).subarray(-32);
-        const signingPublic = createPublicKey(signingKey).export({ format: 'der', type: 'spki' }).subarray(-32);
-        const authHeaders = { 'Content-Type': 'application/octet-stream', Connection: 'keep-alive' };
-        const response = await client.request('POST', authHeaders, Buffer.concat([Buffer.from([1, 0, 0, 0]), curvePublic, signingPublic]), controller.signal, 5000, '/pair-verify');
-        if (response.body.length !== 96) throw new Error('Invalid legacy pair-verify response: expected 96 bytes');
-        const receiverPublic = response.body.subarray(0, 32);
-        const shared = diffieHellman({ privateKey: curveKey, publicKey: x25519PublicKeyFromRaw(receiverPublic) });
-        let key: Buffer | undefined;
-        let iv: Buffer | undefined;
-        let signed: Buffer | undefined;
-        try {
-          key = createHash('sha512').update('Pair-Verify-AES-Key').update(shared).digest();
-          iv = createHash('sha512').update('Pair-Verify-AES-IV').update(shared).digest();
-          const cipher = createCipheriv('aes-128-ctr', key.subarray(0, 16), iv.subarray(0, 16));
-          // Discard encrypted receiver data to advance the CTR stream before our signature.
-          cipher.update(response.body.subarray(32));
-          signed = sign(null, Buffer.concat([curvePublic, receiverPublic]), signingKey);
-          const signature = cipher.update(signed);
-          cipher.final();
-          await client.request('POST', authHeaders, Buffer.concat([Buffer.alloc(4), signature]), controller.signal, 5000, '/pair-verify');
-        } finally { shared.fill(0); key?.fill(0); iv?.fill(0); signed?.fill(0); }
+        // Legacy verification proves the client key only and does not enable HAP transport encryption.
+        await verifyLegacyPairing({
+          post: async (path, body) => (await client.request('POST', {
+            'Content-Type': 'application/octet-stream', Connection: 'keep-alive',
+          }, body, controller.signal, 5000, path)).body,
+        }, legacySeed);
       }
       let serverPort: number; let controlPort: number;
       // 0 until a legacy SETUP names one: any receiver port may ask for timing.

@@ -40,6 +40,38 @@ pairing and cryptographic connection verification before trusting a result.
 
 Targeted discovery closes its UDP sockets and retry timer with the scan. Closing
 during asynchronous socket setup cannot restart querying or leave a retry timer alive.
+The per-scan record cache respects TTL expiration and the one-second cache-flush/goodbye
+grace period; it is not a persistent device cache. Refreshes and goodbyes still apply
+when its bounded capacity prevents adding a new record. Missing target responses do
+not suppress ordinary multicast results or prove a device absent/asleep.
+
+### Targeted discovery interoperability
+
+Same-link DNS datagrams were captured privately from the owned Node UDP sockets;
+raw TXT, identifiers and network addresses are not published here.
+
+| Responder | Exercised network | Decoded services |
+| --- | --- | --- |
+| AppleTV6,2 | IPv4 and scoped link-local IPv6 | AirPlay, Companion, RAOP |
+| Roku 7104X | IPv4 and IPv6 | AirPlay |
+| Vizio E65u-D3 | IPv4 | AirPlay |
+
+All target questions carried QU. The observed target replies came from UDP 5353,
+used ten-second record TTLs and did not set cache-flush, consistent with
+[RFC 6762 §6.7](https://www.rfc-editor.org/rfc/rfc6762.html#section-6.7)
+for queries sent from an ephemeral port. A controlled UDP responder separately
+proved actual multicast replies, TTL expiry, cache-flush grace and preservation of
+unaffected AAAA records. Scoped Darwin reply addresses were exercised on the native
+IPv6 path, not inferred from an IPv4-only fixture.
+Apple and Roku packets arrived on the ephemeral query sockets. Vizio packets also
+reached the port-5353 listener; UDP receive metadata does not identify the destination
+IP, so those packets are not asserted to be multicast. Vizio supplied no AAAA record
+in this run.
+
+These are application-layer DNS captures, not Ethernet/IP captures or sleep-proxy
+evidence. Routed/subnet-isolated interoperability remains unverified; no result
+here establishes NAT traversal, receiver control/media support or cryptographic trust.
+
 
 ## Optional storage
 
@@ -49,26 +81,57 @@ pairing or hint update should persist. `FileStorage` is JSON with atomic same-di
 replacement and mode `0600`; it is **not a keychain**. One writer per file is supported.
 
 ```typescript
-import { FileStorage, CustomStorage } from 'node-appletv-remote';
+import { FileStorage } from 'node-appletv-remote';
 
 const storage = new FileStorage('.atv-storage.json');
 await storage.load();
 storage.setHap(device.deviceId, 'airplay', credentials, [device.deviceId, ...device.identifiers]);
 await storage.save();
 const credentialsAgain = storage.hap(device.deviceId, 'airplay');
-
-// A keychain/database/cloud adapter implements { load(): Promise<StorageDocument|undefined>,
-// save(document): Promise<void> }; pass it to new CustomStorage(adapter).
 ```
 
 Records separate protocol credentials (`airplay`, `mrp`, `companion`, `raop`, `dmap`)
-from unauthenticated endpoint hints. Aliases must be unique; a collision requires explicit
-record selection. Explicit caller values take precedence over stored values, which take
-precedence over library defaults. Unknown versions, malformed credentials and invalid document
-shapes (including JSON `null`, `false`, `0` and `""`) reject on load; they are never silently reset.
-Only an adapter result of `undefined` means absent storage (`FileStorage` returns it for a missing
-file). A failed reload leaves the previous in-memory document and unsaved changes intact.
-Use `remove(key)` for deletion.
+from unauthenticated endpoint hints. Keys and aliases match case-insensitively. An alias
+may repeat within one record but cannot belong to two records; advertisements never
+authorize transferring a stored secret to a different identity.
+
+`resolveConnection(key, protocol, explicitOptions)` applies explicit values over that
+protocol's stored settings over nonsecret endpoint hints. It does not connect or pair:
+pass the resolved endpoint, credentials and supported settings to the chosen controller.
+Only AirPlay/MRP consume `settleMs`; only DMAP consumes `controllerName`. Unset fields
+do not erase existing credentials or settings. Use `removeCredential(key, protocol)`,
+`removeSettings(key, protocol)` or `remove(key)` for explicit deletion.
+
+Version 1 retains unrecognized document, record, credential and hint metadata on rewrite.
+The settings map accepts only supported protocol names. Known fields still undergo
+validation. Unknown versions, malformed credentials
+and invalid document shapes (including JSON `null`, `false`, `0` and `""`) reject on
+load rather than being reset. Only an adapter result of `undefined` means absent storage
+(`FileStorage` returns it for a missing file). A failed reload leaves the previous
+in-memory document and unsaved changes intact. A failed save preserves the prior file,
+removes its temporary replacement and leaves the in-memory changes dirty for retry.
+
+A custom JSON backend needs only two asynchronous operations; no subclass or SDK is required:
+
+```typescript
+import { CustomStorage } from 'node-appletv-remote';
+
+function storageFor(backend: {
+  read(): Promise<string | undefined>;
+  write(value: string): Promise<void>;
+}) {
+  return new CustomStorage({
+    load: async () => {
+      const value = await backend.read();
+      return value === undefined ? undefined : JSON.parse(value);
+    },
+    save: async document => backend.write(JSON.stringify(document)),
+  });
+}
+```
+
+The backend controls its own security and write guarantees; `CustomStorage` supplies
+the same schema validation, identity rules, dirty tracking and explicit-save contract.
 
 
 ## Routed sessions
@@ -129,8 +192,12 @@ loss participates in that invalidation. `connection` distinguishes `ready`, unex
 intentional `closed`, and optional setup `failed`. `close()` cancels setup and owned transports,
 detaches forwarding, and is idempotent. Sessions are single-use and add no reconnect or cross-protocol retry.
 
-Verification uses synthetic MRP/Companion fixtures and a real local HTTP DMAP peer. Physical
-mixed-protocol/Companion-only interoperability remains unverified for this session API.
+Verification uses encrypted MRP/Companion fixtures, a real TCP standalone-MRP peer, and a
+local HTTP DMAP peer. On AppleTV6,2 / tvOS 26.6, one public `DeviceSession` read MRP
+now-playing state (idle) alongside Companion app lists, text focus, and an explicitly
+Companion-routed power read. A separate Companion-only session (`port: 0`, Companion
+credentials only) returned app lists, focus, and power with no MRP provider opened.
+Physical legacy DMAP and standalone-MRP interoperability remains unverified.
 
 ## Remote control
 
@@ -138,7 +205,7 @@ mixed-protocol/Companion-only interoperability remains unverified for this sessi
 await atv.connect(credentials); // MRP remains preferred when both transports are open
 await atv.up();                 // also down, left, right, select, menu, home, topMenu
 await atv.playPause();          // also play, pause, stop, next, previous
-await atv.skipForward();        // app default interval, or skipBackward(30)
+await atv.skipForward();        // MRP app default; Companion 10 seconds; or skipBackward(30)
 await atv.setPosition(120);     // MRP only
 await atv.setShuffle(ShuffleState.Songs); // MRP only
 await atv.setRepeat(RepeatState.All);     // MRP only
@@ -147,6 +214,31 @@ await atv.wake();               // also suspend
 ```
 
 With only `connectCompanion(companionCredentials)`, navigation (except `topMenu`), `playPause`, play/pause/next/previous, skip, volume buttons, absolute volume, wake, and suspend use encrypted, acknowledged Companion requests. `stop`, absolute seek, shuffle/repeat, output routing, and now-playing APIs remain MRP-only. Companion HID actions retain single-tap, double-tap, and one-second hold semantics. A completed Companion request means only that the TV accepted the request; navigation, playback, volume, and power state are observational and are not changed optimistically.
+
+Explicit skip intervals must be finite and positive; invalid values reject before
+either protocol writes. Companion skips carry signed float64 seconds and default to
+ten seconds. Companion `wake()` and `suspend()` each send one acknowledged release-only
+`_hidC` request (`_hBtS: 2`, Wake 13 / Sleep 12), not a navigation press/release pair.
+They accept no hold/double-tap modifier. MRP-only wake and System Sleep HID remain unchanged.
+
+Recognized `SystemStatus`/`TVSystemStatus` notices with missing/non-map content or
+missing/invalid state reset power to `Unknown` rather than retaining stale On/Off.
+Valid state mapping is unchanged: 1 is Off, 2/3/4 are On. Companion close also
+invalidates its observed state.
+
+An independently encrypted TCP peer with injected session keys exercised HID
+press/release, error propagation, float64 volume, no optimistic state changes and
+malformed-status invalidation. That fixture does not prove pairing or physical effects.
+On AppleTV6,2 / recorded tvOS 26.6, the initial press/release implementation observed
+sleep but a later wake remained Off. The maintainer-approved release-only correction
+follows [pyatv's power implementation](https://github.com/postlund/pyatv/blob/master/pyatv/protocols/companion/__init__.py).
+Compiled public Companion-only wake then changed Off to On in 880 ms; repeated wake
+stayed On. Release-only suspend was acknowledged in 7 ms, but no Off event arrived
+within five seconds and the subsequent fetch returned On. The operator also reported
+On at follow-up. The sequence stopped before repeated sleep and post-sleep key dispatch.
+No state is inferred from acceptance, no failed action is retried automatically, and
+the full media/volume/power matrices remain open.
+
 
 ## Media results, state and runtime availability
 
@@ -208,6 +300,11 @@ the MRP-only fields remain unknown. Normalized values always come from the
 selected client/player: inactive players' metadata is cached until selected,
 then replacement queues, changed direct item IDs, removals, and reconnects clear
 the old selected snapshot.
+The JSON CLI exposes these same fields in `state` results and normalized `playback`
+events, using stable string enum names and `null` for missing optional metadata; the
+library retains its numeric enum values and `undefined` optionals. A direct item-ID
+change clears the previous item's queue metadata, but does not discard a replacement
+queue delivered in that same update.
 
 
 ```typescript
@@ -314,9 +411,9 @@ await atv.fetchTextFocusState();             // re-ask the TV; also updates atv.
 
 Text input uses Companion RTI: restart the text session (`_tiStop`/`_tiStart`), read the session UUID and current text from the reply, then send `_tiC` edits. A tested Apple TV ignored the older MRP `TextInputMessage`, so text input now needs `connectCompanion()`, and it rejects with `No text field is focused` instead of silently succeeding. `deleteText()` still sends the MRP Delete action.
 
-Text focus comes from the same RTI session: a `_tiStart` reply carries a `_tiD` archive only while a text field is focused. `connectCompanion()` sends `_tiStart` right after `_systemInfo`, because the TV pushes `_tiStarted`/`_tiStopped` events only to clients with an open RTI session; a TV that rejects it just emits `companionError` and leaves the state `unknown`. Every `_tiStart` reply (from connect, `fetchTextFocusState()` or a text edit) and every `_tiStarted`/`_tiStopped` event updates `textFocusState`, which emits only on change. It starts as `unknown` and returns to `unknown` when Companion closes. This is fixture-tested only; whether a given tvOS version pushes these events to this client is not hardware-verified (tracked in #30). The MRP `keyboard` event is separate and only fires on devices that still send KeyboardMessage.
+Text focus comes from the same RTI session: a `_tiStart` reply carries a `_tiD` archive only while a text field is focused. `connectCompanion()` sends `_tiStart` after remote-service and TVRC initialization, because the TV pushes `_tiStarted`/`_tiStopped` events only to clients with an open RTI session; a TV that rejects it just emits `companionError` and leaves the state `unknown`. Every `_tiStart` reply (from connect, `fetchTextFocusState()` or a text edit) and every `_tiStarted`/`_tiStopped` event updates `textFocusState`, which emits only on change. It starts as `unknown` and returns to `unknown` when Companion closes. This is fixture-tested only; whether a given tvOS version pushes these events to this client is not hardware-verified (tracked in #30). The MRP `keyboard` event is separate and only fires on devices that still send KeyboardMessage.
 
-`connectCompanion()` sends `_systemInfo` after pair-verify. Without it, a tested Apple TV answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. It then sends `TVRCSessionStart` (`ProtocolVersionKey` `1.2`): on tvOS 26.6 an Apple TV HD silently dropped power and app-list requests until it arrived (pyatv #2845). Older TVs reject it, which is ignored. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on hardware ([tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on)).
+`connectCompanion()` sends `_systemInfo` after pair-verify. Without it, a tested Apple TV answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. It registers the existing touch/`com.apple.tvremoteservices` session before `TVRCSessionStart` (`ProtocolVersionKey` `1.2`), as required by [pyatv #2855](https://github.com/postlund/pyatv/pull/2855). Registration failure rejects setup rather than exposing an unusable client. Older TVs may reject `TVRCSessionStart`, which remains best effort. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on hardware ([tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on)).
 
 ## Connection and request lifecycle
 

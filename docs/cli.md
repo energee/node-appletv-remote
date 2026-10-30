@@ -68,6 +68,15 @@ atv --json state living-room
 
 One-shot operations emit exactly one `result` or `error`; successful actions contain `data.acknowledged`. `true` means a correlated protocol reply was received, not proof of a visible device effect. `false` means only the protocol write completed. Lists are arrays (`devices` or `items`), queue items contain only scalar identifiers/title/artist/album, and artwork is written to the requested path with `path`, `bytes`, and `available` in its result. Empty strings and unavailable numeric metadata are represented as `null`; numeric zero is preserved. Enum values are stable lowercase strings, with `unknown` whenever the device has not supplied a value. `deviceId` is the resolved paired identity, not a partial input selector.
 
+Optional normalized metadata enums use `null` when unknown: `mediaType` is `audio`/`video`;
+`mediaSubType` is `music`/`podcast`/`audiobook`/`itunes-u`; `shuffleState` is
+`off`/`albums`/`songs`; `repeatState` is `off`/`track`/`all`. Season and episode zero are
+preserved. `contentIdentifier`, `uniqueIdentifier`, and each separate `iTunesStore*Identifier`
+are strings or `null`, never lossy 64-bit JSON numbers. These fields are included in both
+`state` results and normalized `playback` events, not the initial `{ "state": "unknown" }`
+watch notice. JSON is opt-in and can contain content/store identifiers; concise human
+`state` output still omits them. Queue-derived fields remain MRP-only and app-dependent.
+
 `atv --json watch [device]` emits normalized `connection`, `playback`, `volume`, `output-devices`, `text-focus`, and `power` events (from MRP, or from Companion when the TV has only a Companion pairing). Initial values explicitly use `unknown`, `unavailable`, or `null` until a provider reports them; no empty playback or output snapshot is invented. Companion-only watches are supported. Provider absence emits a `source` event. A connection loss emits one last `connection-close` event with `intentional: false` and exits nonzero. SIGINT/SIGTERM emits one last `watch-close` with `reason: "signal"`, closes owned transports, and exits 130/143 respectively, including during discovery or setup. Each watch selects one cached or discovered endpoint; its lifetime is never retried through the address cache, and there is no automatic reconnect.
 
 JSON commands use the same typed `FileStorage` credentials, endpoint overrides, and
@@ -88,6 +97,7 @@ Action rows include every supported alias/subcommand; request rejection produces
 | `help`, `--help`, `-h` | `{"schemaVersion":1}` |
 | `scan` | `{"devices":[{"id":"tv","name":"TV","address":"192.0.2.1","port":7000,"model":"AppleTV14,1","psi":null}]}` |
 | `state` | `{"hasPlayback":true,"playerIdentifier":null,"title":"Song","artist":null,"album":null,"genre":null,"duration":null,"elapsedTime":0,"playbackRate":0,"playbackState":"paused","appDisplayName":null,"appBundleIdentifier":null}` |
+| Additional `state` / normalized `playback` metadata | `{"mediaType":"video","mediaSubType":null,"seriesName":"Series","seasonNumber":0,"episodeNumber":0,"contentIdentifier":null,"uniqueIdentifier":"123","iTunesStoreIdentifier":"9223372036854775807","iTunesStoreSubscriptionIdentifier":null,"iTunesStoreArtistIdentifier":null,"iTunesStoreAlbumIdentifier":null,"shuffleState":"off","repeatState":"all"}` |
 | `queue` | `{"items":[{"id":"track","title":"Song","artist":"Artist","album":"Album"}]}` |
 | `artwork` | `{"path":"cover.jpg","bytes":1234,"available":true}` |
 | `command up`, `cmd up` | `{"command":"up","action":"singleTap","acknowledged":false}` |
@@ -147,6 +157,11 @@ missing or ambiguous selectors reject.
 Stored endpoint overrides take precedence over discovery hints. Connections try validated
 cached hints first and rescan only after setup failure, before any action is sent.
 Discovery matches known aliases exactly, never by a friendly-name substring.
+Pairing saves only after proof verification; a rejected PIN leaves the previous file
+unchanged. Valid version-1 documents retain unrecognized metadata when rewritten;
+unsupported versions and malformed known fields reject without replacing the store.
+Writes use a same-directory temporary file and atomic replacement. Failed writes,
+permission changes or replacement leave the old readable document intact.
 
 `atv scan --host <ip>` is repeatable and retains ordinary multicast browsing. Each value must be
 a nonempty IP literal; an IPv6 link-local address needs its interface scope (for example,
@@ -156,6 +171,11 @@ It is unauthenticated and does not establish reachability, wake/trust state, or 
 pair normally and rely on cryptographic connection verification before trusting a result.
 The same host flags work with `atv --json scan --host <ip>`; cancellation releases
 both the ordinary browser and targeted UDP discovery.
+Targeted record TTLs and cache-flush/goodbye grace govern only that scan's service
+assembly; they are not sleep, absence or trust signals. Same-link Apple/Roku/Vizio
+and scoped IPv6 observations are recorded in the
+[library guide](library.md#targeted-discovery-interoperability); routed discovery
+still depends on responder/network behavior and is not verified by those observations.
 
 Control commands use the public `DeviceSession` operation policy, not a separate CLI router.
 Navigation/media/volume prefer eligible AirPlay MRP, enabled standalone MRP, then Companion
@@ -172,6 +192,16 @@ use hyphenated commands to specify seconds. Extra buttons are `channel_up`, `cha
 actions follow supported HID/buttons; media commands, wake/suspend and `home_hold` reject
 modifiers before connection. DMAP does not support hold/double-tap. Companion acceptance is
 not confirmation of UI, media, volume, or power state.
+Explicit skip seconds must be finite and positive before either provider dispatches;
+Companion defaults to ten seconds when omitted. A recognized malformed/missing
+Companion status reports power as `unknown`, not a retained known On/Off value.
+
+Companion setup registers the remote service before TVRC and RTI initialization,
+then subscribes to media events. Power sends release-only Wake 13 / Sleep 12 requests.
+On AppleTV6,2 / recorded tvOS 26.6, native wake changed Off to On and repeated wake
+stayed On. Sleep was acknowledged but fetched On after five seconds; the operator
+reported On at follow-up. Full power interoperability is not claimed. Use `power`
+or `watch` for observations rather than treating command completion as a state change.
 
 Output IDs must be the receiver's AirPlay **`psi`** UUID, which `atv scan` prints as `psi=...`; its `deviceid` (MAC) and `pi` are ignored by the TV and time out after five seconds. Comma-separated IDs are trimmed and must be unique and nonblank (checked before connecting). `output add/remove/set` print the confirmed selected outputs afterward; `atv output set ""` is rejected, so the CLI cannot clear all outputs.
 

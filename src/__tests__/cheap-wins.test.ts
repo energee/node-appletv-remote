@@ -85,6 +85,13 @@ describe('MRP playback commands', () => {
     expect(cmd.command).toBe(18);
     expect(cmd.options.skipInterval).toBe(30);
   });
+
+  it('rejects invalid skip intervals before sending on MRP', async () => {
+    const atv = makeAtv();
+    const sent = fakeMrp(atv);
+    await expect(atv.skipBackward(Number.NaN)).rejects.toThrow('finite positive');
+    expect(sent).toEqual([]);
+  });
 });
 
 describe('Volume', () => {
@@ -186,6 +193,45 @@ describe('Companion apps, accounts and HID buttons', () => {
 });
 
 describe('Power state', () => {
+  it('release-only power commands change receiver state without optimistic cache updates', async () => {
+    const atv = makeAtv();
+    let receiverState = 1;
+    let pressed = false;
+    const connection = {
+      async sendRequest(id: string, content: OpackDict) {
+        if (id === 'FetchAttentionState') return new Map([['_c', new Map([['state', receiverState]])]]);
+        if (id !== '_hidC') throw new Error('Unexpected receiver request');
+        const code = content.get('_hidC');
+        if (code !== 12 && code !== 13) throw new Error('Unexpected power code');
+        if (content.get('_hBtS') === 1) pressed = true;
+        else {
+          if (!pressed) receiverState = code === 13 ? 3 : 1;
+          pressed = false;
+        }
+        return new Map([['_c', new Map()]]);
+      },
+    };
+    Reflect.set(atv, 'companionConnection', connection);
+    const ready = Reflect.get(atv, 'readyTransports');
+    if (ready instanceof WeakSet) ready.add(connection);
+    expect(await atv.fetchPowerState()).toBe(PowerState.Off);
+    await atv.wake();
+    expect(atv.powerState).toBe(PowerState.Off);
+    expect(await atv.fetchPowerState()).toBe(PowerState.On);
+    await atv.suspend();
+    expect(atv.powerState).toBe(PowerState.On);
+    expect(await atv.fetchPowerState()).toBe(PowerState.Off);
+  });
+  it('retains MRP-only wake and system-sleep messages without optimistic state', async () => {
+    const atv = makeAtv();
+    const sent = fakeMrp(atv);
+    await atv.wake();
+    await atv.suspend();
+    expect(sent.map(message => message.type)).toEqual([
+      MessageType.WakeDevice, MessageType.SendHIDEvent, MessageType.SendHIDEvent,
+    ]);
+    expect(atv.powerState).toBe(PowerState.Unknown);
+  });
   it('fetchPowerState maps FetchAttentionState to on/off', async () => {
     const atv = makeAtv();
     fakeCompanion(atv, new Map([['state', 1]]));
@@ -195,18 +241,19 @@ describe('Power state', () => {
     expect(atv.powerState).toBe(PowerState.On);
   });
 
-  it('SystemStatus events update powerState and emit powerState on change only', () => {
+  it('SystemStatus events map malformed or missing state to Unknown', () => {
     const atv = makeAtv();
     const seen: PowerState[] = [];
     atv.on('powerState', (s: PowerState) => seen.push(s));
-    const event = (state: number) => ({
-      identifier: 'SystemStatus',
-      data: new Map<OpackValue, OpackValue>([['_c', new Map([['state', state]])]]),
+    const event = (identifier: 'SystemStatus' | 'TVSystemStatus', content: OpackValue) => ({
+      identifier,
+      data: new Map<OpackValue, OpackValue>([['_c', content]]),
     });
-    (atv as any).handleCompanionEvent(event(2));
-    (atv as any).handleCompanionEvent(event(3));
-    (atv as any).handleCompanionEvent(event(1));
-    expect(seen).toEqual([PowerState.On, PowerState.Off]);
+    (atv as any).handleCompanionEvent(event('SystemStatus', new Map([['state', 2]])));
+    (atv as any).handleCompanionEvent(event('TVSystemStatus', new Map()));
+    (atv as any).handleCompanionEvent(event('SystemStatus', 'malformed'));
+    expect(atv.powerState).toBe(PowerState.Unknown);
+    expect(seen).toEqual([PowerState.On, PowerState.Unknown]);
   });
 
   it('MRP DeviceInfo logicalDeviceCount reports power without Companion (0 asleep, above 0 awake)', async () => {
