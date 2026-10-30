@@ -165,8 +165,11 @@ invalidates its observed state.
 An independently encrypted TCP peer with injected session keys exercised HID
 press/release, error propagation, float64 volume, no optimistic state changes and
 malformed-status invalidation. That fixture does not prove pairing or physical effects.
-The full Companion-only media/volume/power hardware matrices remain open; the
-read-only session verification above is not a substitute.
+On AppleTV6,2 / recorded tvOS 26.6, native Companion-only sessions observed wake
+and repeated wake. After correcting remote-service setup, suspend emitted Off and
+repeated suspend stayed Off. A subsequent wake was acknowledged but remained Off
+on later explicit reads. No state is inferred from acceptance, no failed action is
+retried automatically, and the full media/volume/power matrices remain open.
 
 
 ## Media results, state and runtime availability
@@ -335,9 +338,9 @@ await atv.fetchTextFocusState();             // re-ask the TV; also updates atv.
 
 Text input uses Companion RTI: restart the text session (`_tiStop`/`_tiStart`), read the session UUID and current text from the reply, then send `_tiC` edits. A tested Apple TV ignored the older MRP `TextInputMessage`, so text input now needs `connectCompanion()`, and it rejects with `No text field is focused` instead of silently succeeding. `deleteText()` still sends the MRP Delete action.
 
-Text focus comes from the same RTI session: a `_tiStart` reply carries a `_tiD` archive only while a text field is focused. `connectCompanion()` sends `_tiStart` right after `_systemInfo`, because the TV pushes `_tiStarted`/`_tiStopped` events only to clients with an open RTI session; a TV that rejects it just emits `companionError` and leaves the state `unknown`. Every `_tiStart` reply (from connect, `fetchTextFocusState()` or a text edit) and every `_tiStarted`/`_tiStopped` event updates `textFocusState`, which emits only on change. It starts as `unknown` and returns to `unknown` when Companion closes. This is fixture-tested only; whether a given tvOS version pushes these events to this client is not hardware-verified (tracked in #30). The MRP `keyboard` event is separate and only fires on devices that still send KeyboardMessage.
+Text focus comes from the same RTI session: a `_tiStart` reply carries a `_tiD` archive only while a text field is focused. `connectCompanion()` sends `_tiStart` after remote-service and TVRC initialization, because the TV pushes `_tiStarted`/`_tiStopped` events only to clients with an open RTI session; a TV that rejects it just emits `companionError` and leaves the state `unknown`. Every `_tiStart` reply (from connect, `fetchTextFocusState()` or a text edit) and every `_tiStarted`/`_tiStopped` event updates `textFocusState`, which emits only on change. It starts as `unknown` and returns to `unknown` when Companion closes. This is fixture-tested only; whether a given tvOS version pushes these events to this client is not hardware-verified (tracked in #30). The MRP `keyboard` event is separate and only fires on devices that still send KeyboardMessage.
 
-`connectCompanion()` sends `_systemInfo` after pair-verify. Without it, a tested Apple TV answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. It then sends `TVRCSessionStart` (`ProtocolVersionKey` `1.2`): on tvOS 26.6 an Apple TV HD silently dropped power and app-list requests until it arrived (pyatv #2845). Older TVs reject it, which is ignored. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on hardware ([tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on)).
+`connectCompanion()` sends `_systemInfo` after pair-verify. Without it, a tested Apple TV answers app, account and power requests with "No request handler", so a rejected `_systemInfo` fails the connect. It registers the existing touch/`com.apple.tvremoteservices` session before `TVRCSessionStart` (`ProtocolVersionKey` `1.2`), as required by [pyatv #2855](https://github.com/postlund/pyatv/pull/2855). Registration failure rejects setup rather than exposing an unusable client. Older TVs may reject `TVRCSessionStart`, which remains best effort. The touch session's `_sessionStop` can return "Session not found" when an AirPlay/MRP connection is also open; `stopTouch()` treats that as already stopped. Verified on hardware ([tested models](https://github.com/energee/node-appletv-remote/blob/main/README.md#tested-on)).
 
 ## Connection and request lifecycle
 

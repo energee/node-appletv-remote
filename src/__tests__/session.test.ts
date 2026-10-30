@@ -46,7 +46,9 @@ vi.mock('../companion/connection.js', async () => {
         this.emit('event', { identifier: 'SystemStatus', data: new Map<OpackValue, OpackValue>([['_c', new Map([['state', 3]])]]) });
         throw new Error('Companion setup lost after state');
       }
-      return new Map<OpackValue, OpackValue>([['_c', new Map()]]);
+      const reply: OpackDict = new Map();
+      if (identifier === '_sessionStart') reply.set('_sid', 42);
+      return new Map<OpackValue, OpackValue>([['_c', reply]]);
     }
     sendMessage(identifier: string, content: OpackDict) { this.requests.push([identifier, content]); }
   } };

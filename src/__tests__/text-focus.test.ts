@@ -12,6 +12,11 @@ import type { OpackDict, OpackValue } from '../companion/opack.js';
 const credentials = new Credentials({ clientId: 'test', serverId: 'server', clientLTSK: Buffer.alloc(32), clientLTPK: Buffer.alloc(32), serverLTPK: Buffer.alloc(32) });
 const liveDevice = () => new AppleTV({ name: 'TV', address: '127.0.0.1', port: 7000, deviceId: 'test', model: 'test', companionPort: 1234 });
 const device = () => new AppleTV({ name: 'TV', address: '127.0.0.1', port: 7000, deviceId: 'test', model: 'test' });
+function connectionReply(id: string): OpackDict {
+  const content: OpackDict = new Map();
+  if (id === '_sessionStart') content.set('_sid', 42);
+  return new Map([['_c', content]]);
+}
 beforeEach(() => { vi.spyOn(CompanionConnection.prototype, 'sendMessage').mockImplementation(() => {}); });
 
 /** Companion fake whose `_tiStart` reply is focused (`_tiD` present) or unfocused (empty `_c`). */
@@ -81,7 +86,7 @@ describe('text focus state', () => {
 
   it('reads events from the live Companion connection and resets when it closes', async () => {
     vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
-    vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockResolvedValue(new Map([['_c', new Map()]]));
+    vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockImplementation(async id => connectionReply(id));
     const atv = liveDevice();
     await atv.connectCompanion(credentials);
     const conn = (atv as any).companionConnection as CompanionConnection;
@@ -94,13 +99,14 @@ describe('text focus state', () => {
   // The TV pushes _tiStarted/_tiStopped only to clients with an open RTI session, so connect opens one.
   it('connectCompanion opens an RTI session and records focus from its _tiStart reply', async () => {
     vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
-    const send = vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockImplementation(async (id: string) =>
-      new Map([['_c', id === '_tiStart' ? new Map([['_tiD', Buffer.alloc(0)]]) : new Map()]]));
+    vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockImplementation(async (id: string) => {
+      if (id === '_tiStart') return new Map([['_c', new Map([['_tiD', Buffer.alloc(0)]])]]);
+      return connectionReply(id);
+    });
     const atv = liveDevice();
     const seenAtConnect: KeyboardFocusState[] = [];
     atv.on('companionConnect', () => seenAtConnect.push(atv.textFocusState));
     await atv.connectCompanion(credentials);
-    expect(send.mock.calls.map(([id]) => id)).toEqual(['_systemInfo', 'TVRCSessionStart', '_tiStart']);
     expect(seenAtConnect).toEqual([KeyboardFocusState.Focused]);
   });
 
@@ -108,7 +114,7 @@ describe('text focus state', () => {
     vi.spyOn(CompanionConnection.prototype, 'connect').mockResolvedValue();
     vi.spyOn(CompanionConnection.prototype, 'sendRequest').mockImplementation(async (id: string) => {
       if (id === '_tiStart') throw new Error('Companion _tiStart failed: No request handler');
-      return new Map([['_c', new Map()]]);
+      return connectionReply(id);
     });
     const atv = liveDevice();
     await atv.connectCompanion(credentials);

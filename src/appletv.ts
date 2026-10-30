@@ -471,6 +471,8 @@ export class AppleTV extends EventEmitter {
         ['_idsID', credentials.clientId], ['_pubID', this.deviceId], ['_sf', 256], ['_sv', '170.18'],
         ['model', this.model], ['name', this.name],
       ]));
+      // Register the remote service before TVRCSessionStart and app/power/RTI requests (pyatv #2855).
+      await this.startTouch();
       connection.sendMessage('_interest', new Map([['_regEvents', ['_iMC']]]));
       // tvOS 26.4+ (Apple TV HD on 26.6) silently drops power and app-list requests until a TV Remote session
       // is registered (pyatv #2845). Older TVs reject the message, so failure is ignored.
