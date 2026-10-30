@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -27,7 +27,34 @@ describe('storage', () => {
     expect(store.remove('living-room')).toBe(true);
   });
 
-  it('preserves a readable document when replacement fails and rejects corrupt input', async () => {
+  it.each(['null', 'false', '0', '""'])('rejects a %s document without permitting an empty-store overwrite', async json => {
+    const directory = await mkdtemp(join(tmpdir(), 'atv-corrupt-store-'));
+    const path = join(directory, 'store.json');
+    try {
+      await writeFile(path, json);
+      const store = new FileStorage(path);
+      await expect(store.load()).rejects.toThrow('Invalid storage document');
+      expect(() => store.setHap('tv', 'airplay', hap('c'))).toThrow('Storage must be loaded before use');
+      await expect(store.save()).rejects.toThrow('Storage must be loaded before use');
+      expect(await readFile(path, 'utf8')).toBe(json);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('retains the previous loaded credentials and dirty state after an invalid reload', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'atv-reload-store-'));
+    const path = join(directory, 'store.json');
+    try {
+      const store = new FileStorage(path);
+      await store.load();
+      store.setHap('tv', 'airplay', hap('c'));
+      await writeFile(path, 'null');
+      await expect(store.load()).rejects.toThrow('Invalid storage document');
+      expect(store.hap('tv', 'airplay')?.serverId).toBe('server-c');
+      expect(store.dirty).toBe(true);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
+  it('rejects corrupt JSON and reloads restored credentials', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'atv-store-'));
     const path = join(directory, 'store.json');
     const first = new FileStorage(path);
