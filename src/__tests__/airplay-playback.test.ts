@@ -138,7 +138,7 @@ async function receiver(options: { rejectAuth?: boolean; commandCode?: number; i
     });
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  return { credentials, port: (server.address() as { port: number }).port, requests, commands, push, get eventConnected() { return eventConnected; }, get eventAcknowledged() { return eventAcknowledged; }, get timingPort() { return timingPort; }, get controlClosed() { return controlClosed; }, async close() { for (const s of sockets) s.destroy(); await Promise.all([new Promise<void>(r => server.close(() => r())), new Promise<void>(r => events.close(() => r()))]); } };
+  return { credentials, port: (server.address() as { port: number }).port, requests, commands, push, get eventConnected() { return eventConnected; }, get eventAcknowledged() { return eventAcknowledged; }, get timingPort() { return timingPort; }, get controlClosed() { return controlClosed; }, get eventClosed() { return eventSocket?.destroyed ?? false; }, async close() { for (const s of sockets) s.destroy(); await Promise.all([new Promise<void>(r => server.close(() => r())), new Promise<void>(r => events.close(() => r()))]); } };
 }
 
 const Playback = api.AirPlayPlaybackSession;
@@ -214,6 +214,86 @@ describe('AirPlay URL playback', () => {
     try { await expect(playback.playUrl('https://example.org/movie.mp4')).rejects.toThrow(/Duplicate/); }
     finally { playback.close(); await fake.close(); }
   }, 10000);
+  it('rejects an accepted URL that never starts and closes both connections (#45)', async () => {
+    const fake = await receiver({ holdStatus: true });
+    const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
+    try {
+      await expect(playback.playUrl('https://example.org/missing.mp4', 0, { startupTimeoutMs: 100 }))
+        .rejects.toThrow(/Timeout waiting for playback to start/);
+      await vi.waitFor(() => expect([fake.controlClosed, fake.eventClosed]).toEqual([true, true]));
+      await expect(playback.getStatus()).rejects.toThrow(/Timeout waiting for playback to start/);
+    } finally { playback.close(); await fake.close(); }
+  });
+  it.each(['playing', 'paused'])('waits through loading for %s and cancels the startup deadline', async state => {
+    const fake = await receiver({ holdStatus: true });
+    const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let completed = false;
+    const startup = playback.playUrl('https://example.org/movie.mp4', 0, { startupTimeoutMs: 10000 })
+      .then(() => { completed = true; });
+    startup.catch(() => {});
+    try {
+      await vi.waitFor(() => expect(fake.commands.at(-1)?.type).toBe('setRate'), { interval: 5 });
+      fake.push({ type: 'playbackState', name: 'loading' });
+      await vi.waitFor(() => expect(playback.state).toBe('loading'), { interval: 5 });
+      expect(completed).toBe(false);
+      fake.push({ type: 'playbackState', name: state });
+      await startup;
+      await vi.advanceTimersByTimeAsync(10001);
+      expect([playback.state, fake.controlClosed, fake.eventClosed]).toEqual([state, false, false]);
+    } finally { playback.close(); vi.useRealTimers(); await fake.close(); }
+  });
+  it('accepts an immediate receiver start without losing the event', async () => {
+    const fake = await receiver();
+    const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
+    try {
+      await playback.playUrl('https://example.org/movie.mp4', 0, { startupTimeoutMs: 500 });
+      expect(await playback.getStatus()).toMatchObject({ state: 'playing', rate: 1 });
+    } finally { playback.close(); await fake.close(); }
+  });
+  it.each(['stopped', 'error', 'close', 'disconnect'])('rejects startup on %s without waiting for the deadline', async outcome => {
+    const fake = await receiver({ holdStatus: true });
+    const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
+    const expected = outcome === 'error' ? /42.*MediaError/ : /closed|stopped/;
+    const rejected = expect(playback.playUrl('https://example.org/movie.mp4', 0, { startupTimeoutMs: 10000 }))
+      .rejects.toThrow(expected);
+    try {
+      await vi.waitFor(() => expect(fake.commands.at(-1)?.type).toBe('setRate'), { interval: 5 });
+      if (outcome === 'close') playback.close();
+      else if (outcome === 'disconnect') await fake.close();
+      else if (outcome === 'error') fake.push({ type: 'error', error: { code: 42, domain: 'MediaError' } });
+      else fake.push({ type: 'playbackState', name: 'stopped' });
+      await rejected;
+      await vi.waitFor(() => expect([fake.controlClosed, fake.eventClosed]).toEqual([true, true]));
+    } finally { playback.close(); await fake.close(); }
+  });
+  it.each([0, -1, 0.5, NaN, Infinity, 0x80000000])('rejects invalid startup timeout %s before opening a connection', async startupTimeoutMs => {
+    const fake = await receiver();
+    const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
+    try {
+      await expect(playback.playUrl('https://example.org/movie.mp4', 0, { startupTimeoutMs })).rejects.toThrow(/startupTimeoutMs/);
+      await expect(playback.playFile('/not-a-file', 0, { startupTimeoutMs })).rejects.toThrow(/startupTimeoutMs/);
+      expect(fake.eventConnected).toBe(false);
+      expect(fake.requests).toEqual([]);
+    } finally { playback.close(); await fake.close(); }
+  });
+  it('closes the temporary local-file listener when playback never starts', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'atv-startup-timeout-'));
+    const file = join(directory, 'media.bin');
+    const fake = await receiver({ holdStatus: true });
+    const playback = new Playback('127.0.0.1', fake.port, fake.credentials);
+    try {
+      await writeFile(file, 'abcdef');
+      await expect(playback.playFile(file, 0, { address: '127.0.0.1', startupTimeoutMs: 100 }))
+        .rejects.toThrow(/Timeout waiting for playback to start/);
+      const item = fake.commands[0].item;
+      expect(item).toBeTypeOf('object');
+      if (!item || typeof item !== 'object' || !('Content-Location' in item)) throw new Error('Missing queued media URL');
+      const url = String(item['Content-Location']);
+      await expect(fetch(url)).rejects.toThrow();
+      await vi.waitFor(() => expect([fake.controlClosed, fake.eventClosed]).toEqual([true, true]));
+    } finally { playback.close(); await fake.close(); await rm(directory, { recursive: true, force: true }); }
+  });
   it('exports a dedicated playback session', () => expect(Playback).toBeTypeOf('function'));
   it('authenticates, queues the URL over the tvOS 26 remote-control stream and reads status from events', async () => {
     const fake = await receiver();

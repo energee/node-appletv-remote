@@ -19,9 +19,20 @@ try {
 
 This is actual authenticated media playback, not `launchApp(url)`. The receiver must be able to fetch the HTTP(S) URL directly; web pages and app deep links are not media URLs. AirPlay HAP credentials are supplied by the caller; this API does not read credential files or pair automatically. Each session starts one URL and cannot be reused after closing. `playUrl` resolves when the receiver accepts the setup/play/rate requests, not when playback completes. `idle` means the receiver reports no duration and can also mean startup buffering, so it is not proof that playback ended.
 
+To require receiver-confirmed startup instead, pass `playUrl(url, position, { startupTimeoutMs: 15000 })`.
+The optional deadline starts after the queue/rate commands are accepted. `playing` or `paused` on the
+authenticated event channel confirms startup; `loading`, `idle`, and HTTP 200 do not. A timeout,
+receiver error event, connection loss, explicit `close()`, or `stopped` before startup rejects the
+pending call and closes the session. Timeout means startup was not confirmed, not that the URL is
+necessarily invalid. There is no retry or local URL probe. Omit the option to retain queue-accepted
+semantics; this deadline does not bound total playback or replace the five-second request timeouts.
+`startupTimeoutMs` must be an integer from 1 to 2147483647; invalid options reject before opening
+sockets or local files. Receiver error events retain their code/domain in the error message and
+also surface from subsequent `getStatus()` calls.
+
 ### Local files
 
-`playFile(path, position?, { address? })` opens one existing regular file and exposes it at one cryptographically random, temporary HTTP path before queuing it with the existing URL playback flow:
+`playFile(path, position?, { address?, startupTimeoutMs? })` opens one existing regular file and exposes it at one cryptographically random, temporary HTTP path before queuing it with the existing URL playback flow. The same opt-in startup deadline applies; failure also closes the temporary HTTP listener:
 
 ```typescript
 const playback = new AirPlayPlaybackSession(device.address, device.port, credentials);
@@ -60,8 +71,9 @@ tvOS 26.6 (23L773). HLS plays.** Measured on both TVs in October 2026:
   TVs; its testers report MP4 playing on Apple TV 4K (3rd gen) on tvOS 26.5 and 27.0.
 
 Use HLS for these models. Answering `unhandledURL` by proxying the media through the sender may make
-MP4 work; it is not implemented. See also #44 (seeking has no effect on tvOS 26) and #45
-(unreachable URLs never report an error).
+MP4 work; it is not implemented. See also #44 (seeking has no effect on tvOS 26).
+Unreachable or unsupported URLs may never produce a receiver error (#45); use `startupTimeoutMs`
+to reject boundedly if the receiver never confirms startup.
 
 ## RAOP and AirPlay 2 audio (experimental, partial #22)
 

@@ -59,7 +59,7 @@ export { DeviceSession, connectDevice, KEY_OPERATIONS } from './session.js';
 export type { ControlProtocol, SessionCredentials, SessionOperation, SessionOptions, SessionConnectionEvent } from './session.js';
 
 export { AirPlayPlaybackSession } from './airplay-playback.js';
-export type { AirPlayFilePlaybackOptions, AirPlayPlaybackStatus } from './airplay-playback.js';
+export type { AirPlayPlaybackOptions, AirPlayFilePlaybackOptions, AirPlayPlaybackStatus } from './airplay-playback.js';
 
 /** One-shot PCM audio streaming to legacy RAOP receivers or, with HAP `credentials`, AirPlay 2 realtime receivers (experimental, #22). */
 export { RaopStream } from './raop/stream.js';
