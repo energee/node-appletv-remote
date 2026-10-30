@@ -260,15 +260,16 @@ function statusFromPlist(info: Record<string, unknown>): AirPlayPlaybackStatus {
   if (ready !== undefined && typeof ready !== 'boolean') throw new Error('Invalid playback-info readyToPlay');
   const duration = number('duration'); const position = number('position'); const rate = number('rate');
   if (duration !== undefined && position !== undefined && position > duration) throw new Error('Invalid playback-info position');
-  const result: AirPlayPlaybackStatus = { state: ready === true && rate !== undefined ? (rate > 0 ? 'playing' : 'paused') : 'idle' };
+  let state: AirPlayPlaybackStatus['state'] = 'idle';
+  if (ready === true && rate !== undefined) state = rate > 0 ? 'playing' : 'paused';
+  const result: AirPlayPlaybackStatus = { state };
   if (duration !== undefined) result.duration = duration;
   if (position !== undefined) result.position = position;
   if (rate !== undefined) result.rate = rate;
   return result;
 }
 
-function isSafePlistDocument(body: Buffer): boolean {
-  const document = body.toString('utf8');
+function isSafePlistDocument(document: string): boolean {
   if (/<!ENTITY|<!DOCTYPE[^>]*\[/i.test(document)) return false;
   const declarations = document.match(/<!DOCTYPE[\s\S]*?>/gi) ?? [];
   return declarations.length === 0 || (declarations.length === 1
@@ -278,8 +279,9 @@ function isSafePlistDocument(body: Buffer): boolean {
 /** Decode only the scalar fields this protocol uses; leave unneeded compound values unallocated. */
 function parseLegacyPlist(body: Buffer): Record<string, unknown> {
   try {
-    if (!isSafePlistDocument(body)) throw new Error('Unsafe plist document');
-    const document = XML_PARSER.parseFromString(body.toString('utf8'), 'application/xml');
+    const xml = body.toString('utf8');
+    if (!isSafePlistDocument(xml)) throw new Error('Unsafe plist document');
+    const document = XML_PARSER.parseFromString(xml, 'application/xml');
     const root = document.documentElement;
     const dictionary = root?.children.item(0);
     if (root?.tagName !== 'plist' || root.children.length !== 1 || dictionary?.tagName !== 'dict') {
