@@ -162,6 +162,8 @@ unchanged. Valid version-1 documents retain unrecognized metadata when rewritten
 unsupported versions and malformed known fields reject without replacing the store.
 Writes use a same-directory temporary file and atomic replacement. Failed writes,
 permission changes or replacement leave the old readable document intact.
+After an answered pairing prompt, stdin no longer keeps the completed command running;
+callers using an open input pipe do not need to close it to let pairing exit.
 
 `atv scan --host <ip>` is repeatable and retains ordinary multicast browsing. Each value must be
 a nonempty IP literal; an IPv6 link-local address needs its interface scope (for example,

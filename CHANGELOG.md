@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Pairing commands release stdin after answered prompts so a completed command can exit
+  even when its input pipe remains open (#89).
 - URL and local-file playback can opt into `startupTimeoutMs` to reject and close sessions that
   never reach receiver-confirmed playing/paused. Receiver error events now surface as playback
   failures; queue-accepted behavior remains the default (#45).

@@ -92,11 +92,13 @@ const postSendMs = (): number => envMs('ATV_POST_SEND_MS', 1000);
 
 /** Ask one question on stdin and resolve with the raw answer. */
 function prompt(question: string): Promise<string> {
+  process.stdin.ref?.();
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   // Promise.withResolvers is unavailable in the package's ES2022 target.
   return new Promise((resolve) => {
     rl.question(question, (answer) => {
       rl.close();
+      process.stdin.unref?.();
       resolve(answer ?? '');
     });
   });
