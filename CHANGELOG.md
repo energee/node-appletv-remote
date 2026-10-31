@@ -70,4 +70,6 @@ tvOS 26.6 (23L773). Everything else is covered by protocol fixtures and loopback
   TVs; use `RaopStream` with HAP credentials from the library.
 - Seeking a playing URL item has no effect on tvOS 26 (#44); unreachable URLs never report an error (#45).
 - Unverified on hardware: legacy Apple TV 2/3 (DMAP), legacy RAOP receivers, HomePods, standalone MRP
-  (tvOS < 15) and Companion-only devices.
+  (tvOS < 15).
+- Companion-only hardware coverage is partial: release-only wake changed Off to On, but sleep
+  was acknowledged while a later fetch still reported On. Full control/power matrices remain open (#83, #84).
