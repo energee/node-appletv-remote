@@ -10,7 +10,7 @@ import { Credentials } from '../../credentials.js';
 import type { DiscoveredDeviceInfo } from '../../discovery.js';
 import { DeviceSession } from '../../session.js';
 import * as transport from '../../connection.js';
-import { hkdfSha512, encryptChaCha20, decryptChaCha20, generateNonce } from '../../util/crypto.js';
+import { hkdfSha512, encryptChaCha20, decryptChaCha20, generateNonce, ed25519PrivateKeyFromSeed } from '../../util/crypto.js';
 import { decodeVarint, encodeVarint, readLengthPrefixed } from '../../util/data-stream.js';
 import { tlvEncode, tlvDecode, TlvTag } from '../../util/tlv.js';
 import { LegacyMRPConnection } from '../legacy-connection.js';
@@ -99,6 +99,9 @@ it('pairs through DeviceInfo and CryptoPairing M1-M6 with one controller keypair
   const steps: number[] = [];
   let clientIdentity: Buffer | undefined;
   let deviceInfoIdentity: unknown;
+  // The peer signs M6 with a fixed long-term key, as a real accessory does; a seed avoids another generateKeyPairSync call.
+  const peerKey = ed25519PrivateKeyFromSeed(Buffer.alloc(32, 9));
+  const peerLTPK = Buffer.from(createPublicKey(peerKey).export({ type: 'spki', format: 'der' }).subarray(-32));
   const socket = new EventEmitter() as EventEmitter & { write: (data: Buffer, cb: (error?: Error) => void) => void; destroy: () => void };
   const destroy = vi.fn();
   socket.destroy = destroy;
@@ -128,7 +131,9 @@ it('pairs through DeviceInfo and CryptoPairing M1-M6 with one controller keypair
           const encrypted = data[TlvTag.EncryptedData]!;
           const inner = tlvDecode(decryptChaCha20(key, Buffer.concat([Buffer.alloc(4), Buffer.from('PS-Msg05')]), encrypted.subarray(0, -16), encrypted.subarray(-16), Buffer.alloc(0)));
           clientIdentity = inner[TlvTag.Identifier];
-          const sealed = encryptChaCha20(key, Buffer.concat([Buffer.alloc(4), Buffer.from('PS-Msg06')]), tlvEncode({ [TlvTag.Identifier]: Buffer.from('peer'), [TlvTag.PublicKey]: Buffer.alloc(32, 9) }), Buffer.alloc(0));
+          const accessoryX = await hkdfSha512(server.computeK(), 'Pair-Setup-Accessory-Sign-Salt', 'Pair-Setup-Accessory-Sign-Info', 32);
+          const peerSignature = sign(null, Buffer.concat([accessoryX, Buffer.from('peer'), peerLTPK]), peerKey);
+          const sealed = encryptChaCha20(key, Buffer.concat([Buffer.alloc(4), Buffer.from('PS-Msg06')]), tlvEncode({ [TlvTag.Identifier]: Buffer.from('peer'), [TlvTag.PublicKey]: peerLTPK, [TlvTag.Signature]: peerSignature }), Buffer.alloc(0));
           reply = tlvEncode({ [TlvTag.SeqNo]: Buffer.from([6]), [TlvTag.EncryptedData]: Buffer.concat([sealed.ciphertext, sealed.tag]) });
         }
         response = await MRPMessage.cryptoPairing(reply);
@@ -146,7 +151,7 @@ it('pairs through DeviceInfo and CryptoPairing M1-M6 with one controller keypair
   expect(result.clientId).toBe(clientIdentity!.toString());
   expect(deviceInfoIdentity).toBe(result.clientId);
   expect(result.serverId).toBe('peer');
-  expect(result.serverLTPK).toEqual(Buffer.alloc(32, 9));
+  expect(result.serverLTPK).toEqual(peerLTPK);
   expect(destroy).toHaveBeenCalledOnce();
   expect(vi.mocked(generateKeyPairSync).mock.calls.map(([algorithm]) => algorithm)).toEqual(['ed25519']);
 }, 20000); // Real SRP-3072 math: ~2 s alone, several times that under a parallel full-suite run.

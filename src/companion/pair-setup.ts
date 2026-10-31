@@ -12,6 +12,7 @@ import { generateKeyPairSync, sign, randomUUID } from 'node:crypto';
 import { TlvTag, tlvEncode, tlvDecode } from '../util/tlv.js';
 import { hkdfSha512, encryptChaCha20, decryptChaCha20, ed25519PrivateKeyFromSeed } from '../util/crypto.js';
 import { SRPClient } from '../auth/srp.js';
+import { verifyPairSetupM6 } from '../auth/pair-setup.js';
 import { FrameType, encodeFrame, parseFrames, type Frame } from './framing.js';
 import { opackEncode, opackDecode, type OpackDict, type OpackValue } from './opack.js';
 import type { HAPCredentials } from '../auth/types.js';
@@ -244,12 +245,7 @@ export class CompanionPairSetup {
     const m6Tag = m6Encrypted.subarray(m6Encrypted.length - 16);
     const decrypted = decryptChaCha20(encryptionKey, m6Nonce, m6Ciphertext, m6Tag, Buffer.alloc(0));
 
-    const serverInfo = tlvDecode(decrypted);
-    const serverId = serverInfo[TlvTag.Identifier];
-    const serverLTPK = serverInfo[TlvTag.PublicKey];
-    if (!serverId || !serverLTPK) {
-      throw new Error('Companion PS M6 missing Identifier or PublicKey');
-    }
+    const { serverId, serverLTPK } = await verifyPairSetupM6(this.sessionKey, decrypted, 'Companion PS M6');
 
     return {
       clientId: this.clientId,

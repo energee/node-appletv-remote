@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- AirPlay and Companion pair-setup now verify the Apple TV's M6 signature before returning
+  credentials. Previously any peer that completed SRP with the PIN could supply an arbitrary
+  long-term key that later pair-verify would trust.
 - Restore the RAOP transient-pairing eligibility guard and public read-only receiver profile,
   fixing syntax and CLI compilation errors in the audio streaming PR (#121).
 - URL and local-file playback can opt into `startupTimeoutMs` to reject and close sessions that

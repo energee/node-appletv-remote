@@ -4,9 +4,9 @@
  * credentials that PairVerify / AirPlayConnection use on later connections.
  */
 
-import { generateKeyPairSync, sign, randomUUID } from 'node:crypto';
+import { generateKeyPairSync, sign, verify, randomUUID } from 'node:crypto';
 import { TlvTag, tlvEncode, tlvDecode } from '../util/tlv.js';
-import { hkdfSha512, encryptChaCha20, decryptChaCha20, ed25519PrivateKeyFromSeed } from '../util/crypto.js';
+import { hkdfSha512, encryptChaCha20, decryptChaCha20, ed25519PrivateKeyFromSeed, ed25519PublicKeyFromRaw } from '../util/crypto.js';
 import { SRPClient } from './srp.js';
 import { PersistentHttp } from '../util/http.js';
 import type { HAPCredentials } from './types.js';
@@ -194,13 +194,7 @@ export class PairSetup {
       Buffer.alloc(0),
     );
 
-    const serverInfo = tlvDecode(decrypted);
-    const serverId = serverInfo[TlvTag.Identifier];
-    const serverLTPK = serverInfo[TlvTag.PublicKey];
-
-    if (!serverId || !serverLTPK) {
-      throw new Error('M6 decrypted data missing Identifier or PublicKey');
-    }
+    const { serverId, serverLTPK } = await verifyPairSetupM6(this.sessionKey, decrypted, 'M6');
 
     return {
       clientId: this.clientId,
@@ -226,4 +220,41 @@ export class PairSetup {
   destroy(): void {
     this.http.destroy();
   }
+}
+
+/**
+ * Check the Apple TV's identity in a decrypted pair-setup M6 and return it.
+ * The accessory signs AccessoryX || AccessoryPairingID || AccessoryLTPK with its
+ * long-term key (HAP pair-setup M6), where AccessoryX is derived from the SRP
+ * session key. Without this check, whoever answers pair-setup with the right PIN
+ * can hand over any long-term key, and later pair-verify trusts that key.
+ * @param label prefix for error messages, so callers can name their protocol
+ * @throws if the identifier, key or signature is missing or the signature does not verify
+ */
+export async function verifyPairSetupM6(
+  sessionKey: Buffer,
+  decrypted: Buffer,
+  label: string,
+): Promise<{ serverId: Buffer; serverLTPK: Buffer }> {
+  const serverInfo = tlvDecode(decrypted);
+  const serverId = serverInfo[TlvTag.Identifier];
+  const serverLTPK = serverInfo[TlvTag.PublicKey];
+  const serverSignature = serverInfo[TlvTag.Signature];
+  if (!serverId?.length || !serverLTPK) {
+    throw new Error(`${label} decrypted data missing Identifier or PublicKey`);
+  }
+  if (serverLTPK.length !== 32 || serverSignature?.length !== 64) {
+    throw new Error(`${label} missing a valid accessory public key or signature`);
+  }
+  const accessoryX = await hkdfSha512(
+    sessionKey,
+    'Pair-Setup-Accessory-Sign-Salt',
+    'Pair-Setup-Accessory-Sign-Info',
+    32,
+  );
+  const signed = Buffer.concat([accessoryX, serverId, serverLTPK]);
+  if (!verify(null, signed, ed25519PublicKeyFromRaw(serverLTPK), serverSignature)) {
+    throw new Error(`${label} accessory signature verification failed`);
+  }
+  return { serverId, serverLTPK };
 }
