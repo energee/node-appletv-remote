@@ -15,39 +15,54 @@ const FFMPEG_MISSING = 'ffmpeg is required for this input. Install ffmpeg, or us
 
 export interface RaopInput {
   source: RaopPcmSource;
+  /** Local finite input eligible for tag extraction before RAOP ownership. */
+  metadataFile?: string;
   /** Resolves on an asynchronous pre-consumption source failure. */
   failure?: Promise<Error>;
   close(): void;
 }
 
-function isCompatibleWav(path: string): boolean {
+/** Inspect RIFF structure and PCM parameters in one bounded scan without consuming audio. */
+function wavProbe(path: string): { wellFormed: boolean; compatible: boolean } {
   const fd = openSync(path, 'r');
   try {
     const length = fstatSync(fd).size;
     const header = Buffer.alloc(12);
     if (length < 20 || readSync(fd, header, 0, 12, 0) !== 12 ||
-        header.toString('latin1', 0, 4) !== 'RIFF' || header.toString('latin1', 8, 12) !== 'WAVE' ||
-        header.readUInt32LE(4) + 8 > length) return false;
-    let position = 12; let compatible = false;
-    while (position + 8 <= length) {
+        header.toString('latin1', 0, 4) !== 'RIFF' || header.toString('latin1', 8, 12) !== 'WAVE') return { wellFormed: false, compatible: false };
+    const end = header.readUInt32LE(4) + 8;
+    if (end > length || end < 12) return { wellFormed: false, compatible: false };
+    let position = 12; let format: Buffer | undefined; let dataSize: number | undefined;
+    while (position + 8 <= end) {
       const chunk = Buffer.alloc(8);
-      if (readSync(fd, chunk, 0, 8, position) !== 8) return false;
-      const size = chunk.readUInt32LE(4); const end = position + 8 + size + size % 2;
-      if (end > length || end < position) return false;
+      if (readSync(fd, chunk, 0, 8, position) !== 8) return { wellFormed: false, compatible: false };
+      const size = chunk.readUInt32LE(4); const next = position + 8 + size + size % 2;
+      if (next > end || next < position) return { wellFormed: false, compatible: false };
       const id = chunk.toString('latin1', 0, 4);
-      if (id === 'data') return compatible && size % 4 === 0;
-      if (id === 'fmt ') {
-        if (compatible || size < 16 || size > 1024) return false;
-        const format = Buffer.alloc(16);
-        if (readSync(fd, format, 0, 16, position + 8) !== 16) return false;
-        compatible = format.readUInt16LE(0) === 1 && format.readUInt16LE(2) === 2 &&
-          format.readUInt32LE(4) === 44100 && format.readUInt16LE(14) === 16;
-        if (!compatible) return false;
-      }
-      position = end;
+      if (id === 'fmt ' && !format && size >= 16 && size <= 1024) {
+        format = Buffer.alloc(16);
+        if (readSync(fd, format, 0, 16, position + 8) !== 16) return { wellFormed: false, compatible: false };
+      } else if (id === 'data' && format && dataSize === undefined) dataSize = size;
+      position = next;
     }
-    return false;
+    if (position !== end || !format || dataSize === undefined) return { wellFormed: false, compatible: false };
+    const compatible = format.readUInt16LE(0) === 1 && format.readUInt16LE(2) === 2 &&
+      format.readUInt32LE(4) === 44100 && format.readUInt16LE(14) === 16 && dataSize % 4 === 0;
+    return { wellFormed: true, compatible };
   } finally { closeSync(fd); }
+}
+
+/** Yield bounded complete PCM16 stereo frames, retaining at most three pending bytes. */
+async function* pcmFrames(chunks: AsyncIterable<Buffer>): AsyncIterable<Buffer> {
+  let remainder: Buffer = Buffer.alloc(0);
+  for await (const chunk of chunks) {
+    if (!Buffer.isBuffer(chunk)) throw new Error('PCM source must yield Buffers');
+    const input = remainder.length ? Buffer.concat([remainder, chunk]) : chunk;
+    const complete = input.length - input.length % 4;
+    for (let offset = 0; offset < complete; offset += MAX_CHUNK) yield input.subarray(offset, Math.min(offset + MAX_CHUNK, complete));
+    remainder = input.subarray(complete);
+  }
+  if (remainder.length) throw new Error('PCM source ended mid-frame');
 }
 
 async function ffmpegInput(input: string, signal: AbortSignal): Promise<RaopInput> {
@@ -75,6 +90,7 @@ async function ffmpegInput(input: string, signal: AbortSignal): Promise<RaopInpu
     exited = true;
     if (!startupError && !stopping && (code !== 0 || typeof terminationSignal === 'string')) {
       exitError = new Error(`ffmpeg exited ${terminationSignal ? `from ${terminationSignal}` : `with code ${code}`}${stderr ? `: ${stderr.trim()}` : ''}`);
+      reportFailure(exitError);
     }
     resolve();
   }));
@@ -86,14 +102,20 @@ async function ffmpegInput(input: string, signal: AbortSignal): Promise<RaopInpu
     try {
       if (signal.aborted) throw signal.reason;
       if (stdoutError) throw stdoutError;
-      for await (const chunk of child.stdout) {
-        if (signal.aborted) throw signal.reason;
-        if (!Buffer.isBuffer(chunk)) throw new Error('ffmpeg stdout must yield Buffers');
-        for (let offset = 0; offset < chunk.length; offset += MAX_CHUNK) yield chunk.subarray(offset, offset + MAX_CHUNK);
-      }
+      yield* pcmFrames((async function* () {
+        for await (const chunk of child.stdout) {
+          if (signal.aborted) throw signal.reason;
+          if (!Buffer.isBuffer(chunk)) throw new Error('ffmpeg stdout must yield Buffers');
+          yield chunk;
+        }
+      })());
       await finished;
+      if (signal.aborted) throw signal.reason;
       if (stdoutError) throw stdoutError;
       if (exitError) throw exitError;
+    } catch (error) {
+      if (signal.aborted) throw signal.reason;
+      throw error;
     } finally { signal.removeEventListener('abort', abort); close(); await finished; }
   })();
   return { source, failure, close };
@@ -103,7 +125,7 @@ async function ffmpegInput(input: string, signal: AbortSignal): Promise<RaopInpu
 export async function openRaopInput(input: string, signal: AbortSignal): Promise<RaopInput> {
   if (input.startsWith('pcm:http://') || input.startsWith('pcm:https://')) {
     const url = input.slice(4);
-    const source = (async function* (): AsyncIterable<Buffer> {
+    const source = pcmFrames((async function* (): AsyncIterable<Buffer> {
       const response = await fetch(url, { signal });
       if (!response.ok || !response.body) {
         await response.body?.cancel();
@@ -113,28 +135,34 @@ export async function openRaopInput(input: string, signal: AbortSignal): Promise
       try {
         for await (const chunk of body) {
           if (!Buffer.isBuffer(chunk)) throw new Error('Remote PCM source must yield Buffers');
-          for (let offset = 0; offset < chunk.length; offset += MAX_CHUNK) yield chunk.subarray(offset, offset + MAX_CHUNK);
+          yield chunk;
         }
       } finally { body.destroy(); }
-    })();
+    })());
     return { source, close: () => {} };
   }
   if (/^https?:\/\//i.test(input)) return ffmpegInput(input, signal);
   if (input.toLowerCase().endsWith('.pcm')) {
-    const source = (async function* (): AsyncIterable<Buffer> {
+    const source = pcmFrames((async function* (): AsyncIterable<Buffer> {
       const readable = createReadStream(input, { highWaterMark: MAX_CHUNK });
       try { yield* readable; } finally { readable.destroy(); }
-    })();
+    })());
     return { source, close: () => {} };
   }
-  if (input.toLowerCase().endsWith('.wav') && isCompatibleWav(input)) {
-    const source = (async function* (): AsyncIterable<Buffer> {
-      const readable = createReadStream(input, { highWaterMark: MAX_CHUNK });
-      yield* wavPcm(readable);
-    })();
-    return { source, close: () => {} };
+  if (input.toLowerCase().endsWith('.wav')) {
+    const wav = wavProbe(input);
+    if (wav.compatible) {
+      const source = (async function* (): AsyncIterable<Buffer> {
+        const readable = createReadStream(input, { highWaterMark: MAX_CHUNK });
+        yield* wavPcm(readable);
+      })();
+      return { source, metadataFile: input, close: () => {} };
+    }
+    const converted = await ffmpegInput(input, signal);
+    return { ...converted, ...(wav.wellFormed ? { metadataFile: input } : {}) };
   }
-  return ffmpegInput(input, signal);
+  const converted = await ffmpegInput(input, signal);
+  return { ...converted, metadataFile: input };
 }
 
 export { FFMPEG_MISSING };
