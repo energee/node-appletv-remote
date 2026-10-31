@@ -97,10 +97,6 @@ Legacy RAOP receivers can use an explicit library `password` for MD5/no-qop Dige
 authentication. That path is loopback-verified, not hardware-verified; see the
 [receiver/authentication limits](docs/audio-and-playback.md#raop-and-airplay-2-audio-experimental-partial-22).
 
-Legacy RAOP receivers can use an explicit library `password` for MD5/no-qop Digest
-authentication. That path is loopback-verified, not hardware-verified; see the
-[receiver/authentication limits](docs/audio-and-playback.md#raop-and-airplay-2-audio-experimental-partial-22).
-
 Eligible AirPlay 2 receivers can use session-only transient pairing when no HAP credentials
 are supplied. No pairing identity or secret is persisted. This path is encrypted-loopback
 verified; HomePod/HomePod mini interoperability is not yet hardware-verified (#77).
