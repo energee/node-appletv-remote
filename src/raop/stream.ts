@@ -187,7 +187,7 @@ function validHAPCredentials(credentials: HAPCredentials): boolean {
 /** Explicit endpoint plus _raop._tcp TXT capabilities; no discovery or credential access. */
 export class RaopStream {
   /** `airplay2` when features bit 38 (unified media control) or 48 (CoreUtils pairing) is set, else `legacy`. */
-  private readonly profile: 'legacy' | 'airplay2';
+  readonly profile: 'legacy' | 'airplay2';
   /** Transient pairing is allowed only when system pairing (43) or CoreUtils pairing (48) is advertised. */
   private readonly transientPairingEligible: boolean;
   private readonly requiresLegacySeed: boolean;
