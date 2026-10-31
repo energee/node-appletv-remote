@@ -187,7 +187,7 @@ function validHAPCredentials(credentials: HAPCredentials): boolean {
 /** Explicit endpoint plus _raop._tcp TXT capabilities; no discovery or credential access. */
 export class RaopStream {
   /** `airplay2` when features bit 38 (unified media control) or 48 (CoreUtils pairing) is set, else `legacy`. */
-  private readonly profile: 'legacy' | 'airplay2';
+  readonly profile: 'legacy' | 'airplay2';
   /** Transient pairing is allowed only when system pairing (43) or CoreUtils pairing (48) is advertised. */
   private readonly transientPairingEligible: boolean;
   private readonly requiresLegacySeed: boolean;
@@ -253,8 +253,7 @@ export class RaopStream {
     if (this.profile === 'airplay2' && options.credentials !== undefined && !validHAPCredentials(options.credentials)) {
       throw new Error('Invalid AirPlay 2 HAP credentials');
     }
-    if (this.profile === 'airplay2' && options.credentials === undefined && !this.
-       ) {
+    if (this.profile === 'airplay2' && options.credentials === undefined && !this.transientPairingEligible) {
       throw new Error('AirPlay 2 RAOP receiver does not advertise transient pairing eligibility');
     }
     if (this.profile === 'airplay2' && options.legacySeed !== undefined) throw new Error('RAOP legacy seed is not used by AirPlay 2 receivers');
