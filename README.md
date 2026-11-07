@@ -81,7 +81,6 @@ Other models and tvOS versions are untested; reports are welcome.
 | Feature | Status |
 |---|---|
 | Discovery, AirPlay and Companion pairing | Verified |
-| Navigation/media/power over Companion alone | Navigation, play/pause and sleep/wake verified |
 | Navigation, media commands, button tap/double-tap/hold, touch swipes | Verified over MRP |
 | Apps, accounts, power state, app launch by URL | Verified; power is read from MRP, so a sleeping TV reports `off` |
 | Volume | Absolute set/read verified with AirPods output; TV speakers do not allow absolute volume |
