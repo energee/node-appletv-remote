@@ -228,7 +228,8 @@ export class AirPlayConnection extends MRPConnection {
    * HAP pair-verify (M1-M4) over plain HTTP on the control socket, using the stored
    * long-term keys. Returns the Control-Salt read/write keys for the RTSP session and the
    * raw X25519 shared secret, which later derives the event and data channel keys.
-   * @throws on a missing M2 field, bad server signature, or an M4 error code.
+   * @throws on a missing M2 field, bad server signature, an identifier that differs from
+   *   the stored serverId, or an M4 error code.
    */
   private async pairVerifyOnSocket(): Promise<{
     outputKey: Buffer;
@@ -286,6 +287,11 @@ export class AirPlayConnection extends MRPConnection {
     const serverLTPKObj = ed25519PublicKeyFromRaw(this.credentials.serverLTPK);
     const valid = cryptoVerify(null, serverSignedData, serverLTPKObj, serverSignature);
     if (!valid) throw new Error('Server signature verification failed');
+
+    // The signature authenticates the identifier; it must also be the one stored at pair-setup.
+    if (serverIdentifier.toString('utf-8') !== this.credentials.serverId) {
+      throw new Error('Server identifier does not match the paired accessory');
+    }
 
     // Sign our proof
     const clientSignedData = Buffer.concat([

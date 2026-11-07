@@ -1,6 +1,7 @@
 /**
  * HAP pair-verify over HTTP POST /pair-verify or an injected MRP TLV carrier. Proves both sides hold
- * the long-term keys from pair-setup and derives the session's ChaCha20 keys.
+ * the long-term keys from pair-setup, checks that the accessory presents the identifier stored at
+ * pair-setup, and derives the session's ChaCha20 keys.
  * AirPlayConnection runs its own copy of this exchange on its socket; within the
  * library this class authenticates standalone legacy MRP and URL playback.
  */
@@ -50,7 +51,8 @@ export class PairVerify {
    * @returns `outputKey` (Control-Write, for data we send), `inputKey` (Control-Read,
    *   for data we receive), and the raw X25519 shared secret.
    * @throws if M2 is malformed, the server signature does not match the stored
-   *   serverLTPK, or M4 carries an error or lacks state 4.
+   *   serverLTPK, the signed identifier differs from the stored serverId, or M4
+   *   carries an error or lacks state 4.
    */
   async verify(): Promise<{ outputKey: Buffer; inputKey: Buffer; sharedSecret: Buffer }> {
     try {
@@ -118,6 +120,11 @@ export class PairVerify {
     const valid = cryptoVerify(null, serverSignedData, serverLTPKObj, serverSignature);
     if (!valid) {
       throw new Error('Server signature verification failed');
+    }
+
+    // The signature authenticates the identifier; it must also be the one stored at pair-setup.
+    if (serverIdentifier.toString('utf-8') !== this.credentials.serverId) {
+      throw new Error('Server identifier does not match the paired accessory');
     }
 
     // Step 6: Sign our proof
