@@ -133,7 +133,7 @@ export class LegacyMRPConnection extends MRPConnection {
       },
       destroy: carrier.destroy,
     };
-    const setup = new PairSetup(this.host, this.port, cachedCarrier);
+    const setup = new PairSetup(this.host, this.port, cachedCarrier, 'MRP PS M6');
     try {
       await this.open();
       const deviceInfo = await MRPMessage.deviceInfo({ uniqueIdentifier: setup.clientId, name: 'Node ATV Remote' });
