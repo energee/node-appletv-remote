@@ -70,7 +70,7 @@ export class CompanionConnection extends EventEmitter {
   /**
    * Open the TCP socket and run pair-verify; resolves once traffic is encrypted.
    * Concurrent connect calls reject; await canceled setup before reusing this instance.
-   * @throws on cancellation, socket errors, a bad server signature, or a frame timeout
+   * @throws on cancellation, socket errors, a bad server signature or identifier, or a frame timeout
    */
   async connect(): Promise<void> {
     if (this.connecting || this.socket) throw new Error('Companion already connected');
@@ -136,7 +136,8 @@ export class CompanionConnection extends EventEmitter {
 
   /**
    * Run the four-message pair-verify exchange (M1-M4): ECDH on ephemeral X25519 keys,
-   * mutual Ed25519 signatures with the long-term keys, then derive the session keys.
+   * mutual Ed25519 signatures with the long-term keys, a check that the accessory presents
+   * the identifier stored at pair-setup, then derive the session keys.
    */
   private async pairVerify(): Promise<void> {
     // Generate ephemeral X25519 keypair
@@ -203,6 +204,11 @@ export class CompanionConnection extends EventEmitter {
     const valid = cryptoVerify(null, serverSignedData, serverLTPKObj, serverSignature);
     if (!valid) {
       throw new Error('Companion server signature verification failed');
+    }
+
+    // The signature authenticates the identifier; it must also be the one stored at pair-setup.
+    if (serverIdentifier.toString('utf-8') !== this.credentials.serverId) {
+      throw new Error('Companion server identifier does not match the paired accessory');
     }
 
     // M3: Sign our proof and encrypt (PV_Next for subsequent messages)

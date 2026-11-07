@@ -8,6 +8,9 @@
   even when its input pipe remains open (#89).
 - Restore the RAOP transient-pairing eligibility guard and public read-only receiver profile,
   fixing syntax and CLI compilation errors in the audio streaming PR (#121).
+- Pair-verify now rejects an accessory whose identifier differs from the `serverId` stored at
+  pairing, on AirPlay, Companion and standalone MRP (#132). Hand-built credentials must carry the
+  `serverId` from pair-setup; a wrong or blank value used to be ignored and now fails.
 - URL and local-file playback can opt into `startupTimeoutMs` to reject and close sessions that
   never reach receiver-confirmed playing/paused. Receiver error events now surface as playback
   failures; queue-accepted behavior remains the default (#45).
