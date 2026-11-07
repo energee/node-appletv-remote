@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Pairing commands release stdin after answered prompts so a completed command can exit
+  even when its input pipe remains open (#89).
 - Restore the RAOP transient-pairing eligibility guard and public read-only receiver profile,
   fixing syntax and CLI compilation errors in the audio streaming PR (#121).
 - URL and local-file playback can opt into `startupTimeoutMs` to reject and close sessions that

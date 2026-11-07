@@ -1,8 +1,9 @@
 /** Exercise the compiled executable, including npm-style bin symlinks, without device I/O. */
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 
 let directory: string;
 let executable: string;
@@ -52,3 +53,39 @@ it('parses global JSON before rejecting invalid arguments', () => {
     data: { code: 'invalid_arguments' },
   });
 });
+
+it('exits after device selection even when the caller keeps stdin open', async () => {
+  const loader = join(directory, 'discovery-loader.mjs');
+  writeFileSync(loader, `
+    export async function load(url, context, nextLoad) {
+      if (url.endsWith('/dist/discovery.js')) {
+        return { format: 'module', shortCircuit: true, source:
+          'export * from ' + JSON.stringify(url + '?actual') +
+          '; export async function scan() { return [{ toString() { return "Fixture TV"; } }]; }' };
+      }
+      return nextLoad(url, context);
+    }
+  `);
+  const child = spawn(process.execPath, ['--loader', loader, executable, 'pair'], {
+    env: { ...process.env, HOME: directory }, stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000,
+  });
+  let output = '';
+  let errors = '';
+  let answered = false;
+  child.stderr.on('data', chunk => { errors += chunk; });
+  child.stdout.on('data', chunk => {
+    output += chunk;
+    if (!answered && output.includes('Select device number:')) {
+      answered = true;
+      child.stdin.write('0\n'); // Deliberately do not close the caller's input pipe.
+    }
+  });
+  try {
+    const [code] = await once(child, 'exit');
+    expect(code, errors).toBe(0);
+    expect(output).toContain('Invalid selection.');
+  } finally {
+    child.stdin.destroy();
+    child.kill();
+  }
+}, 10000);
