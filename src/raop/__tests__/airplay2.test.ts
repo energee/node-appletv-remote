@@ -189,9 +189,20 @@ describe('setupAirPlay2Audio', () => {
     // A port that refuses connections forces the 1 s retry wait.
     const { receiver, client } = await connect({ eventPort: await closedPort() });
     const controller = new AbortController();
+    const request = vi.spyOn(client, 'request');
+    // openEventChannel retries refused connects with a 1 s setTimeout; wait for that wait, not just SETUP.
+    let retryWait: () => void;
+    const sawRetryWait = new Promise<void>(resolve => { retryWait = resolve; });
+    const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+    const timers = vi.spyOn(globalThis, 'setTimeout').mockImplementation((handler: any, ms?: number, ...args: any[]) => {
+      if (ms === 1000 && typeof handler === 'function') retryWait!();
+      return realSetTimeout(handler, ms as number, ...args);
+    });
     const setup = setupAirPlay2Audio(client, '127.0.0.1', receiver.credentials, 1234567, ports, controller.signal);
-    await until(() => receiver.requests.some(request => request.method === 'SETUP'));
-    await delay(50);
+    await until(() => request.mock.calls.some((call, index) => call[0] === 'SETUP' && request.mock.results[index]?.type === 'return'));
+    await request.mock.results.find((_, index) => request.mock.calls[index][0] === 'SETUP')!.value;
+    await sawRetryWait;
+    timers.mockRestore();
     const aborted = performance.now();
     controller.abort();
     // Abort must reach the retry wait itself, not just fail after the remaining refused attempts (~4 s).
