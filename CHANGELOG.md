@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- AirPlay, Companion and standalone MRP pair-setup now verify the accessory's M6 signature before
+  returning credentials, and a missing, malformed or invalid signature fails pairing. This proves
+  the sender holds the key it presents and that M6 belongs to this SRP session. It does not prove
+  the peer is a genuine Apple TV: anyone who completes SRP with the PIN can sign with their own key.
+- Pair-setup M6 errors now name the transport (`AirPlay PS M6`, `MRP PS M6`, `Companion PS M6`) and
+  the field that failed. `PairSetup` takes an optional fourth `label` argument for TLV carriers.
 - Pairing commands release stdin after answered prompts so a completed command can exit
   even when its input pipe remains open (#89).
 - Restore the RAOP transient-pairing eligibility guard and public read-only receiver profile,

@@ -10,9 +10,9 @@ import { Credentials } from '../../credentials.js';
 import type { DiscoveredDeviceInfo } from '../../discovery.js';
 import { DeviceSession } from '../../session.js';
 import * as transport from '../../connection.js';
-import { hkdfSha512, encryptChaCha20, decryptChaCha20, generateNonce } from '../../util/crypto.js';
+import { hkdfSha512, encryptChaCha20, decryptChaCha20, generateNonce, ed25519PrivateKeyFromSeed } from '../../util/crypto.js';
 import { decodeVarint, encodeVarint, readLengthPrefixed } from '../../util/data-stream.js';
-import { tlvEncode, tlvDecode, TlvTag } from '../../util/tlv.js';
+import { tlvEncode, tlvDecode, TlvTag, type TlvData } from '../../util/tlv.js';
 import { LegacyMRPConnection } from '../legacy-connection.js';
 import { MRPMessage, MessageType } from '../messages.js';
 import { MRP_SCHEMA } from '../schema.js';
@@ -23,11 +23,13 @@ vi.mock('node:crypto', async (importOriginal) => {
 
 afterEach(() => vi.restoreAllMocks());
 
+/** The raw 32-byte public key: the tail of a key's SPKI DER encoding. */
+const raw = (key: KeyObject) => Buffer.from(key.export({ type: 'spki', format: 'der' }).subarray(-32));
+
 it('verifies legacy credentials then sends encrypted MRP over an IPv6 endpoint', async () => {
   const server = generateKeyPairSync('ed25519');
   const client = generateKeyPairSync('ed25519');
   const ephemeral = generateKeyPairSync('x25519');
-  const raw = (key: KeyObject) => Buffer.from(key.export({ type: 'spki', format: 'der' }).subarray(-32));
   const credentials = new Credentials({ clientId: 'client', clientLTSK: Buffer.from(client.privateKey.export({ type: 'pkcs8', format: 'der' }).subarray(-32)), clientLTPK: raw(client.publicKey), serverId: 'server', serverLTPK: raw(server.publicKey) });
   let secret: Buffer;
   let session: Buffer;
@@ -92,13 +94,27 @@ it('verifies legacy credentials then sends encrypted MRP over an IPv6 endpoint',
   await atv.close();
 });
 
-it('pairs through DeviceInfo and CryptoPairing M1-M6 with one controller keypair', async () => {
-  vi.mocked(generateKeyPairSync).mockClear();
+// The peer signs M6 with a fixed long-term key, as a real accessory does; a seed avoids another generateKeyPairSync call.
+const peerKey = ed25519PrivateKeyFromSeed(Buffer.alloc(32, 9));
+const peerLTPK = raw(createPublicKey(peerKey));
+const peerId = Buffer.from('peer');
+
+/** The fields of a decrypted M6 that names the peer and its key, signed by `signer`. */
+function signedM6(accessoryX: Buffer, signer = peerKey): TlvData {
+  const signature = sign(null, Buffer.concat([accessoryX, peerId, peerLTPK]), signer);
+  return { [TlvTag.Identifier]: peerId, [TlvTag.PublicKey]: peerLTPK, [TlvTag.Signature]: signature };
+}
+
+/**
+ * Start real pairing against a synthetic peer that completes SRP over CryptoPairing, then answers
+ * M5 with the fields `buildM6` returns. Resolves once M1 is answered; `steps` and `seen` keep
+ * filling as `setup.finish` runs.
+ */
+async function startPairingWithPeer(buildM6: (accessoryX: Buffer) => TlvData) {
   const salt = Buffer.alloc(16, 7);
   const server = new SrpServer(SRP.params.hap, salt, Buffer.from('Pair-Setup'), Buffer.from('1234'), Buffer.alloc(32, 5));
   const steps: number[] = [];
-  let clientIdentity: Buffer | undefined;
-  let deviceInfoIdentity: unknown;
+  const seen: { clientIdentity?: Buffer; deviceInfoIdentity?: unknown } = {};
   const socket = new EventEmitter() as EventEmitter & { write: (data: Buffer, cb: (error?: Error) => void) => void; destroy: () => void };
   const destroy = vi.fn();
   socket.destroy = destroy;
@@ -108,7 +124,7 @@ it('pairs through DeviceInfo and CryptoPairing M1-M6 with one controller keypair
       const message = await MRPMessage.decode(frame.subarray(bytesRead));
       let response: Buffer;
       if (message.type === MessageType.DeviceInfo) {
-        deviceInfoIdentity = (message['.deviceInfoMessage'] as { uniqueIdentifier?: string }).uniqueIdentifier;
+        seen.deviceInfoIdentity = (message['.deviceInfoMessage'] as { uniqueIdentifier?: string }).uniqueIdentifier;
         response = await MRPMessage.deviceInfo({ uniqueIdentifier: 'peer', name: 'Peer' });
       } else {
         const crypto = message['.cryptoPairingMessage'] as { pairingData: Buffer; state: number };
@@ -127,8 +143,9 @@ it('pairs through DeviceInfo and CryptoPairing M1-M6 with one controller keypair
           const key = await hkdfSha512(server.computeK(), 'Pair-Setup-Encrypt-Salt', 'Pair-Setup-Encrypt-Info', 32);
           const encrypted = data[TlvTag.EncryptedData]!;
           const inner = tlvDecode(decryptChaCha20(key, Buffer.concat([Buffer.alloc(4), Buffer.from('PS-Msg05')]), encrypted.subarray(0, -16), encrypted.subarray(-16), Buffer.alloc(0)));
-          clientIdentity = inner[TlvTag.Identifier];
-          const sealed = encryptChaCha20(key, Buffer.concat([Buffer.alloc(4), Buffer.from('PS-Msg06')]), tlvEncode({ [TlvTag.Identifier]: Buffer.from('peer'), [TlvTag.PublicKey]: Buffer.alloc(32, 9) }), Buffer.alloc(0));
+          seen.clientIdentity = inner[TlvTag.Identifier];
+          const accessoryX = await hkdfSha512(server.computeK(), 'Pair-Setup-Accessory-Sign-Salt', 'Pair-Setup-Accessory-Sign-Info', 32);
+          const sealed = encryptChaCha20(key, Buffer.concat([Buffer.alloc(4), Buffer.from('PS-Msg06')]), tlvEncode(buildM6(accessoryX)), Buffer.alloc(0));
           reply = tlvEncode({ [TlvTag.SeqNo]: Buffer.from([6]), [TlvTag.EncryptedData]: Buffer.concat([sealed.ciphertext, sealed.tag]) });
         }
         response = await MRPMessage.cryptoPairing(reply);
@@ -139,17 +156,35 @@ it('pairs through DeviceInfo and CryptoPairing M1-M6 with one controller keypair
   };
   vi.spyOn(transport, 'connectSocket').mockResolvedValue(socket as unknown as Socket);
   const atv = new AppleTV({ name: 'Old', address: 'fd00::1', port: 0, mrpPort: 49152, deviceId: 'peer', model: 'AppleTV' });
-  const setup = await atv.startPairing();
+  return { setup: await atv.startPairing(), steps, seen, destroy };
+}
+
+it('pairs through DeviceInfo and CryptoPairing M1-M6 with one controller keypair', async () => {
+  vi.mocked(generateKeyPairSync).mockClear();
+  const { setup, steps, seen, destroy } = await startPairingWithPeer(signedM6);
   expect(steps).toEqual([1]);
   const result = await setup.finish('1234');
   expect(steps).toEqual([1, 3, 5]);
-  expect(result.clientId).toBe(clientIdentity!.toString());
-  expect(deviceInfoIdentity).toBe(result.clientId);
+  expect(result.clientId).toBe(seen.clientIdentity!.toString());
+  expect(seen.deviceInfoIdentity).toBe(result.clientId);
   expect(result.serverId).toBe('peer');
-  expect(result.serverLTPK).toEqual(Buffer.alloc(32, 9));
+  expect(result.serverLTPK).toEqual(peerLTPK);
   expect(destroy).toHaveBeenCalledOnce();
   expect(vi.mocked(generateKeyPairSync).mock.calls.map(([algorithm]) => algorithm)).toEqual(['ed25519']);
 }, 20000); // Real SRP-3072 math: ~2 s alone, several times that under a parallel full-suite run.
+
+it('rejects a CryptoPairing M6 signed by a key other than the one it carries, and destroys the socket', async () => {
+  const impostorKey = ed25519PrivateKeyFromSeed(Buffer.alloc(32, 8));
+  const { setup, destroy } = await startPairingWithPeer(accessoryX => signedM6(accessoryX, impostorKey));
+  await expect(setup.finish('1234')).rejects.toThrow(/^MRP PS M6 accessory signature verification failed/);
+  expect(destroy).toHaveBeenCalledOnce();
+}, 20000);
+
+it('rejects a CryptoPairing M6 with no signature, and destroys the socket', async () => {
+  const { setup, destroy } = await startPairingWithPeer(() => ({ [TlvTag.Identifier]: peerId, [TlvTag.PublicKey]: peerLTPK }));
+  await expect(setup.finish('1234')).rejects.toThrow('MRP PS M6 missing a 64-byte Signature');
+  expect(destroy).toHaveBeenCalledOnce();
+}, 20000);
 
 it('does not select disabled legacy MRP advertisements', async () => {
   const legacy = vi.spyOn(LegacyMRPConnection.prototype, 'connect').mockResolvedValue();
@@ -165,7 +200,6 @@ it('routes a standalone-MRP-only DeviceSession through real encrypted framing wi
   const signingKey = generateKeyPairSync('ed25519');
   const client = generateKeyPairSync('ed25519');
   const ephemeral = generateKeyPairSync('x25519');
-  const raw = (key: KeyObject) => Buffer.from(key.export({ type: 'spki', format: 'der' }).subarray(-32));
   const credentials = {
     clientId: 'controller',
     clientLTSK: Buffer.from(client.privateKey.export({ type: 'pkcs8', format: 'der' }).subarray(-32)),
