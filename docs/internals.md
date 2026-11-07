@@ -12,6 +12,8 @@ How the protocols fit together, how discovery associates services into devices, 
 
 MRP's own CryptoPairing is skipped on the AirPlay tunnel because the data channel is already HAP-encrypted.
 
+The pair-setup M6 signature shows the accessory holds the key it sent, not that it is a genuine Apple TV.
+
 ```
 src/
 ├── appletv.ts      # AppleTV class (start here)

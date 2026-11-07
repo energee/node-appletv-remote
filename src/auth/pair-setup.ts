@@ -6,8 +6,9 @@
 
 import { generateKeyPairSync, sign, randomUUID } from 'node:crypto';
 import { TlvTag, tlvEncode, tlvDecode } from '../util/tlv.js';
-import { hkdfSha512, encryptChaCha20, decryptChaCha20, ed25519PrivateKeyFromSeed } from '../util/crypto.js';
+import { hkdfSha512, encryptChaCha20, ed25519PrivateKeyFromSeed } from '../util/crypto.js';
 import { SRPClient } from './srp.js';
+import { verifyPairSetupM6 } from './pair-setup-m6.js';
 import { PersistentHttp } from '../util/http.js';
 import type { HAPCredentials } from './types.js';
 
@@ -25,8 +26,16 @@ export class PairSetup {
   private srp = new SRPClient();
   private sessionKey: Buffer | undefined;
 
-  /** Generate controller keys; use the provided TLV carrier or persistent AirPlay HTTP. */
-  constructor(host: string, port: number, transport?: Pick<PersistentHttp, 'post' | 'destroy'>) {
+  /**
+   * Generate controller keys; use the provided TLV carrier or persistent AirPlay HTTP.
+   * @param label names the transport in M6 errors; a TLV carrier passes its own, such as `MRP PS M6`.
+   */
+  constructor(
+    host: string,
+    port: number,
+    transport?: Pick<PersistentHttp, 'post' | 'destroy'>,
+    private label = 'AirPlay PS M6',
+  ) {
     this.http = transport ?? new PersistentHttp(host, port);
     this.clientId = randomUUID();
 
@@ -113,9 +122,9 @@ export class PairSetup {
   }
 
   /**
-   * Send our encrypted long-term identity (M5) and decrypt the Apple TV's (M6).
+   * Send our encrypted long-term identity (M5), then decrypt the Apple TV's (M6) and verify its signature.
    * @returns credentials pairing our Ed25519 keys with the device's ID and public key.
-   * @throws if called before `sendM3`, or if M6 is missing or malformed.
+   * @throws if called before `sendM3`, if M6 is missing or malformed, or if its signature does not verify.
    */
   async sendM5(): Promise<HAPCredentials> {
     if (!this.sessionKey) {
@@ -171,43 +180,19 @@ export class PairSetup {
     });
 
     const responseBody = await this.http.post('/pair-setup', m5);
-    const m6 = tlvDecode(responseBody);
-
-    const m6Encrypted = m6[TlvTag.EncryptedData];
-    if (!m6Encrypted) {
-      const error = m6[TlvTag.Error];
-      throw new Error(`M6 missing EncryptedData (error=${error ? error[0] : 'none'})`);
-    }
-
-    // Decrypt M6; the last 16 bytes are the Poly1305 auth tag
-    const m6Nonce = Buffer.alloc(12, 0);
-    m6Nonce.write('PS-Msg06', 4);
-
-    const m6Ciphertext = m6Encrypted.subarray(0, m6Encrypted.length - 16);
-    const m6Tag = m6Encrypted.subarray(m6Encrypted.length - 16);
-
-    const decrypted = decryptChaCha20(
+    const { serverId, serverLTPK } = await verifyPairSetupM6(
+      this.sessionKey,
       encryptionKey,
-      m6Nonce,
-      m6Ciphertext,
-      m6Tag,
-      Buffer.alloc(0),
+      tlvDecode(responseBody),
+      this.label,
     );
-
-    const serverInfo = tlvDecode(decrypted);
-    const serverId = serverInfo[TlvTag.Identifier];
-    const serverLTPK = serverInfo[TlvTag.PublicKey];
-
-    if (!serverId || !serverLTPK) {
-      throw new Error('M6 decrypted data missing Identifier or PublicKey');
-    }
 
     return {
       clientId: this.clientId,
       clientLTSK: this.edPrivateKeyRaw,
       clientLTPK: this.edPublicKeyRaw,
       serverLTPK,
-      serverId: serverId.toString('utf-8'),
+      serverId,
     };
   }
 
