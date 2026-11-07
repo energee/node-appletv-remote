@@ -81,7 +81,6 @@ Other models and tvOS versions are untested; reports are welcome.
 | Feature | Status |
 |---|---|
 | Discovery, AirPlay and Companion pairing | Verified |
-| Navigation/media/power over Companion alone | Navigation, play/pause and sleep/wake verified |
 | Navigation, media commands, button tap/double-tap/hold, touch swipes | Verified over MRP |
 | Apps, accounts, power state, app launch by URL | Verified; power is read from MRP, so a sleeping TV reports `off` |
 | Volume | Absolute set/read verified with AirPods output; TV speakers do not allow absolute volume |
@@ -93,10 +92,6 @@ Other models and tvOS versions are untested; reports are welcome.
 | Legacy Apple TV 2/3 (DMAP), legacy RAOP receivers, HomePods | Unverified, no hardware available |
 | Standalone MRP (tvOS < 15) | Unverified, no hardware available |
 | Companion-only path | Native app/focus/power reads recorded on AppleTV6,2 / tvOS 26.6. Remote-service initialization precedes TVRC; media interest follows RTI. Release-only wake changed Off to On and repeated wake stayed On. Release-only sleep was acknowledged but fetched On after five seconds; full media/volume/power matrices remain open (#83, #84). |
-
-Legacy RAOP receivers can use an explicit library `password` for MD5/no-qop Digest
-authentication. That path is loopback-verified, not hardware-verified; see the
-[receiver/authentication limits](docs/audio-and-playback.md#raop-and-airplay-2-audio-experimental-partial-22).
 
 Legacy RAOP receivers can use an explicit library `password` for MD5/no-qop Digest
 authentication. That path is loopback-verified, not hardware-verified; see the

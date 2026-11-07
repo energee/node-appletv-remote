@@ -10,8 +10,13 @@
   the peer is a genuine Apple TV: anyone who completes SRP with the PIN can sign with their own key.
 - Pair-setup M6 errors now name the transport (`AirPlay PS M6`, `MRP PS M6`, `Companion PS M6`) and
   the field that failed. `PairSetup` takes an optional fourth `label` argument for TLV carriers.
+- Pairing commands release stdin after answered prompts so a completed command can exit
+  even when its input pipe remains open (#89).
 - Restore the RAOP transient-pairing eligibility guard and public read-only receiver profile,
   fixing syntax and CLI compilation errors in the audio streaming PR (#121).
+- Pair-verify now rejects an accessory whose identifier differs from the `serverId` stored at
+  pairing, on AirPlay, Companion and standalone MRP (#132). Hand-built credentials must carry the
+  `serverId` from pair-setup; a wrong or blank value used to be ignored and now fails.
 - URL and local-file playback can opt into `startupTimeoutMs` to reject and close sessions that
   never reach receiver-confirmed playing/paused. Receiver error events now surface as playback
   failures; queue-accepted behavior remains the default (#45).
@@ -76,4 +81,6 @@ tvOS 26.6 (23L773). Everything else is covered by protocol fixtures and loopback
   TVs; use `RaopStream` with HAP credentials from the library.
 - Seeking a playing URL item has no effect on tvOS 26 (#44); unreachable URLs never report an error (#45).
 - Unverified on hardware: legacy Apple TV 2/3 (DMAP), legacy RAOP receivers, HomePods, standalone MRP
-  (tvOS < 15) and Companion-only devices.
+  (tvOS < 15).
+- Companion-only hardware coverage is partial: release-only wake changed Off to On, but sleep
+  was acknowledged while a later fetch still reported On. Full control/power matrices remain open (#83, #84).

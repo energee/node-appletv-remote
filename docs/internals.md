@@ -6,7 +6,7 @@ How the protocols fit together, how discovery associates services into devices, 
 
 1. **Discovery:** independent AirPlay, Companion, standalone MRP, and legacy DMAP services.
 2. **Pair-setup** (first time only): SRP with the PIN shown on the TV.
-3. **Pair-verify:** X25519 + Ed25519 using the stored credentials.
+3. **Pair-verify:** X25519 + Ed25519 using the stored credentials. The accessory's identifier must match the stored `serverId`.
 4. **AirPlay session:** encrypted RTSP, plus an event channel and a data channel.
 5. **MRP** runs as protobuf over the data channel. A `/feedback` heartbeat every 2s keeps it alive.
 

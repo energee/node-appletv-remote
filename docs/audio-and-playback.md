@@ -437,8 +437,4 @@ and encrypts nothing, so the trusted-LAN caveat above applies. Tests use a loopb
 receiver built on fast-srp-hap's `SrpServer` and fixed SRP vectors with leading-zero `A`
 and `S`; **legacy PIN pairing is unverified on hardware** (hardware check H3).
 
-The RTSP control client also sends `/pair-pin-start` and `/pair-setup` as CSeq-less
-HTTP/1.1 requests; transient pairing for HomePods will use them and is not
-implemented yet. Physical interoperability of both profiles remains unverified.
-
 **Teardown on Apple TV:** an Apple TV closes the AirPlay 2 event channel while handling TEARDOWN, so the TEARDOWN reply is not read; teardown is best effort and the stream still completes.
