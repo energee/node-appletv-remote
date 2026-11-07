@@ -33,7 +33,8 @@ tvOS 26.6 (23L773). Everything else is covered by protocol fixtures and loopback
 
 ### Added
 
-- Companion-only Apple TVs: navigation, media, volume, wake and sleep over Companion alone (#92).
+- Companion-only Apple TVs: navigation, media and volume over Companion alone, plus release-only
+  wake (#92). Sleep is sent the same way but was acknowledged without the device turning off (#84).
 - Operations routed across every configured protocol, with per-operation preferences (#100).
 - Versioned credential storage with a library storage and settings API (#93).
 - Targeted (unicast) mDNS discovery: `scan({ hosts })` and `atv scan --host` (#99).
