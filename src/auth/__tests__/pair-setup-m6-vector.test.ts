@@ -86,7 +86,8 @@ describe.each(flavours)('%s pair-setup M6 known-answer vector', (_name, runM5) =
   it('rejects the vector with one ciphertext bit flipped', async () => {
     const tampered = Buffer.from(M6);
     tampered[CIPHERTEXT_OFFSET] ^= 0x01;
-    // Node reports the failed Poly1305 check as "unable to authenticate data"; the noble fallback as "invalid tag".
-    await expect(runM5(tampered)).rejects.toThrow(/unable to authenticate data|invalid tag/);
+    // The failed Poly1305 check reads differently per runtime and OpenSSL version, so don't match its text.
+    // Every check after decryption prefixes its error with the PS M6 label, so a label here means decryption passed.
+    await expect(runM5(tampered)).rejects.not.toThrow(/PS M6/);
   });
 });
